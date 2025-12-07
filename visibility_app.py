@@ -16,74 +16,36 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS to match the screenshots (Light gray background, card style, clean fonts)
+# Custom CSS
 st.markdown("""
 <style>
-    /* Main Background */
-    .stApp {
-        background-color: #F4F6F9;
-    }
-    
-    /* Sidebar styling */
-    section[data-testid="stSidebar"] {
-        background-color: #FFFFFF;
-        border-right: 1px solid #E0E0E0;
-    }
-    
-    /* Card Styling */
+    .stApp { background-color: #F4F6F9; }
+    section[data-testid="stSidebar"] { background-color: #FFFFFF; border-right: 1px solid #E0E0E0; }
     .css-1r6slb0, .css-12oz5g7 { 
-        background-color: white;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        border: 1px solid #EAEAEA;
+        background-color: white; padding: 20px; border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #EAEAEA;
     }
-    
-    /* Metric Cards Customization */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px;
+        border-radius: 10px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-    
-    /* Virshi Purple Accent */
-    .stButton>button {
-        background-color: #8041F6;
-        color: white;
-        border-radius: 8px;
-        border: none;
-    }
-    .stButton>button:hover {
-        background-color: #6a35cc;
-    }
-    
-    /* Status Badges */
+    .stButton>button { background-color: #8041F6; color: white; border-radius: 8px; border: none; }
+    .stButton>button:hover { background-color: #6a35cc; }
     .badge-trial {
-        background-color: #FFECB3;
-        color: #856404;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 0.8em;
-        font-weight: bold;
+        background-color: #FFECB3; color: #856404; padding: 4px 8px;
+        border-radius: 4px; font-size: 0.8em; font-weight: bold;
     }
     .badge-active {
-        background-color: #D4EDDA;
-        color: #155724;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 0.8em;
-        font-weight: bold;
+        background-color: #D4EDDA; color: #155724; padding: 4px 8px;
+        border-radius: 4px; font-size: 0.8em; font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. SUPABASE & COOKIE SETUP ---
 
-# Initialize Cookie Manager for Persistent Sessions
-@st.cache_resource(experimental_allow_widgets=True)
+# ВИПРАВЛЕННЯ ТУТ: Прибрано (experimental_allow_widgets=True)
+@st.cache_resource
 def get_manager():
     return stx.CookieManager()
 
@@ -117,7 +79,6 @@ def mock_login(email):
     }
 
 def get_donut_chart(value, title, color="#00C896"):
-    """Generates a small donut chart for KPI cards similar to screenshots"""
     fig = go.Figure(data=[go.Pie(
         values=[value, 100-value],
         hole=.7,
@@ -140,19 +101,23 @@ def check_session():
     """Checks for existing session token in cookies"""
     if st.session_state['user'] is None:
         token = cookie_manager.get('virshi_token')
+        # Ми додаємо невелику затримку, щоб переконатися, що CookieManager завантажився
+        if token is None: 
+            return
+            
         if token and DB_CONNECTED:
             try:
                 user = supabase.auth.get_user(token)
                 if user:
                     st.session_state['user'] = user.user
-                    # Fetch role logic here (omitted for brevity)
-                    return True
+                    # Тут можна додати запит до profiles для отримання ролі
             except:
                 cookie_manager.delete('virshi_token')
         elif token and not DB_CONNECTED:
             # Restore mock session
-            st.session_state['user'] = {"email": "demo@virshi.ai"}
-            st.session_state['role'] = "admin"
+            if token == 'mock_token':
+                st.session_state['user'] = {"email": "demo@virshi.ai"}
+                st.session_state['role'] = "admin"
             
 def login_page():
     c1, c2, c3 = st.columns([1, 1.5, 1])
@@ -184,7 +149,6 @@ def login_page():
                     st.rerun()
 
 def onboarding_wizard():
-    """Wizard for new users with 0 projects"""
     st.markdown("## 🚀 Налаштуємо ваш Brand Monitor")
     st.markdown("Ми згенеруємо перші аналітичні дані за 30 секунд.")
     
@@ -210,7 +174,6 @@ def onboarding_wizard():
             st.subheader("Крок 2: AI Генерація запитів")
             st.write(f"Аналізуємо нішу для **{st.session_state['temp_brand']}**...")
             
-            # Simulated Progress
             my_bar = st.progress(0)
             status_text = st.empty()
             
@@ -226,7 +189,6 @@ def onboarding_wizard():
             
             st.success("Готово! Демо-проект створено.")
             if st.button("Перейти до Дашборду"):
-                # In real app: Insert into DB here
                 st.session_state['current_project'] = {
                     "name": st.session_state['temp_brand'],
                     "status": "trial",
@@ -237,7 +199,6 @@ def onboarding_wizard():
 # --- 5. PAGE VIEWS ---
 
 def show_dashboard():
-    # Header
     col_head, col_status = st.columns([4, 1])
     with col_head:
         st.title(f"Дашборд: {st.session_state.get('current_project', {}).get('name', 'SkyUp')}")
@@ -252,7 +213,6 @@ def show_dashboard():
 
     st.markdown("---")
 
-    # KPI Grid (Row 1) - Based on Screenshot [image_a984f3.png]
     c1, c2, c3 = st.columns(3)
     
     with c1:
@@ -272,21 +232,19 @@ def show_dashboard():
     with c3:
         with st.container(border=True):
             st.markdown("**ЗАГАЛЬНИЙ НАСТРІЙ**")
-            # Sentiment Pie Chart
             labels = ['Positive', 'Neutral', 'Negative']
             values = [10, 80, 10]
             fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0, marker_colors=['#00C896', '#9EA0A5', '#FF4B4B'])])
             fig.update_layout(height=120, margin=dict(t=0,b=0,l=0,r=0), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
-    # KPI Grid (Row 2)
     c4, c5, c6 = st.columns(3)
     
     with c4:
         with st.container(border=True):
             st.markdown("**ПОЗИЦІЯ БРЕНДУ**")
             st.markdown("<h1 style='text-align: center; color: #8041F6;'>1.0</h1>", unsafe_allow_html=True)
-            st.progress(100) # Full bar for position 1
+            st.progress(100)
 
     with c5:
         with st.container(border=True):
@@ -302,10 +260,8 @@ def show_dashboard():
             col_kpi.markdown("## 10.00%")
             col_chart.plotly_chart(get_donut_chart(10, "Dom"), use_container_width=True)
 
-    # Main Chart: Brand Position Evolution
     st.markdown("### 📈 Динаміка Позицій (Brand Position Evolution)")
     with st.container(border=True):
-        # Mock Data
         dates = pd.date_range(end=datetime.today(), periods=14)
         df = pd.DataFrame({
             "Date": dates,
@@ -325,7 +281,6 @@ def show_competitors():
         c1.markdown("Цей розділ показує, як ваші конкуренти ранжуються у відповідях AI порівняно з вами.")
         c2.button("Оновити дані", use_container_width=True)
         
-        # Competitors Table
         data = {
             "Competitor": ["SkyUp", "Ryanair", "Wizz Air", "LOT"],
             "Avg Position": [1.0, 3.1, 2.9, 3.5],
@@ -399,7 +354,6 @@ def show_admin():
         
     st.title("🛡️ Super Admin Panel")
     
-    # KPIs for Admin
     k1, k2, k3 = st.columns(3)
     k1.metric("Всього Юзерів", "124")
     k2.metric("Активних Проектів", "85")
@@ -409,7 +363,6 @@ def show_admin():
     
     st.subheader("Керування Клієнтами")
     
-    # Mock User DB
     users_df = pd.DataFrame([
         {"email": "client@skyup.aero", "project": "SkyUp", "status": "trial", "tokens": 5000},
         {"email": "marketing@monobank.ua", "project": "Monobank", "status": "active", "tokens": 125000},
@@ -424,23 +377,19 @@ def show_admin():
             if row['status'] == 'trial':
                 if c3.button(f"Activate Pro", key=f"act_{i}"):
                     st.toast(f"Project {row['project']} activated!")
-                    # SQL Update logic would go here
 
 # --- 6. SIDEBAR & NAVIGATION ---
 
 def sidebar_menu():
     with st.sidebar:
-        # Logo
         st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=250)
         
-        # User Info
         if st.session_state['user']:
             user_email = st.session_state['user'].get('email', 'Guest')
             st.write(f"👤 **{user_email}**")
             if st.session_state.get('role') == 'admin':
                 st.caption("🔴 SUPER ADMIN")
         
-        # Navigation
         selected = option_menu(
             menu_title="Меню",
             options=["Дашборд", "Ключові слова", "Джерела", "Конкуренти", "Рекомендації", "Адмін"],
@@ -463,15 +412,12 @@ def sidebar_menu():
 # --- 7. MAIN APP ROUTER ---
 
 def main():
-    # 1. Check Cookies for Session
     check_session()
     
-    # 2. Routing Logic
     if not st.session_state['user']:
         login_page()
     
     elif st.session_state.get('current_project') is None and st.session_state['role'] != 'admin':
-        # New User Flow
         with st.sidebar:
             if st.button("Вийти"):
                 st.session_state['user'] = None
@@ -480,7 +426,6 @@ def main():
         onboarding_wizard()
         
     else:
-        # Main App Flow
         page = sidebar_menu()
         
         if page == "Дашборд":
