@@ -404,7 +404,7 @@ def onboarding_wizard():
             )
 
             if st.button("Згенерувати запити"):
-                if brand, domain, industry, products:
+    if all([brand, domain, industry, products]):
                     st.session_state["temp_brand"] = brand
                     st.session_state["temp_domain"] = domain
                     st.session_state["temp_industry"] = industry
