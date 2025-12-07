@@ -264,7 +264,10 @@ def login_user(email: str, password: str):
 
 
 def register_user(email: str, password: str, first: str, last: str) -> bool:
-    """Реєстрація нового користувача + створення профілю + автологін."""
+    """Реєстрація нового користувача + створення профілю.
+       Якщо email-підтвердження ВИМКНЕНО – одразу логіним.
+       Якщо УВІМКНЕНО – просимо підтвердити пошту і не логінимо.
+    """
     try:
         res = supabase.auth.sign_up(
             {
@@ -287,16 +290,32 @@ def register_user(email: str, password: str, first: str, last: str) -> bool:
                     }
                 ).execute()
             except Exception:
-                # якщо профіль уже є / інша помилка – не блокуємо реєстрацію
                 pass
 
-            st.success("Реєстрація успішна! Виконуємо вхід...")
+            # Якщо email confirmation вимкнене – Supabase одразу повертає session
+            if res.session:
+                st.success("Реєстрація успішна! Виконуємо вхід...")
+                # логінимо без повторного запиту до Auth
+                st.session_state["user"] = res.user
+                cookie_manager.set(
+                    "virshi_auth_token",
+                    res.session.access_token,
+                    expires_at=datetime.now() + timedelta(days=7),
+                )
 
-            # якщо email confirmation вимкнено – це спрацює
-            login_user(email, password)
+                role, details = get_user_role_and_details(res.user.id)
+                st.session_state["role"] = role
+                st.session_state["user_details"] = details
+                load_user_project(res.user.id)
+                st.rerun()
+            else:
+                # Email confirmation увімкнене – сесії ще немає
+                st.success(
+                    "Реєстрація успішна! "
+                    "Перевірте вашу пошту і підтвердіть email, а потім увійдіть на вкладці «Вхід»."
+                )
             return True
 
-        # якщо res.user немає – щось не так з auth
         st.error("Не вдалося створити користувача. Перевірте налаштування Auth.")
     except Exception as e:
         if "already registered" in str(e):
@@ -304,6 +323,7 @@ def register_user(email: str, password: str, first: str, last: str) -> bool:
         else:
             st.error(f"Помилка реєстрації: {e}")
     return False
+
 
 
 def logout():
