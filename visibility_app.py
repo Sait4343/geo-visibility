@@ -23,8 +23,7 @@ st.set_page_config(
 # 🔴 ПРОДАКШН N8N ВЕБХУКИ
 N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook-test/webhook/run-analysis"
-# ТРЕТІЙ ВЕБХУК ДЛЯ РЕКОМЕНДАЦІЙ — ПІДСТАВ СВІЙ
-N8N_RECO_URL = "https://virshi.app.n8n.cloud/webhook-test/webhook/generate-recos"
+N8N_RECO_URL = "https://virshi.app.n8n.cloud/webhook/recommendations"  # за потреби заміниш
 
 # Custom CSS
 st.markdown(
@@ -90,6 +89,8 @@ if "generated_prompts" not in st.session_state:
     st.session_state["generated_prompts"] = []
 if "onboarding_step" not in st.session_state:
     st.session_state["onboarding_step"] = 2  # стартуємо одразу з кроку про бренд
+if "focus_keyword_id" not in st.session_state:
+    st.session_state["focus_keyword_id"] = None
 
 # =========================
 # 3. HELPERS
@@ -167,18 +168,19 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
         return []
 
 
-def n8n_trigger_analysis(project_id, keywords, brand_name):
+def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
-    Відправляє 5 вибраних запитів на n8n для глибокого аналізу.
+    Відправляє вибрані запити на n8n для глибокого аналізу.
     n8n сам пише результати в Supabase.
     """
     try:
-        user_email = st.session_state["user"].email
+        user_email = st.session_state["user"].email if st.session_state.get("user") else None
         payload = {
             "project_id": project_id,
             "keywords": keywords,
             "brand_name": brand_name,
             "user_email": user_email,
+            "models": models or [],
         }
         requests.post(N8N_ANALYZE_URL, json=payload, timeout=2)
         return True
@@ -189,38 +191,34 @@ def n8n_trigger_analysis(project_id, keywords, brand_name):
         return False
 
 
-def n8n_request_recommendations(project: dict, rec_type: str, brief: str):
+def n8n_request_recommendations(project, topic: str, brief: str):
     """
-    Виклик n8n для генерації стратегічних рекомендацій.
-    Очікується, що n8n повертає JSON: { "summary": "...", "details": "..." }.
+    Надсилає запит на n8n для генерації рекомендацій.
+    topic: 'pr' | 'digital' | 'creative'
     """
-    if not N8N_RECO_URL:
-        st.error("N8N_RECO_URL не заданий.")
-        return None
-
     try:
         payload = {
-            "project_id": project.get("id"),
+            "project_id": project["id"],
             "brand_name": project.get("brand_name"),
             "domain": project.get("domain"),
-            "industry": project.get("industry"),
-            "products": project.get("products"),
-            "type": rec_type,
+            "topic": topic,
             "brief": brief,
+            "user_email": st.session_state["user"].email
+            if st.session_state.get("user")
+            else None,
         }
-        resp = requests.post(N8N_RECO_URL, json=payload, timeout=60)
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, dict) and data.get("summary") and data.get("details"):
-                return data
-            else:
-                st.error("n8n повернув некоректний формат рекомендацій.")
-        else:
-            st.error(f"Помилка n8n ({resp.status_code}): {resp.text}")
-    except Exception as e:
-        st.error(f"Помилка виклику n8n: {e}")
+        resp = requests.post(N8N_RECO_URL, json=payload, timeout=40)
+        if resp.status_code != 200:
+            st.error(f"N8N recommendation error: {resp.status_code} - {resp.text}")
+            return []
 
-    return None
+        data = resp.json()
+        if isinstance(data, list):
+            return data
+        return data.get("recommendations", [])
+    except Exception as e:
+        st.error(f"Помилка запиту рекомендацій: {e}")
+        return []
 
 
 # =========================
@@ -261,7 +259,7 @@ def check_session():
         if token:
             try:
                 res = supabase.auth.get_user(token)
-                if res.user:
+                if getattr(res, "user", None):
                     st.session_state["user"] = res.user
                     role, details = get_user_role_and_details(res.user.id)
                     st.session_state["role"] = role
@@ -317,6 +315,7 @@ def register_user(email: str, password: str, first: str, last: str) -> bool:
         )
 
         if res.user:
+            # явне створення профілю
             try:
                 supabase.table("profiles").insert(
                     {
@@ -365,8 +364,9 @@ def logout():
     except Exception:
         pass
     cookie_manager.delete("virshi_auth_token")
-    st.session_state.clear()
-    st.experimental_set_query_params()  # скидати URL-параметри
+    st.session_state["user"] = None
+    st.session_state["current_project"] = None
+    st.session_state["focus_keyword_id"] = None
     st.rerun()
 
 
@@ -468,6 +468,7 @@ def onboarding_wizard():
                         try:
                             user_id = st.session_state["user"].id
 
+                            # 1. Створюємо проект
                             res = (
                                 supabase.table("projects")
                                 .insert(
@@ -493,15 +494,22 @@ def onboarding_wizard():
                             proj_data = res.data[0]
                             proj_id = proj_data["id"]
 
+                            # 2. Записуємо ключові слова
                             for kw in selected:
                                 supabase.table("keywords").insert(
-                                    {"project_id": proj_id, "keyword_text": kw}
+                                    {
+                                        "project_id": proj_id,
+                                        "keyword_text": kw,
+                                        "type": "ranking",
+                                    }
                                 ).execute()
 
+                            # 3. Запускаємо аналіз через n8n
                             n8n_trigger_analysis(
                                 proj_id, selected, st.session_state["temp_brand"]
                             )
 
+                            # 4. Фінал
                             st.session_state["current_project"] = proj_data
                             st.success(
                                 "Проект створено! Аналіз запущено у фоновому режимі."
@@ -625,201 +633,287 @@ def show_dashboard():
     try:
         kws = (
             supabase.table("keywords")
-            .select("keyword_text")
+            .select("id, keyword_text, type")
             .eq("project_id", proj["id"])
             .execute()
             .data
         )
-        data = [{"Запит": k["keyword_text"], "Статус": "Active"} for k in kws]
     except Exception:
-        data = []
+        kws = []
 
-    if not data:
+    if not kws:
         st.info("Дані ще збираються. Оновіть сторінку за хвилину.")
-    else:
-        st.dataframe(
-            pd.DataFrame(data), use_container_width=True, hide_index=True
-        )
+        return
+
+    # короткий список + кнопка переходу до детального екрану
+    for k in kws:
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.write(f"- {k.get('keyword_text')}")
+        with col2:
+            if st.button("➡ Детально", key=f"goto_kw_{k['id']}"):
+                st.session_state["focus_keyword_id"] = k["id"]
+                # переключаємо сторінку на "Перелік запитів"
+                st.session_state["force_page"] = "Перелік запитів"
+                st.rerun()
 
 
 # =========================
-# 6.1 RECOMMENDATIONS PAGE
+# 7. КЕРУВАННЯ ЗАПИТАМИ
+# =========================
+
+
+def show_keywords_page():
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Спочатку створіть проект в онбордингу.")
+        return
+
+    st.title("📋 Перелік запитів")
+
+    # --- Форма додавання нового запиту ---
+    with st.form("add_keyword_form"):
+        new_kw = st.text_input("Новий запит")
+        new_type = st.selectbox(
+            "Тип запиту", ["ranking", "accuracy", "other"], index=0
+        )
+        add_submitted = st.form_submit_button("Додати")
+        if add_submitted:
+            if not new_kw:
+                st.warning("Введіть текст запиту.")
+            else:
+                try:
+                    supabase.table("keywords").insert(
+                        {
+                            "project_id": proj["id"],
+                            "keyword_text": new_kw,
+                            "type": new_type,
+                        }
+                    ).execute()
+                    st.success("Запит додано.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(
+                        f"Помилка додавання: {getattr(e, 'args', [str(e)])[0]}"
+                    )
+
+    st.markdown("---")
+    st.markdown("### Поточні запити")
+
+    try:
+        resp = (
+            supabase.table("keywords")
+            .select("*")
+            .eq("project_id", proj["id"])
+            .order("id")
+            .execute()
+        )
+        keywords = resp.data or []
+    except Exception as e:
+        st.error(f"Помилка завантаження: {e}")
+        keywords = []
+
+    if not keywords:
+        st.info("Запити поки що відсутні.")
+        return
+
+    # --- Вибір запитів для аналізу в n8n ---
+    st.markdown("#### Виберіть запити для аналізу в n8n")
+
+    kw_labels = [k["keyword_text"] for k in keywords]
+    selected_labels = st.multiselect(
+        "Запити для аналізу:", kw_labels, key="kw_for_n8n"
+    )
+
+    model_choices = ["chatgpt", "claude", "gemini"]
+    selected_models = st.multiselect(
+        "Які LLM використовувати:",
+        model_choices,
+        default=["chatgpt", "gemini"],
+    )
+
+    if st.button("🔍 Запустити аналіз у n8n"):
+        if not selected_labels:
+            st.warning("Оберіть щонайменше один запит.")
+        else:
+            try:
+                n8n_trigger_analysis(
+                    proj["id"],
+                    selected_labels,
+                    proj.get("brand_name"),
+                    models=selected_models,
+                )
+                st.success("Аналіз запущено в n8n.")
+            except Exception as e:
+                st.error(f"Не вдалося відправити запити в n8n: {e}")
+
+    st.markdown("#### Редагування запитів")
+
+    for k in keywords:
+        expanded = (
+            st.session_state.get("focus_keyword_id") == k["id"]
+            if st.session_state.get("focus_keyword_id")
+            else False
+        )
+        with st.expander(
+            k.get("keyword_text", "") or "Запит", expanded=expanded
+        ):
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                txt = st.text_input(
+                    "Текст запиту",
+                    value=k.get("keyword_text", ""),
+                    key=f"kw_txt_{k['id']}",
+                )
+            with col2:
+                ktype = st.selectbox(
+                    "Тип",
+                    ["ranking", "accuracy", "other"],
+                    index=(
+                        ["ranking", "accuracy", "other"].index(k.get("type", "ranking"))
+                        if k.get("type") in ["ranking", "accuracy", "other"]
+                        else 0
+                    ),
+                    key=f"kw_type_{k['id']}",
+                )
+
+            c_save, c_delete = st.columns(2)
+            if c_save.button("💾 Зберегти", key=f"save_kw_{k['id']}"):
+                try:
+                    supabase.table("keywords").update(
+                        {"keyword_text": txt, "type": ktype}
+                    ).eq("id", k["id"]).execute()
+                    st.success("Збережено.")
+                    st.session_state["focus_keyword_id"] = k["id"]
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Помилка збереження: {e}")
+
+            if c_delete.button("🗑 Видалити", key=f"del_kw_{k['id']}"):
+                try:
+                    supabase.table("keywords").delete().eq("id", k["id"]).execute()
+                    st.success("Видалено.")
+                    if st.session_state.get("focus_keyword_id") == k["id"]:
+                        st.session_state["focus_keyword_id"] = None
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Помилка видалення: {e}")
+
+    # після першого відкриття скидаємо фокус, щоб не застрягати
+    st.session_state["focus_keyword_id"] = None
+
+
+# =========================
+# 8. РЕКОМЕНДАЦІЇ
 # =========================
 
 
 def show_recommendations_page():
     proj = st.session_state.get("current_project")
     if not proj:
-        st.info("Спочатку створіть проєкт, щоб отримати рекомендації.")
+        st.info("Спочатку створіть проект, щоб отримувати рекомендації.")
         return
 
-    st.title("💡 Рекомендації для підсилення AI Visibility")
+    st.title("💡 Рекомендації")
 
-    left, right = st.columns([2, 1])
+    tabs = st.tabs(["PR", "Digital", "Creative"])
 
-    # Ліва колонка — статичні блоки з playbook
-    with left:
-        st.markdown(
-            """
-<style>
-.reco-block {margin-bottom: 1.5rem; padding: 1rem 1.2rem; border-radius: 10px; background:#FFFFFF; border:1px solid #EAEAEA;}
-.reco-title {font-weight:700; font-size:1.05rem; margin-bottom:0.3rem;}
-.reco-sub {font-size:0.9rem; color:#555;}
-</style>
-""",
-            unsafe_allow_html=True,
-        )
+    topics = ["pr", "digital", "creative"]
+    labels = ["PR / Комунікації", "Digital / Performance", "Creative / Ідеї"]
 
-        st.markdown(
-            """
-<div class="reco-block">
-  <div class="reco-title">1. Узгодженість і чіткість меседжів</div>
-  <div class="reco-sub">Забезпечити єдину логіку й tone of voice бренду в усіх точках дотику — від сайту та соціальних мереж до згадок у медіа й відповідей ШІ-моделей.</div>
-</div>
+    for tab, topic, label in zip(tabs, topics, labels):
+        with tab:
+            st.markdown(f"### {label}")
 
-<div class="reco-block">
-  <div class="reco-title">2. Структурований і зрозумілий контент</div>
-  <div class="reco-sub">Оформлювати ключові меседжі у форматі, зручному для моделей: чіткі заголовки, списки, FAQ-блоки, тематичні лендінги та сторінки «питання-відповідь».</div>
-</div>
-
-<div class="reco-block">
-  <div class="reco-title">3. Тематичне охоплення та активність</div>
-  <div class="reco-sub">Бути присутніми в ширшому контексті: не лише про бренд, а й про категорію, проблеми користувачів, рішення ринку та суміжні теми.</div>
-</div>
-
-<div class="reco-block">
-  <div class="reco-title">4. Довіра та авторитет</div>
-  <div class="reco-sub">Працювати з авторитетними майданчиками та медіа, накопичувати згадки на сайтах, яким довіряють і користувачі, і моделі штучного інтелекту.</div>
-</div>
-
-<div class="reco-block">
-  <div class="reco-title">5. Технічна готовність сайту</div>
-  <div class="reco-sub">Забезпечити логічну структуру, коректні метадані, сторінки категорій та схемну розмітку (schema.org), щоб моделі коректно індексували зміст.</div>
-</div>
-
-<div class="reco-block">
-  <div class="reco-title">6. Аналіз і вдосконалення</div>
-  <div class="reco-sub">Регулярно тестувати запити в популярних LLM, відстежувати зміни відповідей, фіксувати прогалини і на їх основі оновлювати контент-стратегію.</div>
-</div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    # Права колонка — форма запиту нових рекомендацій
-    with right:
-        st.markdown("#### Замовити нові рекомендації")
-
-        human_label = st.selectbox(
-            "Напрям рекомендацій:",
-            ["PR / Comms", "Digital / SEO", "Creative / Content"],
-        )
-        rec_type_map = {
-            "PR / Comms": "pr",
-            "Digital / SEO": "digital",
-            "Creative / Content": "creative",
-        }
-        rec_type = rec_type_map[human_label]
-
-        brief = st.text_area(
-            "Коротко опишіть завдання або контекст:",
-            height=180,
-        )
-
-        if st.button("Отримати рекомендації", use_container_width=True):
-            if not brief.strip():
-                st.warning("Опишіть, що саме вам потрібно.")
-            else:
-                with st.spinner("Готуємо рекомендації через n8n + LLM..."):
-                    rec = n8n_request_recommendations(proj, rec_type, brief)
-                    if rec:
-                        try:
-                            supabase.table("recommendations").insert(
-                                {
-                                    "project_id": proj["id"],
-                                    "type": rec_type,
-                                    "summary": rec.get("summary"),
-                                    "details": rec.get("details"),
-                                }
-                            ).execute()
-                        except Exception:
-                            pass
-
-                        st.success("Рекомендації збережено!")
-
-                        st.markdown("##### Щойно згенеровані:")
-                        st.markdown(f"**{rec.get('summary','Без назви')}**")
-                        st.markdown(rec.get("details", ""))
+            with st.form(f"reco_form_{topic}"):
+                brief = st.text_area(
+                    "Коротко опишіть задачу / контекст (укр / англ)",
+                    height=120,
+                )
+                submitted = st.form_submit_button("Запросити рекомендації")
+                if submitted:
+                    if not brief.strip():
+                        st.warning("Будь ласка, опишіть задачу.")
+                    else:
+                        with st.spinner("Генеруємо рекомендації через n8n..."):
+                            recos = n8n_request_recommendations(proj, topic, brief)
+                            if recos:
+                                st.success("Рекомендації отримано.")
+                                # опційно — зберігаємо в БД
+                                try:
+                                    rows = [
+                                        {
+                                            "project_id": proj["id"],
+                                            "topic": topic,
+                                            "created_at": datetime.utcnow().isoformat(),
+                                            "title": r.get("title", "")[:255],
+                                            "summary": r.get("summary", ""),
+                                            "details": r.get("details", ""),
+                                        }
+                                        for r in recos
+                                    ]
+                                    supabase.table("recommendations").insert(
+                                        rows
+                                    ).execute()
+                                except Exception:
+                                    # якщо таблиці ще немає — просто ігноруємо
+                                    pass
 
     st.markdown("---")
+    st.markdown("### Історія рекомендацій")
 
-    # Історія рекомендацій
-    st.subheader("Історія рекомендацій")
-
-    c1, c2, c3 = st.columns(3)
-    today = date.today()
-
+    # фільтр по даті
+    c1, c2 = st.columns(2)
     with c1:
-        date_from = st.date_input("Починаючи з", today - timedelta(days=30))
-    with c2:
-        date_to = st.date_input("До", today)
-    with c3:
-        type_filter = st.selectbox(
-            "Тип",
-            ["Усі", "PR / Comms", "Digital / SEO", "Creative / Content"],
+        date_from = st.date_input(
+            "З дати",
+            value=date.today().replace(day=1),
         )
+    with c2:
+        date_to = st.date_input("По дату", value=date.today())
 
     try:
         q = (
             supabase.table("recommendations")
             .select("*")
             .eq("project_id", proj["id"])
-            .gte(
-                "created_at",
-                datetime.combine(date_from, datetime.min.time()).isoformat(),
-            )
-            .lte(
-                "created_at",
-                datetime.combine(date_to, datetime.max.time()).isoformat(),
-            )
+            .order("created_at", desc=True)
         )
-
-        if type_filter != "Усі":
-            # зворотне відображення PR / Comms -> pr
-            reverse_map = {v: k for k, v in rec_type_map.items()}
-            # reverse_map: {"pr": "PR / Comms", ...}
-            for hl, t in rec_type_map.items():
-                if hl == type_filter:
-                    q = q.eq("type", t)
-                    break
-
-        rows = q.order("created_at", desc=True).execute().data
+        data = q.execute().data or []
     except Exception:
-        rows = []
+        data = []
 
-    if not rows:
-        st.info("Поки що немає збережених рекомендацій.")
+    if not data:
+        st.info("Поки що рекомендацій немає або таблиця recommendations не створена.")
         return
 
-    for row in rows:
-        created = (row.get("created_at") or "")[:16].replace("T", " ")
-        t = row.get("type", "")
-        if t == "pr":
-            t_lbl = "PR / Comms"
-        elif t == "digital":
-            t_lbl = "Digital / SEO"
-        elif t == "creative":
-            t_lbl = "Creative / Content"
-        else:
-            t_lbl = t
+    # фільтруємо по даті
+    filtered = []
+    for r in data:
+        try:
+            dt = datetime.fromisoformat(str(r.get("created_at")).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if date_from <= dt.date() <= date_to:
+            filtered.append(r)
 
-        summary = row.get("summary") or "Без назви"
+    if not filtered:
+        st.info("Немає рекомендацій за обраний період.")
+        return
 
-        with st.expander(f"{created} · {t_lbl} · {summary}"):
-            st.markdown(row.get("details") or "")
+    for r in filtered:
+        dt = str(r.get("created_at", ""))[:19]
+        topic = r.get("topic", "")
+        title = r.get("title") or "(без назви)"
+        header = f"[{dt}] {topic.upper()} — {title}"
+        with st.expander(header):
+            st.markdown(f"**Коротко:** {r.get('summary','')}")
+            st.markdown("---")
+            st.markdown(r.get("details", "") or "_Без деталей_")
 
 
 # =========================
-# 7. SIDEBAR
+# 9. SIDEBAR
 # =========================
 
 
@@ -873,7 +967,13 @@ def sidebar_menu():
                 )
             st.divider()
 
-        opts = ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації"]
+        opts = [
+            "Дашборд",
+            "Перелік запитів",
+            "Джерела",
+            "Конкуренти",
+            "Рекомендації",
+        ]
         icons = ["speedometer2", "list-ul", "hdd-network", "people", "lightbulb"]
 
         opts.append("GPT-Visibility")
@@ -883,12 +983,17 @@ def sidebar_menu():
             opts.append("Адмін")
             icons.append("shield-lock")
 
+        default_index = 0
+        if st.session_state.get("force_page") in opts:
+            default_index = opts.index(st.session_state["force_page"])
+            st.session_state["force_page"] = None
+
         selected = option_menu(
             menu_title=None,
             options=opts,
             icons=icons,
             menu_icon="cast",
-            default_index=0,
+            default_index=default_index,
             styles={
                 "nav-link-selected": {"background-color": "#8041F6"},
                 "container": {"padding": "0!important"},
@@ -910,7 +1015,7 @@ def sidebar_menu():
 
 
 # =========================
-# 8. ROUTER
+# 10. ROUTER
 # =========================
 
 
@@ -940,8 +1045,7 @@ def main():
         if page == "Дашборд":
             show_dashboard()
         elif page == "Перелік запитів":
-            st.title("📋 Перелік запитів")
-            show_dashboard()  # тимчасово той самий вигляд
+            show_keywords_page()
         elif page == "Джерела":
             st.title("📡 Джерела")
             st.info("У розробці...")
