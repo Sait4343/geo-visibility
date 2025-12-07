@@ -1,6 +1,7 @@
 streamlit
-supabase
 pandas
 plotly
+supabase
 streamlit-option-menu
+extra-streamlit-components
 requests
