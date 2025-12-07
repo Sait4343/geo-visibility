@@ -381,14 +381,16 @@ def login_page():
 # =========================
 
 
-def onboarding_wizard():
-    st.markdown("## 🚀 Налаштування Проекту")
+ st.markdown("## 🚀 Налаштування Проекту")
 
     with st.container(border=True):
-        # STEP 1 – імʼя
-        if not st.session_state.get("user_details", {}).get("first_name"):
-            st.subheader("Давайте знайомитись")
+        step = st.session_state.get('onboarding_step', 2)
+
+        # STEP 1 — Ім’я користувача
+        if not st.session_state.get('user_details', {}).get('first_name'):
+            st.subheader("Давайте знайомитись 😊")
             f = st.text_input("Ваше ім'я")
+
             if st.button("Далі"):
                 if f:
                     st.session_state["user_details"] = {"first_name": f}
@@ -398,28 +400,36 @@ def onboarding_wizard():
                     st.warning("Будь ласка, введіть ім'я.")
             return
 
-        step = st.session_state.get("onboarding_step", 2)
-
-        # STEP 2 – бренд та домен
+        # STEP 2 — дані про бренд (оновлена версія)
         if step == 2:
-            st.subheader("Крок 1: Бренд та домен")
+            st.subheader("Крок 1: Введіть дані про ваш бренд")
+
             brand = st.text_input("Назва бренду")
-            domain = st.text_input("Домен")
+            domain = st.text_input("Домен (офіційний сайт)")
+            industry = st.text_input("Галузь (ніша вашого бізнесу)")
+            products = st.text_area("Продукти / Послуги (перелік через кому або у стовпчик)")
 
             if st.button("Згенерувати запити"):
-                if brand and domain:
-                    st.session_state["temp_brand"] = brand
-                    st.session_state["temp_domain"] = domain
-                    with st.spinner("Відправляємо запит в n8n AI Agent..."):
+                if brand and domain and industry and products:
+
+                    # зберігаємо тимчасові дані
+                    st.session_state['temp_brand'] = brand
+                    st.session_state['temp_domain'] = domain
+                    st.session_state['temp_industry'] = industry
+                    st.session_state['temp_products'] = products
+
+                    with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
                         prompts = n8n_generate_prompts(brand, domain)
-                        if prompts:
-                            st.session_state["generated_prompts"] = prompts
-                            st.session_state["onboarding_step"] = 3
+
+                        if prompts and len(prompts) > 0:
+                            st.session_state['generated_prompts'] = prompts
+                            st.session_state['onboarding_step'] = 3
                             st.rerun()
                         else:
-                            st.error("AI не повернув результатів. Спробуйте ще раз.")
+                            st.error("AI не повернув запитів. Спробуйте ще раз.")
                 else:
-                    st.warning("Заповніть назву бренду та домен.")
+                    st.warning("Будь ласка, заповніть усі 4 поля.")
+            return
 
         # STEP 3 – вибір 5 запитів
         elif step == 3:
