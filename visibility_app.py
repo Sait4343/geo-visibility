@@ -57,10 +57,13 @@ st.markdown("""
 cookie_manager = stx.CookieManager()
 
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]["url"]
-    SUPABASE_KEY = st.secrets["SUPABASE_URL"]["key"]
+    # зчитуємо напряму, без ["url"] і ["key"]
+    SUPABASE_URL: str = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY: str = st.secrets["SUPABASE_KEY"]
+
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     DB_CONNECTED = True
+
 except Exception as e:
     st.error(f"CRITICAL ERROR: Database Connection Failed. {e}")
     st.stop()
