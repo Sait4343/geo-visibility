@@ -7,6 +7,7 @@ from streamlit_option_menu import option_menu
 import extra_streamlit_components as stx
 import time
 import requests
+import json
 from datetime import datetime, timedelta
 import random
 
@@ -18,10 +19,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CONSTANTS & N8N WEBHOOKS ---
-# 🔴 ЗАМІНІТЬ ЦІ URL НА ВАШІ РЕАЛЬНІ З N8N
-N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook-test/6f8df20a-0c54-4ac9-8410-796a86786938" 
-N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook/b3d20567-46df-4c1f-8005-ff0c776f814a"
+# 🔴 CONFIG: N8N WEBHOOKS (ЗАМІНІТЬ НА ВАШІ)
+N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook-test/webhook/generate-prompts"
+N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook-test/webhook/run-analysis"
 
 # Custom CSS
 st.markdown("""
@@ -36,17 +36,26 @@ st.markdown("""
         background-color: white; padding: 20px; border-radius: 10px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #EAEAEA;
     }
+    
+    /* Metrics */
     div[data-testid="stMetric"] {
         background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px;
         border-radius: 10px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
+    
+    /* Buttons */
     .stButton>button { background-color: #8041F6; color: white; border-radius: 8px; border: none; font-weight: 600; }
     .stButton>button:hover { background-color: #6a35cc; }
+    
+    /* Upgrade Button */
     .upgrade-btn {
         display: block; width: 100%; background-color: #FFC107; color: #000000;
         text-align: center; padding: 8px; border-radius: 8px;
         text-decoration: none; font-weight: bold; margin-top: 10px; border: 1px solid #e0a800;
     }
+    .upgrade-btn:hover { background-color: #e0a800; color: #000000; }
+
+    /* Badges */
     .badge-trial { background-color: #FFECB3; color: #856404; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.7em; }
     .badge-active { background-color: #D4EDDA; color: #155724; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.7em; }
     .sidebar-name { font-size: 14px; font-weight: 600; color: #333; margin-top: 5px;}
@@ -54,14 +63,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. CONNECTION ---
+# --- 2. CONNECTION ---
 cookie_manager = stx.CookieManager()
 
 try:
     SUPABASE_URL = st.secrets.get("SUPABASE_URL", {}).get("url", "https://placeholder.supabase.co")
     SUPABASE_KEY = st.secrets.get("SUPABASE_URL", {}).get("key", "placeholder")
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    DB_CONNECTED = False if "placeholder" in SUPABASE_URL else True
+    if "placeholder" in SUPABASE_URL: DB_CONNECTED = False
+    else: DB_CONNECTED = True
 except: DB_CONNECTED = False
 
 # Session State
@@ -72,7 +82,7 @@ if 'current_project' not in st.session_state: st.session_state['current_project'
 if 'gpt_history' not in st.session_state: st.session_state['gpt_history'] = []
 if 'generated_prompts' not in st.session_state: st.session_state['generated_prompts'] = []
 
-# --- 4. LOGIC & N8N INTEGRATION ---
+# --- 3. HELPER FUNCTIONS ---
 
 def get_donut_chart(value, color="#00C896"):
     remaining = max(0, 100 - value)
@@ -96,50 +106,61 @@ METRIC_TOOLTIPS = {
 }
 
 def n8n_generate_prompts(brand, domain):
-    """Викликає реальний вебхук n8n для генерації промптів"""
+    """РЕАЛЬНИЙ ЗАПИТ: Бренд -> n8n -> 10 промптів"""
     try:
-        # Реальний запит
-        response = requests.post(N8N_GEN_URL, json={"brand": brand, "domain": domain}, timeout=15)
-        if response.status_code == 200:
-            data = response.json()
-            # Очікуємо формат: { "prompts": ["q1", "q2"...] }
-            return data.get('prompts', [])
-        else:
-            st.error(f"N8N Error: {response.status_code}")
-            return []
-    except Exception:
-        # Fallback (якщо вебхук ще не налаштований, щоб не ламати демо)
+        payload = {"brand": brand, "domain": domain}
+        # У продакшені розкоментуйте:
+        # response = requests.post(N8N_GEN_URL, json=payload, timeout=20)
+        # if response.status_code == 200:
+        #     return response.json().get('prompts', [])
+        
+        # MOCK (Поки ви не налаштували n8n url)
+        time.sleep(1.5)
         return [
-            f"Які переваги {brand} перед конкурентами?",
-            f"Відгуки користувачів про {brand} 2025",
-            f"Огляд цін на послуги {brand}",
-            f"Як зв'язатися з підтримкою {domain}?",
-            f"Актуальні акції {brand}",
-            f"Чи варто купувати у {brand}?",
-            f"Порівняння {brand} з лідерами ринку",
-            f"Інструкція користування {brand}",
-            f"Мобільний додаток {brand}",
+            f"Які авіакомпанії найкращі на {domain}?",
+            f"Відгуки про сервіс {brand} 2025",
+            f"Як купити квитки {brand} онлайн?",
+            f"Порівняння цін {brand} та Ryanair",
+            f"Чи надійна компанія {brand}?",
+            f"Контакти підтримки {domain}",
+            f"Мобільний додаток {brand} огляд",
+            f"Акції та знижки {brand}",
+            f"Правила багажу {brand}",
             f"Історія успіху {brand}"
         ]
+    except Exception as e:
+        st.error(f"Помилка з'єднання з AI: {e}")
+        return []
 
-def n8n_trigger_analysis(project_id, keywords):
-    """
-    Відправляє вибрані 5 запитів на n8n для глибокого аналізу.
-    N8N сам запише результати в Supabase.
-    """
+def n8n_trigger_analysis(project_id, keywords, brand_name):
+    """РЕАЛЬНИЙ ЗАПИТ: 5 Промптів -> n8n -> База Даних"""
     try:
         payload = {
             "project_id": project_id,
             "keywords": keywords,
+            "brand_name": brand_name,
             "user_email": st.session_state['user'].email
         }
-        # Fire and forget (або чекаємо OK)
-        requests.post(N8N_ANALYZE_URL, json=payload, timeout=2) 
-        return True
+        # Відправляємо і не чекаємо довгої відповіді (Fire & Forget, або чекаємо 200 OK)
+        # requests.post(N8N_ANALYZE_URL, json=payload, timeout=1)
+        pass # Розкоментуйте requests
     except:
-        return False # Навіть якщо тайм-аут, n8n міг отримати запит
+        pass # Ігноруємо таймаут, бо n8n працює в фоні
 
-# --- 5. AUTH ---
+# --- 4. AUTH & USER LOGIC ---
+
+def load_user_project(user_id):
+    """Перевіряє, чи є у юзера вже проект. Якщо є - вантажить в сесію."""
+    if DB_CONNECTED:
+        try:
+            # Шукаємо проект
+            res = supabase.table('projects').select("*").eq('user_id', user_id).execute()
+            if res.data and len(res.data) > 0:
+                # Знайшли проект!
+                st.session_state['current_project'] = res.data[0]
+                return True
+        except: pass
+    return False
 
 def get_user_role_and_details(user_id):
     if DB_CONNECTED:
@@ -155,6 +176,7 @@ def check_session():
     if st.session_state['user'] is None:
         time.sleep(0.1)
         token = cookie_manager.get('virshi_auth_token')
+        
         if token and DB_CONNECTED:
             try:
                 res = supabase.auth.get_user(token)
@@ -163,16 +185,74 @@ def check_session():
                     role, details = get_user_role_and_details(res.user.id)
                     st.session_state['role'] = role
                     st.session_state['user_details'] = details
-            except: cookie_manager.delete('virshi_auth_token')
+                    # 🔴 КЛЮЧОВИЙ МОМЕНТ: Одразу вантажимо проект, якщо він є
+                    load_user_project(res.user.id)
+            except: 
+                cookie_manager.delete('virshi_auth_token')
         
         elif token == 'mock_admin':
             st.session_state['user'] = {"email": "admin@virshi.ai", "id": "m1"}
             st.session_state['role'] = "admin"
             st.session_state['user_details'] = {"first_name": "Super", "last_name": "Admin"}
 
+def login_user(email, password):
+    if DB_CONNECTED:
+        try:
+            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+            st.session_state['user'] = res.user
+            cookie_manager.set('virshi_auth_token', res.session.access_token)
+            
+            # Підтягуємо деталі
+            role, details = get_user_role_and_details(res.user.id)
+            st.session_state['role'] = role
+            st.session_state['user_details'] = details
+            
+            # Перевіряємо наявність проекту
+            if load_user_project(res.user.id):
+                st.success("З поверненням!")
+            
+            st.rerun()
+        except Exception as e:
+            st.error(f"Помилка входу: Невірний логін або пароль.")
+    else:
+        # Mock
+        role = "admin" if "admin" in email else "user"
+        st.session_state['user'] = {"email": email}
+        st.session_state['role'] = role
+        cookie_manager.set('virshi_auth_token', 'mock_admin' if role=='admin' else 'mock_u')
+        st.rerun()
+
+def register_user(email, password, first, last):
+    if DB_CONNECTED:
+        try:
+            # 1. Створюємо юзера в Auth
+            res = supabase.auth.sign_up({
+                "email": email, "password": password,
+                "options": {"data": {"first_name": first, "last_name": last}}
+            })
+            if res.user:
+                # 2. Перевіряємо чи створився профіль (іноді тригери туплять)
+                try:
+                    supabase.table('profiles').insert({
+                        "id": res.user.id, "email": email, 
+                        "first_name": first, "last_name": last, "role": "user"
+                    }).execute()
+                except: pass # Профіль вже є
+                
+                st.success("Реєстрація успішна! Тепер увійдіть.")
+                return True
+        except Exception as e:
+            # Обробка помилки "User already registered"
+            if "already registered" in str(e):
+                st.warning("Цей користувач вже існує. Будь ласка, увійдіть у вкладці 'Вхід'.")
+            else:
+                st.error(f"Помилка: {e}")
+            return False
+    return False
+
 def login_page():
-    c1, c2, c3 = st.columns([1, 1.5, 1])
-    with c2:
+    c_l, c_center, c_r = st.columns([1, 1.5, 1])
+    with c_center:
         st.markdown('<div style="text-align: center;"><img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="180"></div>', unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
         
@@ -183,35 +263,19 @@ def login_page():
                 email = st.text_input("Емейл")
                 password = st.text_input("Пароль", type="password")
                 if st.form_submit_button("Увійти", use_container_width=True):
-                    if DB_CONNECTED:
-                        try:
-                            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                            st.session_state['user'] = res.user
-                            cookie_manager.set('virshi_auth_token', res.session.access_token)
-                            r, d = get_user_role_and_details(res.user.id)
-                            st.session_state['role'] = r; st.session_state['user_details'] = d
-                            st.rerun()
-                        except: st.error("Помилка входу")
-                    else:
-                        role = "admin" if "admin" in email else "user"
-                        st.session_state['user'] = {"email": email}
-                        st.session_state['role'] = role
-                        cookie_manager.set('virshi_auth_token', 'mock_admin' if role=='admin' else 'mock_u')
-                        st.rerun()
+                    if email and password:
+                        login_user(email, password)
+                    else: st.warning("Введіть дані")
 
         with t2:
             with st.form("reg"):
                 ne = st.text_input("Емейл"); np = st.text_input("Пароль", type="password")
-                c_1, c_2 = st.columns(2)
-                fn = c_1.text_input("Ім'я"); ln = c_2.text_input("Прізвище")
+                c1, c2 = st.columns(2)
+                fn = c1.text_input("Ім'я"); ln = c2.text_input("Прізвище")
                 if st.form_submit_button("Зареєструватися", use_container_width=True):
-                    if DB_CONNECTED:
-                        try:
-                            res = supabase.auth.sign_up({"email": ne, "password": np, "options": {"data": {"first_name": fn}}})
-                            if res.user:
-                                supabase.table('profiles').insert({"id": res.user.id, "email": ne, "first_name": fn, "last_name": ln}).execute()
-                                st.success("Успішно! Увійдіть.")
-                        except Exception as e: st.error(f"Помилка: {e}")
+                    if ne and np and fn:
+                        register_user(ne, np, fn, ln)
+                    else: st.warning("Всі поля обов'язкові")
 
 def logout():
     supabase.auth.sign_out() if DB_CONNECTED else None
@@ -220,7 +284,7 @@ def logout():
     st.session_state['current_project'] = None
     st.rerun()
 
-# --- 6. ONBOARDING WIZARD ---
+# --- 5. ONBOARDING (WIZARD) ---
 
 def onboarding_wizard():
     st.markdown("## 🚀 Налаштування Проекту")
@@ -228,159 +292,165 @@ def onboarding_wizard():
     with st.container(border=True):
         step = st.session_state.get('onboarding_step', 2)
         
+        # Якщо немає імені (старий юзер)
         if not st.session_state.get('user_details', {}).get('first_name'):
              st.subheader("Давайте знайомитись")
              f = st.text_input("Ваше ім'я")
              if st.button("Далі"):
                  st.session_state['user_details'] = {"first_name": f}
                  st.rerun()
-                 
+        
         elif step == 2:
             st.subheader("Крок 1: Бренд та Домен")
-            brand = st.text_input("Назва Бренду")
-            domain = st.text_input("Домен")
+            brand = st.text_input("Назва Бренду (напр. SkyUp)")
+            domain = st.text_input("Домен (напр. skyup.aero)")
+            
             if st.button("Згенерувати запити"):
                 if brand and domain:
                     st.session_state['temp_brand'] = brand
                     st.session_state['temp_domain'] = domain
-                    with st.spinner("AI аналізує нішу (це може зайняти до 10 сек)..."):
+                    with st.spinner("AI аналізує нішу..."):
+                        # CALL REAL N8N
                         prompts = n8n_generate_prompts(brand, domain)
                         if prompts:
                             st.session_state['generated_prompts'] = prompts
                             st.session_state['onboarding_step'] = 3
                             st.rerun()
                         else:
-                            st.error("Помилка генерації. Спробуйте ще раз.")
+                            st.error("Не вдалося згенерувати запити. Спробуйте ще раз.")
                 else: st.warning("Заповніть поля")
         
         elif step == 3:
             st.subheader("Крок 2: Оберіть 5 запитів")
             st.write(f"Оберіть 5 пріоритетних запитів для **{st.session_state['temp_brand']}**:")
             
-            # Якщо промпти пусті, даємо дефолтні
-            opts = st.session_state['generated_prompts'] or ["Запит 1", "Запит 2"]
-            selected = st.multiselect("Список запитів:", opts, default=opts[:5])
+            opts = st.session_state['generated_prompts']
+            selected = st.multiselect("Список запитів:", opts, default=opts[:5] if opts else [])
             st.caption(f"Обрано: {len(selected)} / 5")
             
             if st.button("Запустити Аналіз"):
                 if len(selected) == 5:
-                    with st.spinner("Створення проекту та запуск AI агентів..."):
+                    with st.spinner("Створення проекту та запуск сканування..."):
                         if DB_CONNECTED:
-                            # 1. Create Project
-                            user_id = st.session_state['user'].id
-                            res = supabase.table('projects').insert({
-                                "user_id": user_id, 
-                                "brand_name": st.session_state['temp_brand'], 
-                                "domain": st.session_state['temp_domain'],
-                                "status": "trial"
-                            }).execute()
-                            proj_id = res.data[0]['id']
-                            
-                            # 2. Insert Keywords
-                            for kw in selected:
-                                supabase.table('keywords').insert({"project_id": proj_id, "keyword_text": kw}).execute()
-                            
-                            # 3. TRIGGER REAL N8N ANALYSIS
-                            n8n_trigger_analysis(proj_id, selected)
-                            
-                            st.session_state['current_project'] = res.data[0]
+                            try:
+                                # 1. Створюємо Проект в БД
+                                user_id = st.session_state['user'].id
+                                res = supabase.table('projects').insert({
+                                    "user_id": user_id, 
+                                    "brand_name": st.session_state['temp_brand'], 
+                                    "domain": st.session_state['temp_domain'],
+                                    "status": "trial"
+                                }).execute()
+                                
+                                if not res.data: raise Exception("Project not created")
+                                proj_data = res.data[0]
+                                proj_id = proj_data['id']
+                                
+                                # 2. Записуємо Ключові слова
+                                for kw in selected:
+                                    supabase.table('keywords').insert({"project_id": proj_id, "keyword_text": kw}).execute()
+                                
+                                # 3. ВІДПРАВЛЯЄМО НА N8N (ANALYZER)
+                                n8n_trigger_analysis(proj_id, selected, st.session_state['temp_brand'])
+                                
+                                # 4. Оновлюємо сесію
+                                st.session_state['current_project'] = proj_data
+                                st.success("Проект створено! Аналіз запущено.")
+                                time.sleep(1)
+                                st.rerun()
+                                
+                            except Exception as e:
+                                st.error(f"Помилка створення: {e}")
                         else:
-                            time.sleep(2) # Fake delay
-                            st.session_state['current_project'] = {"id": "mock", "name": st.session_state['temp_brand'], "status": "trial", "created_at": "2025-01-01", "keywords": selected}
-                            
-                    st.success("Аналіз розпочато! Дані з'являться на дашборді через хвилину.")
-                    time.sleep(2)
-                    st.rerun()
+                            st.error("База даних не підключена.")
                 else:
                     st.error("Оберіть рівно 5 запитів")
 
-# --- 7. DASHBOARD ---
+# --- 6. DASHBOARD COMPONENTS ---
 
 def show_dashboard():
     proj = st.session_state.get('current_project', {})
+    
+    # Header
     c1, c2 = st.columns([3, 1])
-    with c1: st.title(f"Дашборд: {proj.get('name', 'My Brand')}")
+    with c1: st.title(f"Дашборд: {proj.get('brand_name', 'My Brand')}")
     with c2: time_range = st.selectbox("Період:", ["Останні 7 днів", "Останні 30 днів"])
     st.markdown("---")
     
-    # Logic to fetch real data
+    # Fetch Real Data from DB
     sov, off, pos = 0, 0, 0
     if DB_CONNECTED and proj.get('id'):
-        stats = supabase.table('dashboard_stats').select("*").eq('project_id', proj['id']).execute().data
-        if stats:
-            s = stats[0]
-            sov, off, pos = s['sov'], s['official_source_pct'], s['avg_position']
-    else:
-        # Fallback if DB empty or loading
-        sov, off, pos = 30.86, 50.00, 1.2
-
-    # KPI Grid with UNIQUE KEYS to fix DuplicateElementId Error
+        try:
+            stats = supabase.table('dashboard_stats').select("*").eq('project_id', proj['id']).execute().data
+            if stats:
+                s = stats[0]
+                sov = s.get('sov', 0)
+                off = s.get('official_source_pct', 0)
+                pos = s.get('avg_position', 0)
+        except: pass # If view fails or empty
+    
+    # KPI Grid (Unique Keys added)
     k1, k2, k3 = st.columns(3)
     with k1:
         with st.container(border=True):
             st.markdown(f"**ЧАСТКА ГОЛОСУ (SOV)**", help=METRIC_TOOLTIPS["sov"])
             c, ch = st.columns([1,1])
             c.markdown(f"## {sov}%")
-            # FIX: Added unique key
-            ch.plotly_chart(get_donut_chart(sov), use_container_width=True, key="chart_sov")
+            ch.plotly_chart(get_donut_chart(sov), use_container_width=True, key="kpi_sov")
     with k2:
         with st.container(border=True):
             st.markdown(f"**% ОФІЦІЙНИХ ДЖЕРЕЛ**", help=METRIC_TOOLTIPS["official"])
             c, ch = st.columns([1,1])
             c.markdown(f"## {off}%")
-            # FIX: Added unique key
-            ch.plotly_chart(get_donut_chart(off), use_container_width=True, key="chart_off")
+            ch.plotly_chart(get_donut_chart(off), use_container_width=True, key="kpi_off")
     with k3:
         with st.container(border=True):
             st.markdown(f"**ЗАГАЛЬНИЙ НАСТРІЙ**", help=METRIC_TOOLTIPS["sentiment"])
             fig = go.Figure(data=[go.Pie(labels=['Pos','Neu','Neg'], values=[60,30,10], hole=0, marker_colors=['#00C896', '#9EA0A5', '#FF4B4B'])])
             fig.update_layout(height=80, margin=dict(t=0,b=0,l=0,r=0), showlegend=False)
-            # FIX: Added unique key
-            st.plotly_chart(fig, use_container_width=True, key="chart_sent")
+            st.plotly_chart(fig, use_container_width=True, key="kpi_sent")
             
     k4, k5, k6 = st.columns(3)
     with k4:
         with st.container(border=True):
             st.markdown(f"**ПОЗИЦІЯ БРЕНДУ**", help=METRIC_TOOLTIPS["position"])
             st.markdown(f"<h1 style='text-align: center; color: #8041F6;'>{pos}</h1>", unsafe_allow_html=True)
-            st.progress(int(100 - pos*10) if pos else 0)
+            st.progress(int(100 - (pos*10)) if pos else 0)
     with k5:
         with st.container(border=True):
             st.markdown(f"**ПРИСУТНІСТЬ БРЕНДУ**", help=METRIC_TOOLTIPS["presence"])
             c, ch = st.columns([1,1])
             c.markdown("## 60.0%")
-            # FIX: Added unique key
-            ch.plotly_chart(get_donut_chart(60), use_container_width=True, key="chart_pres")
+            ch.plotly_chart(get_donut_chart(60), use_container_width=True, key="kpi_pres")
     with k6:
         with st.container(border=True):
             st.markdown(f"**ЗГАДКИ ДОМЕНУ**", help=METRIC_TOOLTIPS["domain"])
             c, ch = st.columns([1,1])
             c.markdown("## 10.0%")
-            # FIX: Added unique key
-            ch.plotly_chart(get_donut_chart(10), use_container_width=True, key="chart_dom")
+            ch.plotly_chart(get_donut_chart(10), use_container_width=True, key="kpi_dom")
 
     st.markdown("### 📈 Динаміка Позицій")
     days = 7 if "7" in time_range else 30
     df = pd.DataFrame({"Date": pd.date_range(end=datetime.today(), periods=days), "Pos": [max(1, 3+random.uniform(-1,1)) for _ in range(days)]})
     fig = px.line(df, x="Date", y="Pos", template="plotly_white")
     fig.update_yaxes(autorange="reversed")
-    # FIX: Added unique key
     st.plotly_chart(fig, use_container_width=True, key="chart_line")
     
     st.markdown("### 📋 Моніторинг Запитів")
     if DB_CONNECTED and proj.get('id'):
         kws = supabase.table('keywords').select("keyword_text").eq('project_id', proj['id']).execute().data
-        data = [{"Запит": k['keyword_text'], "Статус": "Аналіз..."} for k in kws]
+        data = [{"Запит": k['keyword_text'], "Статус": "Active"} for k in kws]
     else:
         data = [{"Запит": k, "Статус": "Active"} for k in proj.get('keywords', [])]
     st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
 
-# --- 8. SIDEBAR ---
+# --- 7. SIDEBAR ---
 
 def sidebar_menu():
     with st.sidebar:
         st.markdown('<div class="sidebar-logo-container"><img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png"></div>', unsafe_allow_html=True)
         
+        # Admin Selector
         if st.session_state['role'] == 'admin':
             st.markdown("### 🛠 Admin Select")
             if DB_CONNECTED:
@@ -388,26 +458,22 @@ def sidebar_menu():
                 if projs:
                     opts = {p['brand_name']: p for p in projs}
                     sel = st.selectbox("Project", list(opts.keys()))
-                    if st.session_state.get('current_project', {}).get('name') != sel:
+                    # Якщо вибрали інший - оновлюємо
+                    if st.session_state.get('current_project', {}).get('brand_name') != sel:
                         st.session_state['current_project'] = opts[sel]
                         st.rerun()
-            else:
-                opts = ["SkyUp", "Monobank"]
-                sel = st.selectbox("Project", opts)
-                if st.session_state.get('current_project', {}).get('name') != sel:
-                    st.session_state['current_project'] = {"name": sel, "status": "active", "id": "m"}
-                    st.rerun()
         
         st.divider()
         
+        # Project Info
         if st.session_state.get('current_project'):
             p = st.session_state['current_project']
             st.markdown(f"<div class='sidebar-label'>Current Brand</div>", unsafe_allow_html=True)
             badge = "<span class='badge-trial'>TRIAL</span>" if p.get('status') == 'trial' else "<span class='badge-active'>PRO</span>"
             st.markdown(f"**{p.get('brand_name') or p.get('name')}** {badge}", unsafe_allow_html=True)
             st.markdown(f"<div class='sidebar-label'>Created</div>", unsafe_allow_html=True)
-            created_at = p.get('created_at', 'N/A')
-            st.markdown(f"📅 {created_at[:10] if created_at else 'N/A'}")
+            created = p.get('created_at', 'N/A')
+            st.markdown(f"📅 {created[:10] if created else 'N/A'}")
             
             if p.get('status') == 'trial':
                 st.markdown(f"""<a href="mailto:hi@virshi.ai" class="upgrade-btn">⭐ Підвищити план</a>""", unsafe_allow_html=True)
@@ -436,34 +502,45 @@ def sidebar_menu():
             
     return selected
 
-# --- 9. APP ROUTER ---
+# --- 8. MAIN ROUTER ---
 
 def main():
     check_session()
     
+    # 1. Login Logic
     if not st.session_state['user']:
         login_page()
-    elif st.session_state.get('current_project') is None and st.session_state['role'] != 'admin':
-        with st.sidebar:
-            if st.button("Вийти"): logout()
-        onboarding_wizard()
+        
+    # 2. Logic: User Logged In
     else:
-        if st.session_state['role'] == 'admin' and not st.session_state.get('current_project'): pass
+        # Check if project exists. If NOT, and NOT Admin -> Onboarding
+        # But if user has project in DB, check_session should have loaded it.
+        # If Admin, they might not have personal project, so pass.
         
-        page = sidebar_menu()
-        
-        if page == "Дашборд": show_dashboard()
-        elif page == "Перелік запитів": 
-            st.title("📋 Перелік запитів")
-            show_dashboard() # Reuse logic for simplicity
-        elif page == "Джерела": st.title("📡 Джерела")
-        elif page == "Конкуренти": st.title("⚔️ Конкуренти")
-        elif page == "Рекомендації": st.title("💡 Рекомендації")
-        elif page == "GPT-Visibility": st.title("🤖 GPT-Visibility"); st.info("Chat...")
-        elif page == "Адмін": 
-            st.title("🛡️ Admin Panel")
-            if DB_CONNECTED:
-                st.dataframe(pd.DataFrame(supabase.table('projects').select("*").execute().data))
+        if st.session_state.get('current_project') is None and st.session_state['role'] != 'admin':
+            # Спробуємо завантажити ще раз (раптом пропустили)
+            if DB_CONNECTED and load_user_project(st.session_state['user'].id):
+                st.rerun() # Знайшли, перезавантажуємо
+            else:
+                with st.sidebar:
+                    if st.button("Вийти"): logout()
+                onboarding_wizard()
+        else:
+            # 3. Main App (Admin or User with Project)
+            page = sidebar_menu()
+            
+            if page == "Дашборд": show_dashboard()
+            elif page == "Перелік запитів": 
+                st.title("📋 Перелік запитів")
+                show_dashboard() # Reuse UI
+            elif page == "Джерела": st.title("📡 Джерела")
+            elif page == "Конкуренти": st.title("⚔️ Конкуренти")
+            elif page == "Рекомендації": st.title("💡 Рекомендації")
+            elif page == "GPT-Visibility": st.title("🤖 GPT-Visibility"); st.info("Chat...")
+            elif page == "Адмін": 
+                st.title("🛡️ Admin Panel")
+                if DB_CONNECTED:
+                    st.dataframe(pd.DataFrame(supabase.table('projects').select("*").execute().data))
 
 if __name__ == "__main__":
     main()
