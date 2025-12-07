@@ -4,464 +4,498 @@ import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client, Client
 from streamlit_option_menu import option_menu
+import extra_streamlit_components as stx
 import time
-import random
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURATION & STYLING ---
 st.set_page_config(
-    page_title="GEO-Analyst | AI Visibility Platform",
-    page_icon="🌍",
+    page_title="AI Visibility by Virshi",
+    page_icon="👁️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS to match the screenshots (Clean SaaS Look)
+# Custom CSS to match the screenshots (Light gray background, card style, clean fonts)
 st.markdown("""
 <style>
-    /* Global Font & Background */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    /* Main Background */
+    .stApp {
+        background-color: #F4F6F9;
+    }
     
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        background-color: #f8f9fa; /* Light gray background */
-        color: #1e293b;
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background-color: #FFFFFF;
+        border-right: 1px solid #E0E0E0;
     }
-
-    /* Sidebar Styling */
-    [data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e2e8f0;
-    }
-
-    /* Metric Cards (Matching image_a984f3.png) */
-    div.metric-card {
+    
+    /* Card Styling */
+    .css-1r6slb0, .css-12oz5g7 { 
         background-color: white;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
         padding: 20px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        text-align: center;
-        transition: all 0.2s;
-        height: 100%;
-        border-left: 4px solid #10b981; /* Green accent */
-    }
-    div.metric-card:hover {
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .metric-label {
-        color: #64748b;
-        font-size: 0.85rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 10px;
-    }
-    .metric-value {
-        color: #0f172a;
-        font-size: 1.8rem;
-        font-weight: 700;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border: 1px solid #EAEAEA;
     }
     
-    /* Buttons (Purple/Blue from screenshots) */
-    div.stButton > button {
-        background-color: #6366f1;
+    /* Metric Cards Customization */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    
+    /* Virshi Purple Accent */
+    .stButton>button {
+        background-color: #8041F6;
         color: white;
         border-radius: 8px;
         border: none;
-        padding: 0.5rem 1rem;
-        font-weight: 600;
     }
-    div.stButton > button:hover {
-        background-color: #4f46e5;
-        color: white;
+    .stButton>button:hover {
+        background-color: #6a35cc;
     }
-
-    /* Tables */
-    [data-testid="stDataFrame"] {
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        background: white;
-        padding: 10px;
-    }
-
-    /* Status Pills */
-    .status-pill {
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 600;
-    }
-    .status-completed { background-color: #d1fae5; color: #065f46; }
-    .status-trial { background-color: #fef3c7; color: #92400e; }
     
-    /* Custom Banner */
-    .demo-banner {
-        background: linear-gradient(90deg, #e0e7ff 0%, #fae8ff 100%);
-        padding: 10px;
-        border-radius: 8px;
-        color: #4338ca;
-        font-weight: 600;
-        text-align: center;
-        margin-bottom: 20px;
-        border: 1px solid #c7d2fe;
+    /* Status Badges */
+    .badge-trial {
+        background-color: #FFECB3;
+        color: #856404;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.8em;
+        font-weight: bold;
+    }
+    .badge-active {
+        background-color: #D4EDDA;
+        color: #155724;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 0.8em;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. SUPABASE CONNECTION & MOCK DATA ---
-# Try to connect, if fails (no secrets), use Mock Mode for Demo
+# --- 2. SUPABASE & COOKIE SETUP ---
+
+# Initialize Cookie Manager for Persistent Sessions
+@st.cache_resource(experimental_allow_widgets=True)
+def get_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_manager()
+
+# Initialize Supabase
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL", {}).get("url", "https://placeholder.supabase.co")
+    SUPABASE_KEY = st.secrets.get("SUPABASE_URL", {}).get("key", "placeholder")
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    DB_CONNECTED = True
+    DB_CONNECTED = True if "placeholder" not in SUPABASE_URL else False
 except:
     DB_CONNECTED = False
-    # Mock Database for UI Demonstration
-    st.session_state['mock_projects'] = [
-        {'id': 1, 'brand_name': 'SkyUp', 'domain': 'skyup.aero', 'status': 'trial', 'created_at': '2025-09-25'}
-    ]
-
-# Session State Init
-if 'user' not in st.session_state: st.session_state['user'] = None
-if 'role' not in st.session_state: st.session_state['role'] = 'user'
-if 'current_project' not in st.session_state: st.session_state['current_project'] = None
-if 'page' not in st.session_state: st.session_state['page'] = 'Dashboard'
+    
+# Initialize Session State Variables
+if 'user' not in st.session_state:
+    st.session_state['user'] = None
+if 'role' not in st.session_state:
+    st.session_state['role'] = 'user'
+if 'current_project' not in st.session_state:
+    st.session_state['current_project'] = None
 
 # --- 3. HELPER FUNCTIONS ---
 
-def login_user(email, password):
-    if DB_CONNECTED:
-        try:
-            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-            st.session_state['user'] = res.user
-            # Fetch Role
-            profile = supabase.table('profiles').select('role').eq('id', res.user.id).single().execute()
-            st.session_state['role'] = profile.data['role'] if profile.data else 'user'
-            return True
-        except Exception as e:
-            st.error(f"Login Error: {e}")
-            return False
-    else:
-        # Mock Login
-        st.session_state['user'] = {'email': email, 'id': 'mock-id-123'}
-        st.session_state['role'] = 'admin' if 'admin' in email else 'user'
-        return True
-
-def run_demo_scan(brand, domain):
-    """Simulates the n8n Workflow A (5 Queries)"""
-    with st.status("🚀 Launching AI Agents...", expanded=True) as status:
-        st.write("🤖 Generating 5 strategic search queries via Gemini Flash...")
-        time.sleep(1.5)
-        st.write(f"🔍 Scanning Perplexity for '{brand}' mentions...")
-        time.sleep(1.5)
-        st.write("📊 Analyzing Sentiment & Source Authority...")
-        time.sleep(1.0)
-        st.write("💾 Saving results to Supabase...")
-        time.sleep(0.5)
-        status.update(label="✅ Analysis Complete!", state="complete", expanded=False)
-    
-    # Create mock project if in mock mode
-    if not DB_CONNECTED:
-        st.session_state['mock_projects'].append({
-            'id': random.randint(100,999),
-            'brand_name': brand,
-            'domain': domain,
-            'status': 'trial',
-            'created_at': datetime.now().strftime("%Y-%m-%d")
-        })
-        st.session_state['current_project'] = st.session_state['mock_projects'][-1]
-
-# --- 4. PAGE RENDERERS ---
-
-def render_onboarding():
-    st.markdown("<div style='text-align: center; margin-top: 50px;'>", unsafe_allow_html=True)
-    st.title("Welcome to GEO-Analyst 🌍")
-    st.subheader("See how AI sees your brand in 30 seconds")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        with st.form("onboarding_form"):
-            brand = st.text_input("Brand Name", placeholder="e.g. Nova Poshta")
-            domain = st.text_input("Website URL", placeholder="e.g. novaposhta.ua")
-            region = st.selectbox("Target Region", ["Ukraine", "USA", "Global"])
-            submitted = st.form_submit_button("Start Free Demo Scan 🚀", use_container_width=True)
-            
-            if submitted and brand and domain:
-                run_demo_scan(brand, domain)
-                st.session_state['page'] = 'Dashboard'
-                st.rerun()
-
-def render_dashboard():
-    proj = st.session_state['current_project']
-    
-    # Header
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.title(f"{proj['brand_name']}")
-        st.caption(f"🌐 Entity: {proj['brand_name']} | 📅 Created: {proj['created_at']}")
-    with c2:
-        if proj.get('status') == 'trial':
-            st.markdown(f"""
-            <div style="background-color: #fffbeb; color: #b45309; padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #fcd34d;">
-                🔒 <b>Trial Mode</b><br>Limited to 5 queries
-            </div>
-            """, unsafe_allow_html=True)
-
-    # 1. KPI GRID (Matches image_a984f3.png)
-    st.markdown("### Performance Overview")
-    
-    # Mock Data for KPIs
-    kpi_data = {
-        "sov": 30.86, "official_src": 50.00, "sentiment": 78,
-        "position": 1.7, "presence": 60.00, "domain_mentions": 10.00
+def mock_login(email):
+    """Simulate login for demo purposes if DB not connected"""
+    return {
+        "id": "mock-uuid-1234",
+        "email": email,
+        "role": "admin" if "admin" in email else "user"
     }
 
-    # Custom HTML Card Function
-    def metric_html(label, value, is_pie=False, is_text=False):
-        content = f"<div class='metric-value'>{value}</div>"
-        if is_pie:
-            # Simple CSS Pie Chart simulation
-            content = f"""
-            <div style="display: flex; justify-content: center; align-items: center; height: 80px;">
-                <div style="width: 60px; height: 60px; border-radius: 50%; background: conic-gradient(#10b981 {value}%, #e2e8f0 0);"></div>
-            </div>
-            <div style='font-size: 1.2rem; font-weight: bold;'>{value}%</div>
-            """
-        return f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            {content}
-        </div>
-        """
+def get_donut_chart(value, title, color="#00C896"):
+    """Generates a small donut chart for KPI cards similar to screenshots"""
+    fig = go.Figure(data=[go.Pie(
+        values=[value, 100-value],
+        hole=.7,
+        marker_colors=[color, '#F0F2F6'],
+        textinfo='none',
+        hoverinfo='none'
+    )])
+    fig.update_layout(
+        showlegend=False,
+        margin=dict(t=0, b=0, l=0, r=0),
+        height=100,
+        width=100,
+        annotations=[dict(text=f"{value}%", x=0.5, y=0.5, font_size=16, showarrow=False, font_weight="bold")]
+    )
+    return fig
 
-    r1c1, r1c2, r1c3 = st.columns(3)
-    with r1c1: st.markdown(metric_html("Share of Voice (SOV)", f"{kpi_data['sov']}%", is_pie=True), unsafe_allow_html=True)
-    with r1c2: st.markdown(metric_html("% Official Sources", f"{kpi_data['official_src']}%", is_pie=True), unsafe_allow_html=True)
-    with r1c3: st.markdown(metric_html("Avg Sentiment", "Positive 😄"), unsafe_allow_html=True)
+# --- 4. AUTHENTICATION LOGIC ---
 
-    st.write("") # Spacer
+def check_session():
+    """Checks for existing session token in cookies"""
+    if st.session_state['user'] is None:
+        token = cookie_manager.get('virshi_token')
+        if token and DB_CONNECTED:
+            try:
+                user = supabase.auth.get_user(token)
+                if user:
+                    st.session_state['user'] = user.user
+                    # Fetch role logic here (omitted for brevity)
+                    return True
+            except:
+                cookie_manager.delete('virshi_token')
+        elif token and not DB_CONNECTED:
+            # Restore mock session
+            st.session_state['user'] = {"email": "demo@virshi.ai"}
+            st.session_state['role'] = "admin"
+            
+def login_page():
+    c1, c2, c3 = st.columns([1, 1.5, 1])
+    with c2:
+        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=200)
+        st.markdown("<h2 style='text-align: center;'>Вхід в AI Visibility</h2>", unsafe_allow_html=True)
+        
+        with st.form("login_form"):
+            email = st.text_input("Email", placeholder="name@company.com")
+            password = st.text_input("Пароль", type="password")
+            submit = st.form_submit_button("Увійти", use_container_width=True)
+            
+            if submit:
+                if DB_CONNECTED:
+                    try:
+                        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                        st.session_state['user'] = res.user
+                        cookie_manager.set('virshi_token', res.session.access_token, expires_at=datetime.now() + timedelta(days=7))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Помилка входу: {e}")
+                else:
+                    # Mock Login
+                    st.session_state['user'] = mock_login(email)
+                    st.session_state['role'] = "admin" if "admin" in email else "user"
+                    cookie_manager.set('virshi_token', 'mock_token', key="token_set")
+                    st.success("Вхід успішний (Demo Mode)")
+                    time.sleep(1)
+                    st.rerun()
 
-    r2c1, r2c2, r2c3 = st.columns(3)
-    with r2c1: st.markdown(metric_html("Avg Brand Position", f"{kpi_data['position']}"), unsafe_allow_html=True)
-    with r2c2: st.markdown(metric_html("Brand Presence", f"{kpi_data['presence']}%", is_pie=True), unsafe_allow_html=True)
-    with r2c3: st.markdown(metric_html("Domain Mentions", f"{kpi_data['domain_mentions']}%", is_pie=True), unsafe_allow_html=True)
+def onboarding_wizard():
+    """Wizard for new users with 0 projects"""
+    st.markdown("## 🚀 Налаштуємо ваш Brand Monitor")
+    st.markdown("Ми згенеруємо перші аналітичні дані за 30 секунд.")
+    
+    with st.container(border=True):
+        step = st.session_state.get('onboarding_step', 1)
+        
+        if step == 1:
+            st.subheader("Крок 1: Інформація про Бренд")
+            brand_name = st.text_input("Назва Бренду (напр. SkyUp)")
+            domain = st.text_input("Домен сайту (напр. skyup.aero)")
+            region = st.selectbox("Регіон пошуку", ["Ukraine", "USA", "Global"])
+            
+            if st.button("Далі"):
+                if brand_name and domain:
+                    st.session_state['temp_brand'] = brand_name
+                    st.session_state['temp_domain'] = domain
+                    st.session_state['onboarding_step'] = 2
+                    st.rerun()
+                else:
+                    st.warning("Заповніть всі поля")
+                    
+        elif step == 2:
+            st.subheader("Крок 2: AI Генерація запитів")
+            st.write(f"Аналізуємо нішу для **{st.session_state['temp_brand']}**...")
+            
+            # Simulated Progress
+            my_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for percent_complete in range(100):
+                time.sleep(0.02)
+                my_bar.progress(percent_complete + 1)
+                if percent_complete < 30:
+                    status_text.text("Генеруємо ключові слова через Gemini...")
+                elif percent_complete < 70:
+                    status_text.text("Скануємо видачу Perplexity...")
+                else:
+                    status_text.text("Розраховуємо сентимент та SOV...")
+            
+            st.success("Готово! Демо-проект створено.")
+            if st.button("Перейти до Дашборду"):
+                # In real app: Insert into DB here
+                st.session_state['current_project'] = {
+                    "name": st.session_state['temp_brand'],
+                    "status": "trial",
+                    "id": "new-proj"
+                }
+                st.rerun()
+
+# --- 5. PAGE VIEWS ---
+
+def show_dashboard():
+    # Header
+    col_head, col_status = st.columns([4, 1])
+    with col_head:
+        st.title(f"Дашборд: {st.session_state.get('current_project', {}).get('name', 'SkyUp')}")
+    with col_status:
+        status = st.session_state.get('current_project', {}).get('status', 'trial')
+        if status == 'trial':
+            st.markdown('<div style="text-align:right;"><span class="badge-trial">TRIAL MODE (5 Queries)</span></div>', unsafe_allow_html=True)
+            if st.button("🚀 Upgrade to Pro"):
+                st.toast("Зв'яжіться з менеджером для активації!")
+        else:
+            st.markdown('<div style="text-align:right;"><span class="badge-active">ACTIVE</span></div>', unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # 2. CHARTS (Plotly)
-    c_chart, c_score = st.columns([2, 1])
-    
-    with c_chart:
-        st.subheader("Brand Position Evolution")
-        # Mock Trend Data
-        dates = pd.date_range(end=datetime.today(), periods=10).strftime("%b %d")
-        df_trend = pd.DataFrame({
-            "Date": dates,
-            "Position": [4, 3.8, 3.5, 3.0, 2.8, 2.5, 2.0, 1.8, 1.7, 1.7]
-        })
-        fig = px.line(df_trend, x="Date", y="Position", markers=True)
-        fig.update_layout(
-            yaxis=dict(autorange="reversed"), # 1 is top
-            plot_bgcolor="white",
-            margin=dict(t=10, b=10, l=10, r=10),
-            height=300
-        )
-        fig.update_traces(line_color='#6366f1', line_width=3)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with c_score:
-        st.subheader("LLMO Score")
-        st.markdown("""
-        <div style="background: white; border-radius: 12px; padding: 20px; text-align: center; border: 1px solid #e2e8f0;">
-            <h1 style="font-size: 3rem; color: #6366f1; margin: 0;">82<span style="font-size: 1rem; color: #94a3b8;">/100</span></h1>
-            <p style="color: #64748b;">Excellent Visibility</p>
-            <hr>
-            <div style="text-align: left; font-size: 0.9rem;">
-                <div>🤖 <b>ChatGPT:</b> #1</div>
-                <div>🌌 <b>Perplexity:</b> #2</div>
-                <div>♊ <b>Gemini:</b> #1</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-def render_competitors():
-    st.title("⚔️ Competitor Analysis")
-    st.caption("See who you are fighting against in AI responses.")
-
-    # Mock Data (Matches image_a98478.png)
-    data = [
-        {"Brand": "SkyUp", "Mentions": 50, "Sentiment": "Neutral", "Position": 1.0, "Trend": "⬆️"},
-        {"Brand": "Ryanair", "Mentions": 20, "Sentiment": "Neutral", "Position": 7.2, "Trend": "⬇️"},
-        {"Brand": "Wizz Air", "Mentions": 19, "Sentiment": "Neutral", "Position": 6.4, "Trend": "⬆️"},
-        {"Brand": "Turkish Airlines", "Mentions": 6, "Sentiment": "Positive", "Position": 6.3, "Trend": "➖"},
-    ]
-    df = pd.DataFrame(data)
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.dataframe(
-            df,
-            column_config={
-                "Position": st.column_config.NumberColumn("Avg Position", format="%.1f"),
-                "Mentions": st.column_config.ProgressColumn("Volume", format="%d", min_value=0, max_value=60),
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-    with col2:
-        st.info("💡 **Insight:** You are dominating SOV (50 mentions), but Ryanair is your closest threat in terms of pricing queries.")
-
-def render_sources():
-    st.title("📡 AI Source Intelligence")
-    
-    t1, t2 = st.tabs(["Owned Assets", "Earned Media"])
-    
-    with t1:
-        st.subheader("Your Official Assets")
-        # Matches image_a9845c.png
-        df_owned = pd.DataFrame([
-            {"URL": "skyup.aero", "Mentions": 18, "Status": "Verified ✅"},
-            {"URL": "instagram.com/skyup", "Mentions": 11, "Status": "Verified ✅"},
-        ])
-        st.dataframe(df_owned, use_container_width=True)
-    
-    with t2:
-        st.subheader("External References")
-        # Matches AI Reference Sources.png
-        df_earned = pd.DataFrame([
-            {"Domain": "tripmydream.ua", "References": 20, "Type": "Ranking"},
-            {"Domain": "dovkola.media", "References": 18, "Type": "Ranking"},
-            {"Domain": "lowcostavia.com.ua", "References": 18, "Type": "Ranking"},
-        ])
-        st.dataframe(df_earned, use_container_width=True)
-
-def render_recommendations():
-    st.title("💡 Strategic Recommendations")
-    
-    # Kanban Style (Matches AI Recommendations.png)
+    # KPI Grid (Row 1) - Based on Screenshot [image_a984f3.png]
     c1, c2, c3 = st.columns(3)
     
     with c1:
-        st.markdown("### 🔴 To Do")
-        st.info("**Website Collaboration**\n\nCreate a guest post for `tripmydream.ua` to improve backlink authority in Gemini.")
-        st.warning("**Content Gap**\n\nAdd FAQ about 'Baggage Allowance' to match Ryanair's visibility.")
-    
+        with st.container(border=True):
+            st.markdown("**ЧАСТКА ГОЛОСУ (SOV)**")
+            col_kpi, col_chart = st.columns([1, 1])
+            col_kpi.markdown("## 30.86%")
+            col_chart.plotly_chart(get_donut_chart(30, "SOV"), use_container_width=True)
+
     with c2:
-        st.markdown("### 🟡 In Progress")
-        st.markdown("""
-        <div style="background: white; padding: 10px; border-radius: 8px; border-left: 4px solid #facc15; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
-            <b>Social Media Opps</b><br>
-            <span style="font-size: 12px; color: gray;">PR Strategy</span><br>
-            Generate buzz on TikTok regarding winter sales.
-        </div>
-        """, unsafe_allow_html=True)
-        
+        with st.container(border=True):
+            st.markdown("**% ОФІЦІЙНИХ ДЖЕРЕЛ**")
+            col_kpi, col_chart = st.columns([1, 1])
+            col_kpi.markdown("## 50.00%")
+            col_chart.plotly_chart(get_donut_chart(50, "Off", "#00C896"), use_container_width=True)
+
     with c3:
-        st.markdown("### 🟢 Done")
-        st.success("**Technical SEO**\n\nSchema markup added for Flight schedules.")
+        with st.container(border=True):
+            st.markdown("**ЗАГАЛЬНИЙ НАСТРІЙ**")
+            # Sentiment Pie Chart
+            labels = ['Positive', 'Neutral', 'Negative']
+            values = [10, 80, 10]
+            fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0, marker_colors=['#00C896', '#9EA0A5', '#FF4B4B'])])
+            fig.update_layout(height=120, margin=dict(t=0,b=0,l=0,r=0), showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
 
-def render_admin():
-    st.title("🛡️ Super Admin Panel")
-    st.markdown("Manage users, activations, and token usage.")
+    # KPI Grid (Row 2)
+    c4, c5, c6 = st.columns(3)
     
-    # Mock Admin Data
-    users = [
-        {"Email": "client@skyup.aero", "Project": "SkyUp", "Status": "Trial", "Tokens Used": 4500},
-        {"Email": "ceo@novaposhta.ua", "Project": "Nova Poshta", "Status": "Active", "Tokens Used": 125000},
-    ]
-    df = pd.DataFrame(users)
-    
-    edited_df = st.data_editor(
-        df,
-        column_config={
-            "Status": st.column_config.SelectboxColumn("Status", options=["Trial", "Active", "Suspended"]),
-            "Tokens Used": st.column_config.ProgressColumn("Cost", min_value=0, max_value=200000, format="%d"),
-        },
-        use_container_width=True,
-        num_rows="dynamic"
-    )
-    
-    if st.button("Save Changes"):
-        st.toast("User statuses updated successfully!", icon="💾")
+    with c4:
+        with st.container(border=True):
+            st.markdown("**ПОЗИЦІЯ БРЕНДУ**")
+            st.markdown("<h1 style='text-align: center; color: #8041F6;'>1.0</h1>", unsafe_allow_html=True)
+            st.progress(100) # Full bar for position 1
 
-# --- 5. MAIN APP LOGIC ---
+    with c5:
+        with st.container(border=True):
+            st.markdown("**ПРИСУТНІСТЬ БРЕНДУ**")
+            col_kpi, col_chart = st.columns([1, 1])
+            col_kpi.markdown("## 60.00%")
+            col_chart.plotly_chart(get_donut_chart(60, "Pres"), use_container_width=True)
 
-def main():
-    # Sidebar Navigation
-    with st.sidebar:
-        st.image("https://img.icons8.com/?size=100&id=zN242j42f3rW&format=png", width=50) # Placeholder Logo
-        st.markdown("### GEO-Analyst")
+    with c6:
+        with st.container(border=True):
+            st.markdown("**ЗГАДКИ ДОМЕНУ**")
+            col_kpi, col_chart = st.columns([1, 1])
+            col_kpi.markdown("## 10.00%")
+            col_chart.plotly_chart(get_donut_chart(10, "Dom"), use_container_width=True)
+
+    # Main Chart: Brand Position Evolution
+    st.markdown("### 📈 Динаміка Позицій (Brand Position Evolution)")
+    with st.container(border=True):
+        # Mock Data
+        dates = pd.date_range(end=datetime.today(), periods=14)
+        df = pd.DataFrame({
+            "Date": dates,
+            "SkyUp": [4, 3, 3, 2, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1],
+            "Ryanair": [2, 2, 1, 1, 3, 3, 2, 2, 3, 3, 2, 2, 3, 3]
+        })
+        fig = px.line(df, x="Date", y=["SkyUp", "Ryanair"], markers=True, 
+                      color_discrete_map={"SkyUp": "#8041F6", "Ryanair": "#9EA0A5"})
+        fig.update_layout(yaxis_autorange="reversed", template="plotly_white", height=350)
+        st.plotly_chart(fig, use_container_width=True)
+
+def show_competitors():
+    st.title("⚔️ Аналіз Конкурентів")
+    
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 1])
+        c1.markdown("Цей розділ показує, як ваші конкуренти ранжуються у відповідях AI порівняно з вами.")
+        c2.button("Оновити дані", use_container_width=True)
         
-        # User Profile Mini
-        if st.session_state['user']:
-            st.markdown(f"👤 **{st.session_state['user']['email']}**")
-            st.caption(f"Role: {st.session_state['role'].upper()}")
+        # Competitors Table
+        data = {
+            "Competitor": ["SkyUp", "Ryanair", "Wizz Air", "LOT"],
+            "Avg Position": [1.0, 3.1, 2.9, 3.5],
+            "Appearances": [50, 69, 73, 19],
+            "Trend": ["⬆️", "⬆️", "⬇️", "—"]
+        }
+        df = pd.DataFrame(data)
+        st.dataframe(
+            df,
+            column_config={
+                "Avg Position": st.column_config.NumberColumn(format="%.1f"),
+                "Appearances": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=100),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+
+def show_sources():
+    st.title("📡 Джерела Даних (Sources)")
+    
+    tab1, tab2 = st.tabs(["Власні ресурси (Owned)", "Зовнішні медіа (Earned)"])
+    
+    with tab1:
+        st.info("Сайти та соцмережі, які ви верифікували як офіційні.")
+        st.dataframe(pd.DataFrame([
+            {"Domain": "skyup.aero", "Mentions": 18, "Status": "Verified ✅"},
+            {"Domain": "instagram.com/skyup", "Mentions": 11, "Status": "Verified ✅"}
+        ]), use_container_width=True)
+        
+    with tab2:
+        st.warning("Зовнішні сайти, які AI використовує як джерела інформації про вашу нішу.")
+        st.dataframe(pd.DataFrame([
+            {"Domain": "tripmydream.ua", "Mentions": 20, "Category": "Aggregator"},
+            {"Domain": "lowcostavia.com.ua", "Mentions": 18, "Category": "News Blog"},
+            {"Domain": "en.wikipedia.org", "Mentions": 5, "Category": "Wiki"}
+        ]), use_container_width=True)
+
+def show_recommendations():
+    st.title("💡 AI Рекомендації")
+    st.caption("Стратегії для покращення видимості на основі Gap-аналізу з лідером.")
+    
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.subheader("📝 To Do")
+        with st.container(border=True):
+            st.markdown("**Website Collaboration**")
+            st.caption("High Priority • PR")
+            st.write("Tripmydream.ua цитує Ryanair, але не вас. Зв'яжіться з редакцією для додавання акцій.")
+            st.button("Детальніше", key="r1")
             
-            # Demo Banner (Matches screenshot)
-            if st.session_state.get('current_project', {}).get('status') == 'trial':
-                st.markdown('<div class="demo-banner">✨ 14 Demo Days Left</div>', unsafe_allow_html=True)
-                if st.button("💎 Upgrade to Pro", use_container_width=True):
-                    st.toast("Contacting Sales Manager...", icon="📞")
+    with c2:
+        st.subheader("🚧 In Progress")
+        with st.container(border=True):
+            st.markdown("**Content Creation**")
+            st.caption("Medium • Content")
+            st.write("Створити FAQ сторінку про повернення квитків для Gemini.")
+            st.progress(40)
+            
+    with c3:
+        st.subheader("✅ Done")
+        with st.container(border=True):
+            st.markdown("**Technical Fix**")
+            st.write("robots.txt оновлено для доступу GPTBot.")
+            st.markdown("~~Виконано~~")
 
-        # Navigation Menu
-        menu_options = ["Dashboard", "Competitors", "Sources", "Recommendations"]
-        menu_icons = ["speedometer2", "people", "hdd-network", "lightbulb"]
+def show_admin():
+    if st.session_state['role'] != 'admin':
+        st.error("Доступ заборонено")
+        return
         
-        if st.session_state['role'] == 'admin':
-            menu_options.append("Admin Panel")
-            menu_icons.append("shield-lock")
+    st.title("🛡️ Super Admin Panel")
+    
+    # KPIs for Admin
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Всього Юзерів", "124")
+    k2.metric("Активних Проектів", "85")
+    k3.metric("Витрати Токенів (Сьогоді)", "1.2M")
+    
+    st.divider()
+    
+    st.subheader("Керування Клієнтами")
+    
+    # Mock User DB
+    users_df = pd.DataFrame([
+        {"email": "client@skyup.aero", "project": "SkyUp", "status": "trial", "tokens": 5000},
+        {"email": "marketing@monobank.ua", "project": "Monobank", "status": "active", "tokens": 125000},
+    ])
+    
+    for i, row in users_df.iterrows():
+        with st.expander(f"{row['project']} ({row['email']})"):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            c1.write(f"Tokens Used: {row['tokens']}")
+            c2.write(f"Current Status: **{row['status'].upper()}**")
+            
+            if row['status'] == 'trial':
+                if c3.button(f"Activate Pro", key=f"act_{i}"):
+                    st.toast(f"Project {row['project']} activated!")
+                    # SQL Update logic would go here
 
+# --- 6. SIDEBAR & NAVIGATION ---
+
+def sidebar_menu():
+    with st.sidebar:
+        # Logo
+        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=250)
+        
+        # User Info
+        if st.session_state['user']:
+            user_email = st.session_state['user'].get('email', 'Guest')
+            st.write(f"👤 **{user_email}**")
+            if st.session_state.get('role') == 'admin':
+                st.caption("🔴 SUPER ADMIN")
+        
+        # Navigation
         selected = option_menu(
-            "Menu",
-            menu_options,
-            icons=menu_icons,
+            menu_title="Меню",
+            options=["Дашборд", "Ключові слова", "Джерела", "Конкуренти", "Рекомендації", "Адмін"],
+            icons=["speedometer2", "search", "hdd-network", "people", "lightbulb", "shield-lock"],
             menu_icon="cast",
             default_index=0,
             styles={
-                "nav-link-selected": {"background-color": "#6366f1"},
+                "nav-link-selected": {"background-color": "#8041F6"},
             }
         )
         
         st.divider()
-        if st.session_state['user']:
-            if st.button("Log Out"):
-                st.session_state['user'] = None
-                st.rerun()
-
-    # Routing Logic
-    if not st.session_state['user']:
-        # Login Screen
-        c1, c2, c3 = st.columns([1,1,1])
-        with c2:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            st.title("Sign In")
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            if st.button("Login", use_container_width=True):
-                if login_user(email, password):
-                    st.rerun()
-            st.markdown("---")
-            st.caption("Don't have an account? Just login to start demo.")
+        if st.button("Вийти"):
+            st.session_state['user'] = None
+            cookie_manager.delete('virshi_token')
+            st.rerun()
             
-    elif not st.session_state['current_project'] and st.session_state['role'] != 'admin':
-        # Onboarding
-        render_onboarding()
+    return selected
+
+# --- 7. MAIN APP ROUTER ---
+
+def main():
+    # 1. Check Cookies for Session
+    check_session()
+    
+    # 2. Routing Logic
+    if not st.session_state['user']:
+        login_page()
+    
+    elif st.session_state.get('current_project') is None and st.session_state['role'] != 'admin':
+        # New User Flow
+        with st.sidebar:
+            if st.button("Вийти"):
+                st.session_state['user'] = None
+                cookie_manager.delete('virshi_token')
+                st.rerun()
+        onboarding_wizard()
         
     else:
-        # Main App
-        if selected == "Dashboard":
-            render_dashboard()
-        elif selected == "Competitors":
-            render_competitors()
-        elif selected == "Sources":
-            render_sources()
-        elif selected == "Recommendations":
-            render_recommendations()
-        elif selected == "Admin Panel":
-            render_admin()
+        # Main App Flow
+        page = sidebar_menu()
+        
+        if page == "Дашборд":
+            show_dashboard()
+        elif page == "Ключові слова":
+            st.title("🔍 Ключові слова (Query Explorer)")
+            st.info("Тут буде список 5 демо-запитів з детальною аналітикою.")
+        elif page == "Джерела":
+            show_sources()
+        elif page == "Конкуренти":
+            show_competitors()
+        elif page == "Рекомендації":
+            show_recommendations()
+        elif page == "Адмін":
+            show_admin()
 
 if __name__ == "__main__":
     main()
