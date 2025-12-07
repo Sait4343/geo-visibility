@@ -6,11 +6,9 @@ from supabase import create_client, Client
 from streamlit_option_menu import option_menu
 import extra_streamlit_components as stx
 import time
-import requests
 from datetime import datetime, timedelta
-import random
 
-# --- 1. CONFIGURATION & STYLING ---
+# --- 1. CONFIGURATION ---
 st.set_page_config(
     page_title="AI Visibility by Virshi",
     page_icon="👁️",
@@ -18,132 +16,151 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .stApp { background-color: #F4F6F9; }
-    
-    /* Sidebar Tweaks */
-    section[data-testid="stSidebar"] { background-color: #FFFFFF; border-right: 1px solid #E0E0E0; }
-    
-    /* Зменшення відступів у сайдбарі та розміру лого */
-    section[data-testid="stSidebar"] > div:first-child {
-        padding-top: 1rem;
-    }
-    .sidebar-logo {
-        margin-bottom: 0px;
-        text-align: center;
-    }
-    
-    /* Cards */
-    .css-1r6slb0, .css-12oz5g7 { 
-        background-color: white; padding: 20px; border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #EAEAEA;
-    }
-    
-    /* Buttons */
-    .stButton>button { background-color: #8041F6; color: white; border-radius: 8px; border: none; }
-    .stButton>button:hover { background-color: #6a35cc; }
-    
-    /* Upgrade Button (Yellow) */
-    .upgrade-btn {
-        display: block; width: 100%; background-color: #FFC107; color: #000000;
-        text-align: center; padding: 10px; border-radius: 8px;
-        text-decoration: none; font-weight: bold; margin-top: 10px; border: 1px solid #e0a800;
-    }
-    .upgrade-btn:hover { background-color: #e0a800; color: #000000; }
+# --- 2. SUPABASE CONNECTION & COOKIES ---
 
-    /* Badges */
-    .badge-trial { background-color: #FFECB3; color: #856404; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.7em; }
-    .badge-active { background-color: #D4EDDA; color: #155724; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.7em; }
-    
-    /* Text styles */
-    .sidebar-name { font-size: 14px; font-weight: 600; color: #333; margin-top: 5px;}
-    .sidebar-label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 15px;}
-</style>
-""", unsafe_allow_html=True)
-
-# --- 2. SETUP ---
-
+# Ініціалізація менеджера куків (БЕЗ кешування, щоб уникнути помилок)
 cookie_manager = stx.CookieManager()
 
-# Initialize Supabase
+# Підключення до Supabase
 try:
-    SUPABASE_URL = st.secrets.get("SUPABASE_URL", {}).get("url", "https://placeholder.supabase.co")
-    SUPABASE_KEY = st.secrets.get("SUPABASE_URL", {}).get("key", "placeholder")
+    # Беремо ключі з secrets.toml
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]["url"]
+    SUPABASE_KEY = st.secrets["SUPABASE_URL"]["key"]
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    DB_CONNECTED = True if "placeholder" not in SUPABASE_URL else False
-except Exception:
+    DB_CONNECTED = True
+except Exception as e:
+    st.error(f"Помилка підключення до бази даних: {e}")
     DB_CONNECTED = False
-    
-# Session State
+
+# Ініціалізація Session State
 if 'user' not in st.session_state: st.session_state['user'] = None
-if 'user_details' not in st.session_state: st.session_state['user_details'] = {} 
+if 'user_details' not in st.session_state: st.session_state['user_details'] = {}
 if 'role' not in st.session_state: st.session_state['role'] = 'user'
 if 'current_project' not in st.session_state: st.session_state['current_project'] = None
-if 'gpt_history' not in st.session_state: st.session_state['gpt_history'] = []
-if 'generated_prompts' not in st.session_state: st.session_state['generated_prompts'] = []
 
-# --- 3. HELPER FUNCTIONS ---
+# --- 3. AUTHENTICATION LOGIC (СЕСІЇ) ---
 
-def mock_n8n_generate_prompts(brand, domain):
-    """Імітація запиту до n8n, який повертає 10 промптів"""
-    time.sleep(1.5) # Імітація затримки мережі
-    return [
-        f"Які авіакомпанії пропонують найдешевші квитки на сайті {domain}?",
-        f"Відгуки про сервіс {brand} 2025",
-        f"Як купити квитки {brand} онлайн?",
-        f"Правила перевезення багажу {brand}",
-        f"Акції та знижки {brand} на цей місяць",
-        f"Порівняння цін {brand} та конкурентів",
-        f"Чи надійна компанія {brand}?",
-        f"Контакти підтримки {domain}",
-        f"Мобільний додаток {brand} огляд",
-        f"Історія компанії {brand}"
-    ]
-
-def get_donut_chart(value, color="#00C896"):
-    remaining = max(0, 100 - value)
-    fig = go.Figure(data=[go.Pie(
-        values=[value, remaining], hole=.75,
-        marker_colors=[color, '#F0F2F6'], textinfo='none', hoverinfo='label+percent'
-    )])
-    fig.update_layout(
-        showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=80, width=80,
-        annotations=[dict(text=f"{value}%", x=0.5, y=0.5, font_size=14, showarrow=False, font_weight="bold", font_color="#333")]
-    )
-    return fig
-
-METRIC_TOOLTIPS = {
-    "sov": "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами.",
-    "official": "Частка посилань на ваші офіційні ресурси.",
-    "sentiment": "Тональність: Позитивна, Нейтральна або Негативна.",
-    "position": "Середня позиція вашого бренду у списках рекомендацій.",
-    "presence": "Відсоток запитів, де бренд був згаданий.",
-    "domain": "Відсоток запитів з клікабельним посиланням на ваш домен."
-}
-
-# --- 4. AUTH & ONBOARDING ---
+def get_user_role_and_details(user_id):
+    """Отримує роль та деталі користувача з таблиці profiles"""
+    try:
+        data = supabase.table('profiles').select("*").eq('id', user_id).execute()
+        if data.data:
+            profile = data.data[0]
+            return profile.get('role', 'user'), profile
+    except:
+        pass
+    return 'user', {}
 
 def check_session():
+    """Перевіряє куки при завантаженні сторінки"""
     if st.session_state['user'] is None:
+        # Чекаємо секунду, щоб кукі менеджер встиг завантажитись
         time.sleep(0.1)
-        token = cookie_manager.get('virshi_token')
+        token = cookie_manager.get('virshi_auth_token')
+        
         if token and DB_CONNECTED:
             try:
-                user = supabase.auth.get_user(token)
-                if user: st.session_state['user'] = user.user
-            except: cookie_manager.delete('virshi_token')
-        elif token and not DB_CONNECTED:
-            # Mock login restoration
-            if token == 'mock_admin':
-                st.session_state['user'] = {"email": "admin@virshi.ai"}
-                st.session_state['user_details'] = {"first_name": "Super", "last_name": "Admin"}
-                st.session_state['role'] = "admin"
-            elif token.startswith('mock_user'):
-                st.session_state['user'] = {"email": "client@skyup.aero"}
-                st.session_state['user_details'] = {"first_name": "Іван", "last_name": "Петренко"}
-                st.session_state['role'] = "user"
+                # Перевіряємо токен через Supabase
+                res = supabase.auth.get_user(token)
+                if res.user:
+                    st.session_state['user'] = res.user
+                    # Підтягуємо роль і деталі з бази
+                    role, details = get_user_role_and_details(res.user.id)
+                    st.session_state['role'] = role
+                    st.session_state['user_details'] = details
+            except Exception as e:
+                # Якщо токен прострочений - видаляємо
+                cookie_manager.delete('virshi_auth_token')
+
+def login_user(email, password):
+    """Функція входу"""
+    try:
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        st.session_state['user'] = res.user
+        
+        # Зберігаємо токен у куки на 7 днів
+        cookie_manager.set('virshi_auth_token', res.session.access_token, 
+                         expires_at=datetime.now() + timedelta(days=7))
+        
+        # Отримуємо додаткові дані
+        role, details = get_user_role_and_details(res.user.id)
+        st.session_state['role'] = role
+        st.session_state['user_details'] = details
+        
+        return True
+    except Exception as e:
+        st.error(f"Помилка входу: {e}")
+        return False
+
+def register_user(email, password, first_name, last_name):
+    """Функція реєстрації"""
+    try:
+        # 1. Реєстрація в Auth
+        res = supabase.auth.sign_up({
+            "email": email, 
+            "password": password,
+            "options": {"data": {"first_name": first_name, "last_name": last_name}}
+        })
+        
+        if res.user:
+            # 2. Створення запису в profiles (якщо не створено автоматично тригером)
+            # Примітка: краще налаштувати SQL тригер в Supabase, але можна і так:
+            try:
+                supabase.table('profiles').insert({
+                    "id": res.user.id,
+                    "email": email,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "role": "user"
+                }).execute()
+            except:
+                pass # Ігноруємо, якщо тригер вже створив
+            
+            st.success("Реєстрація успішна! Будь ласка, увійдіть.")
+            return True
+    except Exception as e:
+        st.error(f"Помилка реєстрації: {e}")
+        return False
+
+def logout():
+    """Вихід з системи"""
+    supabase.auth.sign_out()
+    cookie_manager.delete('virshi_auth_token')
+    st.session_state['user'] = None
+    st.session_state['current_project'] = None
+    st.rerun()
+
+# --- 4. UI: LOGIN PAGE ---
+
+def login_page():
+    c1, c2, c3 = st.columns([1, 1.5, 1])
+    with c2:
+        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=200)
+        
+        tab1, tab2 = st.tabs(["Вхід", "Реєстрація"])
+        
+        with tab1:
+            with st.form("login_form"):
+                email = st.text_input("Email")
+                password = st.text_input("Пароль", type="password")
+                submit = st.form_submit_button("Увійти", use_container_width=True)
+                
+                if submit:
+                    if login_user(email, password):
+                        st.rerun()
+
+        with tab2:
+            with st.form("register_form"):
+                new_email = st.text_input("Email")
+                new_pass = st.text_input("Пароль", type="password")
+                c_1, c_2 = st.columns(2)
+                f_name = c_1.text_input("Ім'я")
+                l_name = c_2.text_input("Прізвище")
+                submit_reg = st.form_submit_button("Зареєструватися", use_container_width=True)
+                
+                if submit_reg:
+                    if register_user(new_email, new_pass, f_name, l_name):
+                        st.info("Перевірте пошту для підтвердження (якщо увімкнено) або увійдіть.")
 
 def login_page():
     c1, c2, c3 = st.columns([1, 1.5, 1])
