@@ -403,23 +403,23 @@ def onboarding_wizard():
                 "Продукти / Послуги (перелічіть через кому або у стовпчик)"
             )
 
-            if st.button("Згенерувати запити"):
-    if brand and domain and industry and products:
-                    st.session_state["temp_brand"] = brand
-                    st.session_state["temp_domain"] = domain
-                    st.session_state["temp_industry"] = industry
-                    st.session_state["temp_products"] = products
+        if st.button("Згенерувати запити"):
+            if brand and domain and industry and products:
+                st.session_state["temp_brand"] = brand
+                st.session_state["temp_domain"] = domain
+                st.session_state["temp_industry"] = industry
+                st.session_state["temp_products"] = products
 
-                    with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
-                        prompts = n8n_generate_prompts(brand, domain, industry, products)
-                        if prompts and len(prompts) > 0:
-                            st.session_state["generated_prompts"] = prompts
-                            st.session_state["onboarding_step"] = 3
-                            st.rerun()
-                        else:
-                            st.error("AI не повернув результатів. Спробуйте ще раз.")
-                else:
-                    st.warning("Будь ласка, заповніть всі 4 поля.")
+                with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
+                    prompts = n8n_generate_prompts(brand, domain, industry, products)
+                    if prompts and len(prompts) > 0:
+                        st.session_state["generated_prompts"] = prompts
+                        st.session_state["onboarding_step"] = 3
+                        st.rerun()
+                    else:
+                        st.error("AI не повернув результатів. Спробуйте ще раз.")
+            else:
+                st.warning("Будь ласка, заповніть всі 4 поля.")
 
         elif step == 3:
             st.subheader("Крок 2: Оберіть 5 пріоритетних запитів")
