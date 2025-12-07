@@ -20,7 +20,7 @@ st.set_page_config(
 
 # --- 2. CONSTANTS & N8N WEBHOOKS ---
 # 🔴 ЗАМІНІТЬ ЦІ URL НА ВАШІ РЕАЛЬНІ З N8N
-N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/6f8df20a-0c54-4ac9-8410-796a86786938" 
+N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook-test/6f8df20a-0c54-4ac9-8410-796a86786938" 
 N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook/b3d20567-46df-4c1f-8005-ff0c776f814a"
 
 # Custom CSS
