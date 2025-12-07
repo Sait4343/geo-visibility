@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from supabase import create_client, Client
 from streamlit_option_menu import option_menu
-from datetime import datetime, timedelta
 import time
+import random
+from datetime import datetime, timedelta
 
-# --- 1. CONFIGURATION & SETUP ---
+# --- 1. CONFIGURATION & STYLING ---
 st.set_page_config(
     page_title="GEO-Analyst | AI Visibility Platform",
     page_icon="🌍",
@@ -14,361 +16,452 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize Session State
-if 'user' not in st.session_state:
-    st.session_state['user'] = None
-if 'selected_project' not in st.session_state:
-    st.session_state['selected_project'] = None
-if 'chat_history' not in st.session_state:
-    st.session_state['chat_history'] = []
+# Custom CSS to match the screenshots (Clean SaaS Look)
+st.markdown("""
+<style>
+    /* Global Font & Background */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        background-color: #f8f9fa; /* Light gray background */
+        color: #1e293b;
+    }
 
-# Supabase Connection
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e2e8f0;
+    }
+
+    /* Metric Cards (Matching image_a984f3.png) */
+    div.metric-card {
+        background-color: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        text-align: center;
+        transition: all 0.2s;
+        height: 100%;
+        border-left: 4px solid #10b981; /* Green accent */
+    }
+    div.metric-card:hover {
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .metric-label {
+        color: #64748b;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 10px;
+    }
+    .metric-value {
+        color: #0f172a;
+        font-size: 1.8rem;
+        font-weight: 700;
+    }
+    
+    /* Buttons (Purple/Blue from screenshots) */
+    div.stButton > button {
+        background-color: #6366f1;
+        color: white;
+        border-radius: 8px;
+        border: none;
+        padding: 0.5rem 1rem;
+        font-weight: 600;
+    }
+    div.stButton > button:hover {
+        background-color: #4f46e5;
+        color: white;
+    }
+
+    /* Tables */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        background: white;
+        padding: 10px;
+    }
+
+    /* Status Pills */
+    .status-pill {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .status-completed { background-color: #d1fae5; color: #065f46; }
+    .status-trial { background-color: #fef3c7; color: #92400e; }
+    
+    /* Custom Banner */
+    .demo-banner {
+        background: linear-gradient(90deg, #e0e7ff 0%, #fae8ff 100%);
+        padding: 10px;
+        border-radius: 8px;
+        color: #4338ca;
+        font-weight: 600;
+        text-align: center;
+        margin-bottom: 20px;
+        border: 1px solid #c7d2fe;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- 2. SUPABASE CONNECTION & MOCK DATA ---
+# Try to connect, if fails (no secrets), use Mock Mode for Demo
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    DB_CONNECTED = True
 except:
-    # Замініть на свої дані, якщо secrets не налаштовані
-    SUPABASE_URL = "https://your-project.supabase.co" 
-    SUPABASE_KEY = "your-anon-key"
+    DB_CONNECTED = False
+    # Mock Database for UI Demonstration
+    st.session_state['mock_projects'] = [
+        {'id': 1, 'brand_name': 'SkyUp', 'domain': 'skyup.aero', 'status': 'trial', 'created_at': '2025-09-25'}
+    ]
 
-@st.cache_resource
-def init_connection():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+# Session State Init
+if 'user' not in st.session_state: st.session_state['user'] = None
+if 'role' not in st.session_state: st.session_state['role'] = 'user'
+if 'current_project' not in st.session_state: st.session_state['current_project'] = None
+if 'page' not in st.session_state: st.session_state['page'] = 'Dashboard'
 
-supabase: Client = init_connection()
+# --- 3. HELPER FUNCTIONS ---
 
-# --- 2. AUTHENTICATION ---
-def login():
-    st.markdown("<h1 style='text-align: center;'>GEO-Analyst 🌍</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>AI Brand Visibility Intelligence</p>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        with st.form("login_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Sign In", use_container_width=True)
-            
-            if submit:
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                    st.session_state['user'] = res.user
-                    # Mock roles
-                    user_role = 'admin' if 'admin' in email else 'user' 
-                    st.session_state['role'] = user_role
-                    st.session_state['balance'] = 1500
-                    st.success("Login successful!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Login failed: {e}")
-
-def logout():
-    supabase.auth.sign_out()
-    st.session_state['user'] = None
-    st.session_state['selected_project'] = None
-    st.rerun()
-
-# --- 3. DATA FETCHING FUNCTIONS ---
-def get_projects(user_id, role):
-    try:
-        if role == 'admin':
-            response = supabase.table('projects').select("*").execute()
-        else:
-            response = supabase.table('projects').select("*").eq('user_id', user_id).execute()
-        return pd.DataFrame(response.data)
-    except Exception as e:
-        return pd.DataFrame()
-
-def get_dashboard_stats(project_id):
-    try:
-        response = supabase.table('dashboard_stats').select("*").eq('project_id', project_id).execute()
-        if response.data:
-            return response.data[0]
-        return None
-    except Exception:
-        return None
-
-# --- NEW: Helper to prepare data for the Detailed View ---
-def get_scan_details(keyword_id, project_name):
-    """
-    Збирає складну структуру даних для відображення у вкладках (Tabs).
-    Об'єднує scan_results, brand_mentions та extracted_sources.
-    """
-    results_list = []
-    
-    # 1. Отримуємо всі сканування для цього слова
-    scans = supabase.table('scan_results').select("*").eq('keyword_id', keyword_id).order('created_at', desc=True).limit(5).execute()
-    
-    for scan in scans.data:
-        scan_id = scan['id']
-        
-        # 2. Отримуємо бренди
-        mentions_res = supabase.table('brand_mentions').select("*").eq('scan_id', scan_id).execute()
-        df_brands = pd.DataFrame(mentions_res.data)
-        
-        # 3. Отримуємо джерела
-        sources_res = supabase.table('extracted_sources').select("*").eq('scan_id', scan_id).execute()
-        df_sources = pd.DataFrame(sources_res.data)
-        
-        # 4. Розрахунок метрик для конкретної моделі
-        my_rank = None
-        my_sentiment = 0
-        sov = 0
-        
-        if not df_brands.empty:
-            # Шукаємо наш бренд (шукаємо входження імені проекту в brand_name)
-            my_brand_row = df_brands[df_brands['brand_name'].str.contains(project_name, case=False, na=False)]
-            
-            if not my_brand_row.empty:
-                my_rank = my_brand_row.iloc[0]['position']
-                # Нормалізуємо сентимент з -1..1 до 0..100
-                raw_sent = my_brand_row.iloc[0]['sentiment']
-                my_sentiment = int((raw_sent + 1) * 50) 
-            
-            # Рахуємо SOV (частка наших згадок)
-            total_mentions = len(df_brands)
-            my_mentions = len(my_brand_row)
-            if total_mentions > 0:
-                sov = round((my_mentions / total_mentions) * 100, 1)
-
-        # 5. Підготовка таблиць для виводу
-        display_brands = df_brands[['brand_name', 'position', 'sentiment']] if not df_brands.empty else pd.DataFrame(columns=['brand_name', 'position', 'sentiment'])
-        display_sources = df_sources[['domain', 'authority_score']] if not df_sources.empty else pd.DataFrame(columns=['domain', 'authority_score'])
-
-        # 6. Генеруємо "Mock" текст відповіді, якщо в базі немає повного тексту
-        # (У майбутньому треба додати поле response_text в таблицю scan_results)
-        mock_text = f"**Query Analysis:** Based on the search for citations, the market shows strong presence of {project_name}. \n\n"
-        if not df_brands.empty:
-            mock_text += "Key players identified:\n"
-            for _, row in df_brands.iterrows():
-                mock_text += f"* {row['brand_name']} (Rank #{row['position']})\n"
-        
-        results_list.append({
-            'provider': scan['model_used'],
-            'my_brand_rank': my_rank,
-            'my_brand_sentiment': my_sentiment,
-            'sov': sov,
-            'official_sources_count': len(df_sources), # Спрощено, всі джерела вважаємо знайденими
-            'raw_response_text': mock_text, 
-            'brands_table': display_brands,
-            'sources_table': display_sources
-        })
-        
-    return results_list
-
-# --- 4. PAGE VIEWS ---
-
-def show_dashboard():
-    st.title("📊 Dashboard")
-    project = st.session_state['selected_project']
-    if not project:
-        st.warning("Please select a project.")
-        return
-
-    stats = get_dashboard_stats(project['id'])
-    
-    if stats:
-        cols = st.columns(6)
-        metrics = [
-            ("SOV", f"{stats.get('sov', 0)}%", "Share of Voice"),
-            ("Mentions", stats.get('absolute_counts', 0), "Vol"),
-            ("Off. Src %", f"{stats.get('official_source_pct', 0)}%", "Cov"),
-            ("Cit. Ratio", f"{stats.get('official_citations_ratio', 0)}", "Ref"),
-            ("Sentiment", stats.get('avg_sentiment', 0), "Avg"),
-            ("Position", stats.get('avg_position', 0), "Rank"),
-        ]
-        for col, (label, value, delta) in zip(cols, metrics):
-            col.metric(label, value, delta)
-    else:
-        st.info("No data yet.")
-
-    st.divider()
-    
-    # Simple Charts
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        st.subheader("Dynamics")
-        # Mock chart
-        dates = pd.date_range(end=datetime.today(), periods=14)
-        fig = px.line(x=dates, y=[10, 12, 15, 14, 18, 20, 22, 21, 25, 24, 28, 30, 32, 35], template="plotly_dark", labels={'x':'Date', 'y':'SOV %'})
-        st.plotly_chart(fig, use_container_width=True)
-    with c2:
-        st.subheader("Competitors")
-        # Fetch real competitor summary
+def login_user(email, password):
+    if DB_CONNECTED:
         try:
-            res = supabase.table('brand_mentions').select("brand_name").eq('project_id', project['id']).execute()
-            if res.data:
-                df = pd.DataFrame(res.data)
-                counts = df['brand_name'].value_counts().reset_index().head(5)
-                counts.columns = ['Brand', 'Count']
-                fig_bar = px.bar(counts, x='Count', y='Brand', orientation='h', template="plotly_dark")
-                st.plotly_chart(fig_bar, use_container_width=True)
-        except:
-            st.write("No data")
+            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+            st.session_state['user'] = res.user
+            # Fetch Role
+            profile = supabase.table('profiles').select('role').eq('id', res.user.id).single().execute()
+            st.session_state['role'] = profile.data['role'] if profile.data else 'user'
+            return True
+        except Exception as e:
+            st.error(f"Login Error: {e}")
+            return False
+    else:
+        # Mock Login
+        st.session_state['user'] = {'email': email, 'id': 'mock-id-123'}
+        st.session_state['role'] = 'admin' if 'admin' in email else 'user'
+        return True
 
-def show_keyword_tracker():
-    st.title("🎯 Keyword Tracker")
-    project = st.session_state['selected_project']
-    project_id = project['id']
-    project_name = project['name']
+def run_demo_scan(brand, domain):
+    """Simulates the n8n Workflow A (5 Queries)"""
+    with st.status("🚀 Launching AI Agents...", expanded=True) as status:
+        st.write("🤖 Generating 5 strategic search queries via Gemini Flash...")
+        time.sleep(1.5)
+        st.write(f"🔍 Scanning Perplexity for '{brand}' mentions...")
+        time.sleep(1.5)
+        st.write("📊 Analyzing Sentiment & Source Authority...")
+        time.sleep(1.0)
+        st.write("💾 Saving results to Supabase...")
+        time.sleep(0.5)
+        status.update(label="✅ Analysis Complete!", state="complete", expanded=False)
+    
+    # Create mock project if in mock mode
+    if not DB_CONNECTED:
+        st.session_state['mock_projects'].append({
+            'id': random.randint(100,999),
+            'brand_name': brand,
+            'domain': domain,
+            'status': 'trial',
+            'created_at': datetime.now().strftime("%Y-%m-%d")
+        })
+        st.session_state['current_project'] = st.session_state['mock_projects'][-1]
 
-    # --- Section 1: Add New Keyword ---
-    with st.expander("Add New Keyword"):
-        with st.form("add_kw"):
-            c1, c2 = st.columns([3, 1])
-            kw_input = c1.text_input("Enter Keyword")
-            models = c2.multiselect("Models", ["GPT-4o", "Perplexity"], default=["GPT-4o"])
-            if st.form_submit_button("Add & Scan"):
-                supabase.table('keywords').insert({"project_id": project_id, "keyword": kw_input, "models": models}).execute()
-                st.success("Added!")
-                time.sleep(1)
+# --- 4. PAGE RENDERERS ---
+
+def render_onboarding():
+    st.markdown("<div style='text-align: center; margin-top: 50px;'>", unsafe_allow_html=True)
+    st.title("Welcome to GEO-Analyst 🌍")
+    st.subheader("See how AI sees your brand in 30 seconds")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        with st.form("onboarding_form"):
+            brand = st.text_input("Brand Name", placeholder="e.g. Nova Poshta")
+            domain = st.text_input("Website URL", placeholder="e.g. novaposhta.ua")
+            region = st.selectbox("Target Region", ["Ukraine", "USA", "Global"])
+            submitted = st.form_submit_button("Start Free Demo Scan 🚀", use_container_width=True)
+            
+            if submitted and brand and domain:
+                run_demo_scan(brand, domain)
+                st.session_state['page'] = 'Dashboard'
                 st.rerun()
 
-    # --- Section 2: Keyword List & Selection ---
-    st.subheader("Monitored Keywords")
-    try:
-        res = supabase.table('keywords').select("*").eq('project_id', project_id).order('created_at', desc=True).execute()
-        df_kw = pd.DataFrame(res.data)
-        
-        if df_kw.empty:
-            st.info("No keywords found.")
-            return
+def render_dashboard():
+    proj = st.session_state['current_project']
+    
+    # Header
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.title(f"{proj['brand_name']}")
+        st.caption(f"🌐 Entity: {proj['brand_name']} | 📅 Created: {proj['created_at']}")
+    with c2:
+        if proj.get('status') == 'trial':
+            st.markdown(f"""
+            <div style="background-color: #fffbeb; color: #b45309; padding: 10px; border-radius: 8px; text-align: center; border: 1px solid #fcd34d;">
+                🔒 <b>Trial Mode</b><br>Limited to 5 queries
+            </div>
+            """, unsafe_allow_html=True)
 
-        # Selectbox for navigation
-        keyword_options = {row['id']: row['keyword'] for index, row in df_kw.iterrows()}
-        selected_kw_id = st.selectbox(
-            "Select a keyword to analyze:", 
-            options=keyword_options.keys(), 
-            format_func=lambda x: keyword_options[x]
+    # 1. KPI GRID (Matches image_a984f3.png)
+    st.markdown("### Performance Overview")
+    
+    # Mock Data for KPIs
+    kpi_data = {
+        "sov": 30.86, "official_src": 50.00, "sentiment": 78,
+        "position": 1.7, "presence": 60.00, "domain_mentions": 10.00
+    }
+
+    # Custom HTML Card Function
+    def metric_html(label, value, is_pie=False, is_text=False):
+        content = f"<div class='metric-value'>{value}</div>"
+        if is_pie:
+            # Simple CSS Pie Chart simulation
+            content = f"""
+            <div style="display: flex; justify-content: center; align-items: center; height: 80px;">
+                <div style="width: 60px; height: 60px; border-radius: 50%; background: conic-gradient(#10b981 {value}%, #e2e8f0 0);"></div>
+            </div>
+            <div style='font-size: 1.2rem; font-weight: bold;'>{value}%</div>
+            """
+        return f"""
+        <div class="metric-card">
+            <div class="metric-label">{label}</div>
+            {content}
+        </div>
+        """
+
+    r1c1, r1c2, r1c3 = st.columns(3)
+    with r1c1: st.markdown(metric_html("Share of Voice (SOV)", f"{kpi_data['sov']}%", is_pie=True), unsafe_allow_html=True)
+    with r1c2: st.markdown(metric_html("% Official Sources", f"{kpi_data['official_src']}%", is_pie=True), unsafe_allow_html=True)
+    with r1c3: st.markdown(metric_html("Avg Sentiment", "Positive 😄"), unsafe_allow_html=True)
+
+    st.write("") # Spacer
+
+    r2c1, r2c2, r2c3 = st.columns(3)
+    with r2c1: st.markdown(metric_html("Avg Brand Position", f"{kpi_data['position']}"), unsafe_allow_html=True)
+    with r2c2: st.markdown(metric_html("Brand Presence", f"{kpi_data['presence']}%", is_pie=True), unsafe_allow_html=True)
+    with r2c3: st.markdown(metric_html("Domain Mentions", f"{kpi_data['domain_mentions']}%", is_pie=True), unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # 2. CHARTS (Plotly)
+    c_chart, c_score = st.columns([2, 1])
+    
+    with c_chart:
+        st.subheader("Brand Position Evolution")
+        # Mock Trend Data
+        dates = pd.date_range(end=datetime.today(), periods=10).strftime("%b %d")
+        df_trend = pd.DataFrame({
+            "Date": dates,
+            "Position": [4, 3.8, 3.5, 3.0, 2.8, 2.5, 2.0, 1.8, 1.7, 1.7]
+        })
+        fig = px.line(df_trend, x="Date", y="Position", markers=True)
+        fig.update_layout(
+            yaxis=dict(autorange="reversed"), # 1 is top
+            plot_bgcolor="white",
+            margin=dict(t=10, b=10, l=10, r=10),
+            height=300
         )
-        
-        current_keyword = keyword_options[selected_kw_id]
+        fig.update_traces(line_color='#6366f1', line_width=3)
+        st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("---")
-        
-        # --- Section 3: DETAILED VIEW (INTEGRATED CODE) ---
-        
-        # 1. Отримуємо дані з бази (підготовлені нашою функцією)
-        results = get_scan_details(selected_kw_id, project_name)
-        
-        if not results:
-            st.warning("No scan results found for this keyword yet. Try adding it again to trigger a scan.")
-        else:
-            st.header(f"Аналіз запиту: '{current_keyword}'")
-            
-            # 2. Створюємо вкладки динамічно
-            tab_names = [row['provider'] for row in results]
-            
-            # Перевірка на дублікати імен вкладок (якщо сканували одну модель кілька разів)
-            unique_tab_names = []
-            for i, name in enumerate(tab_names):
-                unique_tab_names.append(f"{name} ({i+1})") # Додаємо індекс для унікальності
-            
-            tabs = st.tabs(unique_tab_names)
+    with c_score:
+        st.subheader("LLMO Score")
+        st.markdown("""
+        <div style="background: white; border-radius: 12px; padding: 20px; text-align: center; border: 1px solid #e2e8f0;">
+            <h1 style="font-size: 3rem; color: #6366f1; margin: 0;">82<span style="font-size: 1rem; color: #94a3b8;">/100</span></h1>
+            <p style="color: #64748b;">Excellent Visibility</p>
+            <hr>
+            <div style="text-align: left; font-size: 0.9rem;">
+                <div>🤖 <b>ChatGPT:</b> #1</div>
+                <div>🌌 <b>Perplexity:</b> #2</div>
+                <div>♊ <b>Gemini:</b> #1</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-            # 3. Наповнюємо кожну вкладку
-            for i, tab in enumerate(tabs):
-                data = results[i] 
-                
-                with tab:
-                    # Верхня плашка з метриками
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    rank_display = f"#{data['my_brand_rank']}" if data['my_brand_rank'] else "Не знайдено"
-                    col1.metric("Наша Позиція", rank_display)
-                    
-                    col2.metric("Тональність", f"{data['my_brand_sentiment']}/100")
-                    col3.metric("SOV у цій відповіді", f"{data['sov']}%")
-                    col4.metric("Офіційні джерела", f"{data['official_sources_count']}")
-                    
-                    st.divider()
-                    
-                    # Розділяємо екран
-                    left_col, right_col = st.columns([2, 1])
-                    
-                    with left_col:
-                        st.subheader("📝 Повна відповідь моделі")
-                        st.markdown(
-                            f"<div style='background-color:#262730; padding:15px; border-radius:10px;'>{data['raw_response_text']}</div>", 
-                            unsafe_allow_html=True
-                        )
-                        
-                    with right_col:
-                        st.subheader("🕵️‍♂️ Аналіз сутностей")
-                        
-                        st.write("**Згадані Бренди:**")
-                        st.dataframe(data['brands_table'], hide_index=True, use_container_width=True)
-                        
-                        st.write("**Знайдені Посилання:**")
-                        st.dataframe(data['sources_table'], hide_index=True, use_container_width=True)
+def render_competitors():
+    st.title("⚔️ Competitor Analysis")
+    st.caption("See who you are fighting against in AI responses.")
 
-    except Exception as e:
-        st.error(f"Error loading keywords: {e}")
+    # Mock Data (Matches image_a98478.png)
+    data = [
+        {"Brand": "SkyUp", "Mentions": 50, "Sentiment": "Neutral", "Position": 1.0, "Trend": "⬆️"},
+        {"Brand": "Ryanair", "Mentions": 20, "Sentiment": "Neutral", "Position": 7.2, "Trend": "⬇️"},
+        {"Brand": "Wizz Air", "Mentions": 19, "Sentiment": "Neutral", "Position": 6.4, "Trend": "⬆️"},
+        {"Brand": "Turkish Airlines", "Mentions": 6, "Sentiment": "Positive", "Position": 6.3, "Trend": "➖"},
+    ]
+    df = pd.DataFrame(data)
 
-def show_source_intel():
-    st.title("📡 Source Intelligence")
-    project_id = st.session_state['selected_project']['id']
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.dataframe(
+            df,
+            column_config={
+                "Position": st.column_config.NumberColumn("Avg Position", format="%.1f"),
+                "Mentions": st.column_config.ProgressColumn("Volume", format="%d", min_value=0, max_value=60),
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    with col2:
+        st.info("💡 **Insight:** You are dominating SOV (50 mentions), but Ryanair is your closest threat in terms of pricing queries.")
+
+def render_sources():
+    st.title("📡 AI Source Intelligence")
     
-    # Simple list of assets
-    assets = supabase.table('official_assets').select("*").eq('project_id', project_id).execute()
-    st.write("### My Official Assets")
-    st.dataframe(pd.DataFrame(assets.data))
-
-def show_recommendations():
-    st.title("💡 Recommendations")
-    # Placeholder
-    st.info("AI Strategic Agent is analyzing your latest scans...")
-
-def show_ai_chat():
-    st.title("💬 AI Analyst")
-    for msg in st.session_state['chat_history']:
-        st.chat_message(msg['role']).write(msg['content'])
+    t1, t2 = st.tabs(["Owned Assets", "Earned Media"])
     
-    if prompt := st.chat_input():
-        st.session_state['chat_history'].append({"role": "user", "content": prompt})
-        st.chat_message("user").write(prompt)
-        resp = "Analysis is processing..."
-        st.session_state['chat_history'].append({"role": "assistant", "content": resp})
-        st.chat_message("assistant").write(resp)
+    with t1:
+        st.subheader("Your Official Assets")
+        # Matches image_a9845c.png
+        df_owned = pd.DataFrame([
+            {"URL": "skyup.aero", "Mentions": 18, "Status": "Verified ✅"},
+            {"URL": "instagram.com/skyup", "Mentions": 11, "Status": "Verified ✅"},
+        ])
+        st.dataframe(df_owned, use_container_width=True)
+    
+    with t2:
+        st.subheader("External References")
+        # Matches AI Reference Sources.png
+        df_earned = pd.DataFrame([
+            {"Domain": "tripmydream.ua", "References": 20, "Type": "Ranking"},
+            {"Domain": "dovkola.media", "References": 18, "Type": "Ranking"},
+            {"Domain": "lowcostavia.com.ua", "References": 18, "Type": "Ranking"},
+        ])
+        st.dataframe(df_earned, use_container_width=True)
 
-# --- 5. SIDEBAR & MAIN ---
-def render_sidebar():
-    with st.sidebar:
-        user = st.session_state['user']
-        st.write(f"👤 {user.email}")
-        if st.button("Logout"):
-            logout()
-        st.divider()
+def render_recommendations():
+    st.title("💡 Strategic Recommendations")
+    
+    # Kanban Style (Matches AI Recommendations.png)
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown("### 🔴 To Do")
+        st.info("**Website Collaboration**\n\nCreate a guest post for `tripmydream.ua` to improve backlink authority in Gemini.")
+        st.warning("**Content Gap**\n\nAdd FAQ about 'Baggage Allowance' to match Ryanair's visibility.")
+    
+    with c2:
+        st.markdown("### 🟡 In Progress")
+        st.markdown("""
+        <div style="background: white; padding: 10px; border-radius: 8px; border-left: 4px solid #facc15; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">
+            <b>Social Media Opps</b><br>
+            <span style="font-size: 12px; color: gray;">PR Strategy</span><br>
+            Generate buzz on TikTok regarding winter sales.
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Project Selector
-        projects_df = get_projects(user.id, st.session_state.get('role'))
-        if not projects_df.empty:
-            proj_list = projects_df['name'].tolist()
-            curr_idx = 0
-            if st.session_state['selected_project']:
-                try:
-                    curr_idx = proj_list.index(st.session_state['selected_project']['name'])
-                except:
-                    curr_idx = 0
-            sel = st.selectbox("Project", proj_list, index=curr_idx)
-            st.session_state['selected_project'] = projects_df[projects_df['name']==sel].iloc[0].to_dict()
-        
-        return option_menu(None, ["Dashboard", "Keyword Tracker", "Source Intel", "Recommendations", "AI Chat"], 
-                           icons=['graph-up', 'search', 'hdd', 'lightbulb', 'chat'], default_index=1)
+    with c3:
+        st.markdown("### 🟢 Done")
+        st.success("**Technical SEO**\n\nSchema markup added for Flight schedules.")
+
+def render_admin():
+    st.title("🛡️ Super Admin Panel")
+    st.markdown("Manage users, activations, and token usage.")
+    
+    # Mock Admin Data
+    users = [
+        {"Email": "client@skyup.aero", "Project": "SkyUp", "Status": "Trial", "Tokens Used": 4500},
+        {"Email": "ceo@novaposhta.ua", "Project": "Nova Poshta", "Status": "Active", "Tokens Used": 125000},
+    ]
+    df = pd.DataFrame(users)
+    
+    edited_df = st.data_editor(
+        df,
+        column_config={
+            "Status": st.column_config.SelectboxColumn("Status", options=["Trial", "Active", "Suspended"]),
+            "Tokens Used": st.column_config.ProgressColumn("Cost", min_value=0, max_value=200000, format="%d"),
+        },
+        use_container_width=True,
+        num_rows="dynamic"
+    )
+    
+    if st.button("Save Changes"):
+        st.toast("User statuses updated successfully!", icon="💾")
+
+# --- 5. MAIN APP LOGIC ---
 
 def main():
+    # Sidebar Navigation
+    with st.sidebar:
+        st.image("https://img.icons8.com/?size=100&id=zN242j42f3rW&format=png", width=50) # Placeholder Logo
+        st.markdown("### GEO-Analyst")
+        
+        # User Profile Mini
+        if st.session_state['user']:
+            st.markdown(f"👤 **{st.session_state['user']['email']}**")
+            st.caption(f"Role: {st.session_state['role'].upper()}")
+            
+            # Demo Banner (Matches screenshot)
+            if st.session_state.get('current_project', {}).get('status') == 'trial':
+                st.markdown('<div class="demo-banner">✨ 14 Demo Days Left</div>', unsafe_allow_html=True)
+                if st.button("💎 Upgrade to Pro", use_container_width=True):
+                    st.toast("Contacting Sales Manager...", icon="📞")
+
+        # Navigation Menu
+        menu_options = ["Dashboard", "Competitors", "Sources", "Recommendations"]
+        menu_icons = ["speedometer2", "people", "hdd-network", "lightbulb"]
+        
+        if st.session_state['role'] == 'admin':
+            menu_options.append("Admin Panel")
+            menu_icons.append("shield-lock")
+
+        selected = option_menu(
+            "Menu",
+            menu_options,
+            icons=menu_icons,
+            menu_icon="cast",
+            default_index=0,
+            styles={
+                "nav-link-selected": {"background-color": "#6366f1"},
+            }
+        )
+        
+        st.divider()
+        if st.session_state['user']:
+            if st.button("Log Out"):
+                st.session_state['user'] = None
+                st.rerun()
+
+    # Routing Logic
     if not st.session_state['user']:
-        login()
+        # Login Screen
+        c1, c2, c3 = st.columns([1,1,1])
+        with c2:
+            st.markdown("<br><br>", unsafe_allow_html=True)
+            st.title("Sign In")
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            if st.button("Login", use_container_width=True):
+                if login_user(email, password):
+                    st.rerun()
+            st.markdown("---")
+            st.caption("Don't have an account? Just login to start demo.")
+            
+    elif not st.session_state['current_project'] and st.session_state['role'] != 'admin':
+        # Onboarding
+        render_onboarding()
+        
     else:
-        page = render_sidebar()
-        if st.session_state['selected_project']:
-            if page == "Dashboard": show_dashboard()
-            elif page == "Keyword Tracker": show_keyword_tracker()
-            elif page == "Source Intel": show_source_intel()
-            elif page == "Recommendations": show_recommendations()
-            elif page == "AI Chat": show_ai_chat()
-        else:
-            st.info("Create a project first.")
+        # Main App
+        if selected == "Dashboard":
+            render_dashboard()
+        elif selected == "Competitors":
+            render_competitors()
+        elif selected == "Sources":
+            render_sources()
+        elif selected == "Recommendations":
+            render_recommendations()
+        elif selected == "Admin Panel":
+            render_admin()
 
 if __name__ == "__main__":
     main()
