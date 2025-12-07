@@ -105,7 +105,43 @@ if "focus_keyword" not in st.session_state:
 # =========================
 # 3. HELPERS
 # =========================
+def n8n_request_recommendations(project, rec_type: str, brief: str):
+    """
+    Виклик n8n-воркфлоу, який генерує рекомендації.
+    Очікуємо, що n8n повертає JSON з полями summary / details (або просто текст).
+    """
+    try:
+        user = st.session_state.get("user")
+        payload = {
+            "project_id": project["id"],
+            "brand_name": project.get("brand_name"),
+            "domain": project.get("domain"),
+            "rec_type": rec_type,  # 'pr' | 'digital' | 'creative'
+            "brief": brief,
+            "user_email": getattr(user, "email", None),
+        }
 
+        r = requests.post(N8N_RECO_URL, json=payload, timeout=60)
+
+        if r.status_code != 200:
+            st.error(f"N8N error: {r.status_code} – {r.text}")
+            return None
+
+        if "application/json" in r.headers.get("content-type", ""):
+            data = r.json()
+            return {
+                "summary": data.get("summary") or data.get("title") or brief[:120],
+                "details": data.get("details") or data.get("content") or "",
+            }
+        else:
+            text = r.text
+            return {
+                "summary": brief[:120],
+                "details": text,
+            }
+    except Exception as e:
+        st.error(f"Помилка виклику n8n: {e}")
+        return None
 
 def get_donut_chart(value, color="#00C896"):
     value = float(value) if value else 0.0
@@ -339,10 +375,32 @@ def logout():
         supabase.auth.sign_out()
     except Exception:
         pass
+
+    # Видаляємо cookie з токеном
     cookie_manager.delete("virshi_auth_token")
-    st.session_state["user"] = None
-    st.session_state["current_project"] = None
+
+    # Чистимо всі ключові поля сесії
+    for key in [
+        "user",
+        "user_details",
+        "role",
+        "current_project",
+        "generated_prompts",
+        "onboarding_step",
+    ]:
+        if key in st.session_state:
+            del st.session_state[key]
+
+    st.session_state["onboarding_step"] = 2
+
+    # Скидаємо параметри URL (щоб “назад” не повертав у старий стан)
+    try:
+        st.experimental_set_query_params()
+    except Exception:
+        pass
+
     st.rerun()
+
 
 
 def login_page():
@@ -393,6 +451,7 @@ def onboarding_wizard():
     with st.container(border=True):
         step = st.session_state.get("onboarding_step", 2)
 
+        # STEP 2 – дані про бренд
         if step == 2:
             st.subheader("Крок 1: Введіть дані про ваш бренд")
 
@@ -403,24 +462,25 @@ def onboarding_wizard():
                 "Продукти / Послуги (перелічіть через кому або у стовпчик)"
             )
 
-        if st.button("Згенерувати запити"):
-            if brand and domain and industry and products:
-                st.session_state["temp_brand"] = brand
-                st.session_state["temp_domain"] = domain
-                st.session_state["temp_industry"] = industry
-                st.session_state["temp_products"] = products
+            if st.button("Згенерувати запити"):
+                if brand and domain and industry and products:
+                    st.session_state["temp_brand"] = brand
+                    st.session_state["temp_domain"] = domain
+                    st.session_state["temp_industry"] = industry
+                    st.session_state["temp_products"] = products
 
-                with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
-                    prompts = n8n_generate_prompts(brand, domain, industry, products)
-                    if prompts and len(prompts) > 0:
-                        st.session_state["generated_prompts"] = prompts
-                        st.session_state["onboarding_step"] = 3
-                        st.rerun()
-                    else:
-                        st.error("AI не повернув результатів. Спробуйте ще раз.")
-            else:
-                st.warning("Будь ласка, заповніть всі 4 поля.")
+                    with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
+                        prompts = n8n_generate_prompts(brand, domain, industry, products)
+                        if prompts and len(prompts) > 0:
+                            st.session_state["generated_prompts"] = prompts
+                            st.session_state["onboarding_step"] = 3
+                            st.rerun()
+                        else:
+                            st.error("AI не повернув результатів. Спробуйте ще раз.")
+                else:
+                    st.warning("Будь ласка, заповніть всі 4 поля.")
 
+        # STEP 3 – вибір 5 запитів
         elif step == 3:
             st.subheader("Крок 2: Оберіть 5 пріоритетних запитів")
             st.write(
@@ -462,11 +522,18 @@ def onboarding_wizard():
                             proj_data = res.data[0]
                             proj_id = proj_data["id"]
 
+                            # ключові слова
                             for kw in selected:
                                 supabase.table("keywords").insert(
-                                    {"project_id": proj_id, "keyword_text": kw}
+                                    {
+                                        "project_id": proj_id,
+                                        "keyword_text": kw,
+                                        # важливо: колонка type має бути в базі (див. SQL нижче)
+                                        "type": "ranking",
+                                    }
                                 ).execute()
 
+                            # запуск n8n
                             n8n_trigger_analysis(
                                 proj_id, selected, st.session_state["temp_brand"]
                             )
@@ -481,6 +548,7 @@ def onboarding_wizard():
                             st.error(f"Системна помилка: {e}")
                 else:
                     st.error("Будь ласка, оберіть рівно 5 запитів")
+
 
 
 # =========================
@@ -597,6 +665,159 @@ def fetch_source_stats(project_id: int):
         return res.data or []
     except Exception:
         return []
+# =========================
+# 6.1 RECOMMENDATIONS PAGE
+# =========================
+
+def show_recommendations_page():
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Спочатку створіть проєкт, щоб отримати рекомендації.")
+        return
+
+    st.title("💡 Рекомендації для підсилення AI Visibility")
+
+    left, right = st.columns([2, 1])
+
+    # Ліва колонка — 6 напрямів з pdf
+    with left:
+        st.markdown(
+            """
+<style>
+.reco-block {margin-bottom: 1.5rem; padding: 1rem 1.2rem; border-radius: 10px; background:#FFFFFF; border:1px solid #EAEAEA;}
+.reco-title {font-weight:700; font-size:1.05rem; margin-bottom:0.3rem;}
+.reco-sub {font-size:0.9rem; color:#555;}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+<div class="reco-block">
+  <div class="reco-title">1. Узгодженість і чіткість меседжів</div>
+  <div class="reco-sub">Забезпечити єдину логіку й tone of voice...</div>
+</div>
+
+<div class="reco-block">
+  <div class="reco-title">2. Структурований і зрозумілий контент</div>
+  <div class="reco-sub">Контент у форматі, зручному для моделей...</div>
+</div>
+
+<div class="reco-block">
+  <div class="reco-title">3. Тематичне охоплення та активність</div>
+  <div class="reco-sub">Говорити не тільки про бренд...</div>
+</div>
+
+<div class="reco-block">
+  <div class="reco-title">4. Довіра та авторитет</div>
+  <div class="reco-sub">Згадки в авторитетних медіа...</div>
+</div>
+
+<div class="reco-block">
+  <div class="reco-title">5. Технічна готовність сайту</div>
+  <div class="reco-sub">Логічна структура, schema.org...</div>
+</div>
+
+<div class="reco-block">
+  <div class="reco-title">6. Аналіз і вдосконалення</div>
+  <div class="reco-sub">Регулярно тестувати відповіді AI...</div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Права колонка: форма генерації нових рекомендацій
+    with right:
+        st.markdown("#### Замовити нові рекомендації")
+
+        rec_label = st.selectbox(
+            "Напрям:",
+            ["PR / Comms", "Digital / SEO", "Creative / Content"],
+        )
+        rec_type_map = {
+            "PR / Comms": "pr",
+            "Digital / SEO": "digital",
+            "Creative / Content": "creative",
+        }
+        rec_type = rec_type_map[rec_label]
+
+        brief = st.text_area(
+            "Коротко опишіть завдання:",
+            height=180,
+        )
+
+        if st.button("Отримати рекомендації", use_container_width=True):
+            if not brief.strip():
+                st.warning("Опишіть, що саме вам потрібно.")
+            else:
+                with st.spinner("Готуємо рекомендації через n8n + LLM..."):
+                    rec = n8n_request_recommendations(proj, rec_type, brief)
+                    if rec:
+                        try:
+                            supabase.table("recommendations").insert(
+                                {
+                                    "project_id": proj["id"],
+                                    "type": rec_type,
+                                    "summary": rec["summary"],
+                                    "details": rec["details"],
+                                }
+                            ).execute()
+                        except:
+                            pass
+
+                        st.success("Рекомендації збережено!")
+
+                        st.markdown("##### Щойно згенеровані:")
+                        st.markdown(f"**{rec['summary']}**")
+                        st.markdown(rec["details"])
+
+    st.markdown("---")
+
+    # ІСТОРІЯ РЕКОМЕНДАЦІЙ
+    st.subheader("Історія рекомендацій")
+
+    c1, c2, c3 = st.columns(3)
+    today = datetime.utcnow().date()
+
+    with c1:
+        date_from = st.date_input("Починаючи з", today - timedelta(days=30))
+    with c2:
+        date_to = st.date_input("До", today)
+    with c3:
+        type_filter = st.selectbox(
+            "Тип",
+            ["Усі", "PR / Comms", "Digital / SEO", "Creative / Content"],
+        )
+
+    try:
+        q = (
+            supabase.table("recommendations")
+            .select("*")
+            .eq("project_id", proj["id"])
+            .gte("created_at", datetime.combine(date_from, datetime.min.time()).isoformat())
+            .lte("created_at", datetime.combine(date_to, datetime.max.time()).isoformat())
+        )
+
+        if type_filter != "Усі":
+            rev_map = {v: k for k, v in rec_type_map.items()}
+            q = q.eq("type", rev_map[type_filter])
+
+        rows = q.order("created_at", desc=True).execute().data
+    except:
+        rows = []
+
+    if not rows:
+        st.info("Поки що немає рекомендацій.")
+        return
+
+    for row in rows:
+        created = row.get("created_at", "")[:16].replace("T", " ")
+        label = row.get("type")
+        summary = row.get("summary") or "Без назви"
+
+        with st.expander(f"{created} · {label.upper()} · {summary}"):
+            st.markdown(row.get("details") or "")
 
 
 # =========================
@@ -1247,21 +1468,18 @@ def main():
 
         page = sidebar_menu()
 
-        if page == "Дашборд":
+       if page == "Дашборд":
             show_dashboard()
         elif page == "Перелік запитів":
-            show_queries_page()
+            show_queries_page()  # цю функцію можна додати потім, коли будемо дороблювати Explorer
         elif page == "Джерела":
             st.title("📡 Джерела")
-            st.info("Детальні source-графіки вже на головному дашборді.")
+            st.info("У розробці...")
         elif page == "Конкуренти":
             st.title("⚔️ Конкуренти")
-            st.info("Аналітика конкурентів також показана на дашборді.")
-        elif page == "Рекомендації":
-            st.title("💡 Рекомендації")
             st.info("У розробці...")
-        elif page == "AI SERP Explorer":
-            show_ai_serp_explorer()
+        elif page == "Рекомендації":
+            show_recommendations_page()
         elif page == "GPT-Visibility":
             st.title("🤖 GPT-Visibility")
             st.info("У розробці...")
