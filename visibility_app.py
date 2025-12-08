@@ -427,14 +427,31 @@ def register_user(email: str, password: str, first: str, last: str) -> bool:
 
 
 def logout():
+    """
+    Надійний вихід із системи з очищенням куки та сесії.
+    """
+    # 1. Спроба виходу з Supabase (на сервері)
     try:
         supabase.auth.sign_out()
     except Exception:
         pass
-    cookie_manager.delete("virshi_auth_token")
-    st.session_state["user"] = None
-    st.session_state["current_project"] = None
-    st.session_state["focus_keyword_id"] = None
+
+    # 2. Видалення куки (в браузері)
+    try:
+        cookie_manager.delete("virshi_auth_token")
+    except Exception:
+        pass
+
+    # 3. Очищення ВСЬОГО Session State
+    # Це важливо, щоб прибрати старі змінні (проекти, ID, налаштування фільтрів)
+    # Замість ручного обнулення (st.session_state["user"] = None), ми видаляємо все.
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+
+    # 4. Невелика пауза, щоб браузер встиг видалити куку перед перезавантаженням
+    time.sleep(0.5)
+
+    # 5. Перезавантаження сторінки (тепер check_session не знайде токен і покаже логін)
     st.rerun()
 
 
