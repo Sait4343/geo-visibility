@@ -1522,7 +1522,7 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    Структура: 3 вкладки (Активи, Домени, URL).
+    Структура: 3 вкладки. Фільтри ЛЛМ окремо для кожної вкладки аналітики.
     """
     import pandas as pd
     import streamlit as st
@@ -1548,11 +1548,13 @@ def show_sources_page():
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
+    
+    # Список всіх моделей для дефолтного вибору
+    ALL_MODELS_KEYS = list(MODEL_MAPPING.keys())
 
     st.title("📡 Джерела та Репутація")
     
-    # === 1. ЗАВАНТАЖЕННЯ ДАНИХ (СПІЛЬНЕ ДЛЯ ВСІХ ВКЛАДОК) ===
-    # Ми робимо це тут, щоб мати єдиний масив даних для обох вкладок аналізу
+    # === 1. ЗАВАНТАЖЕННЯ ДАНИХ (RAW) ===
     try:
         # Whitelist
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
@@ -1574,9 +1576,7 @@ def show_sources_page():
         st.error(f"Помилка завантаження даних: {e}")
         return
 
-    # === 2. ОБРОБКА ТА ФІЛЬТРАЦІЯ ===
-    
-    # Нормалізація доменів (Python magic)
+    # === 2. ПОПЕРЕДНЯ ОБРОБКА ===
     def extract_clean_domain(url_str):
         if not url_str: return "unknown"
         try:
@@ -1588,32 +1588,18 @@ def show_sources_page():
             return url_str
 
     if not df_sources.empty:
-        # Додаємо провайдера
+        # Додаємо провайдера до кожного джерела
         df_sources['provider'] = df_sources['scan_result_id'].map(scan_map)
         
-        # Створюємо/Чистимо колонку domain
+        # Нормалізуємо домен
         if 'url' in df_sources.columns:
             df_sources['domain'] = df_sources['url'].fillna('').apply(extract_clean_domain)
-        
-        # --- ФІЛЬТР (Загальний для вкладок аналізу) ---
-        with st.expander("⚙️ Фільтр даних (ЛЛМ)", expanded=False):
-            sel_models = st.multiselect("Оберіть моделі:", list(MODEL_MAPPING.keys()), default=list(MODEL_MAPPING.keys()))
-        
-        # Застосовуємо фільтр
-        sel_tech = [MODEL_MAPPING[m] for m in sel_models]
-        if sel_tech:
-            mask = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech))
-            df_filtered = df_sources[mask]
-        else:
-            df_filtered = df_sources
-    else:
-        df_filtered = pd.DataFrame()
-
+    
     # === 3. ВКЛАДКИ ===
     tab1, tab2, tab3 = st.tabs(["🛡️ Мої Активи", "🌐 Ренкінг доменів", "📄 Топ Сторінок (URL)"])
 
     # -------------------------------------------------------
-    # TAB 1: МОЇ АКТИВИ (WHITELIST)
+    # TAB 1: МОЇ АКТИВИ (Без фільтрів)
     # -------------------------------------------------------
     with tab1:
         st.markdown("##### 🟢 Ваші офіційні ресурси")
@@ -1625,7 +1611,7 @@ def show_sources_page():
         with c2:
             asset_type = st.selectbox("Тип", ["website", "social", "article"], label_visibility="visible")
         with c3:
-            st.write("") # Spacer
+            st.write("") 
             st.write("") 
             if st.button("➕ Додати", use_container_width=True):
                 if new_asset:
@@ -1653,19 +1639,37 @@ def show_sources_page():
             st.info("Список пустий. Додайте ваш сайт.")
 
     # -------------------------------------------------------
-    # TAB 2: РЕНКІНГ ДОМЕНІВ (Стратегічний рівень)
+    # TAB 2: РЕНКІНГ ДОМЕНІВ (З власним фільтром)
     # -------------------------------------------------------
     with tab2:
-        st.markdown(f"##### 🏆 Топ Доменів ({len(df_filtered)} посилань)")
+        # 1. Фільтр (тільки для цієї вкладки)
+        c_filter, _ = st.columns([2, 2])
+        with c_filter:
+            sel_models_tab2 = st.multiselect(
+                "Фільтр ЛЛМ:", 
+                ALL_MODELS_KEYS, 
+                default=ALL_MODELS_KEYS, # ✅ Активовано всі по дефолту
+                key="filter_domains"
+            )
         
-        if not df_filtered.empty:
-            # Агрегація по доменах
-            domain_stats = df_filtered.groupby('domain').agg(
+        # 2. Фільтрація даних
+        if not df_sources.empty and sel_models_tab2:
+            sel_tech = [MODEL_MAPPING[m] for m in sel_models_tab2]
+            # Фільтруємо рядки, де провайдер відповідає вибору
+            mask = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech))
+            df_tab2 = df_sources[mask]
+        else:
+            df_tab2 = pd.DataFrame() # Або пустий, або всі зняті галочки
+
+        st.markdown(f"##### 🏆 Топ Доменів ({len(df_tab2)} записів)")
+        
+        if not df_tab2.empty:
+            # Агрегація
+            domain_stats = df_tab2.groupby('domain').agg(
                 Mentions=('id', 'count'),
                 Queries=('scan_result_id', 'nunique')
             ).reset_index().sort_values('Mentions', ascending=False)
 
-            # Перевірка на офіційність (часткове співпадіння)
             def check_off(d):
                 return any(w in d for w in whitelist)
 
@@ -1686,13 +1690,66 @@ def show_sources_page():
                     ),
                     "Охоплення запитів": st.column_config.NumberColumn(
                         "У запитах",
-                        help="У скількох унікальних відповідях зустрічався цей сайт"
+                        help="Кількість унікальних відповідей"
                     )
                 },
                 hide_index=True
             )
         else:
-            st.warning("Даних не знайдено за обраними фільтрами.")
+            if df_sources.empty:
+                st.info("Даних немає.")
+            else:
+                st.warning("Оберіть хоча б одну модель у фільтрі.")
+
+    # -------------------------------------------------------
+    # TAB 3: ТОП СТОРІНОК (З власним фільтром)
+    # -------------------------------------------------------
+    with tab3:
+        # 1. Фільтр (тільки для цієї вкладки)
+        c_filter_url, _ = st.columns([2, 2])
+        with c_filter_url:
+            sel_models_tab3 = st.multiselect(
+                "Фільтр ЛЛМ:", 
+                ALL_MODELS_KEYS, 
+                default=ALL_MODELS_KEYS, # ✅ Активовано всі по дефолту
+                key="filter_urls"
+            )
+
+        # 2. Фільтрація даних
+        if not df_sources.empty and sel_models_tab3:
+            sel_tech_url = [MODEL_MAPPING[m] for m in sel_models_tab3]
+            mask_url = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech_url))
+            df_tab3 = df_sources[mask_url]
+        else:
+            df_tab3 = pd.DataFrame()
+
+        st.markdown("##### 📄 Топ Конкретних Сторінок (URL)")
+        
+        if not df_tab3.empty and 'url' in df_tab3.columns:
+            # Фільтруємо пусті URL
+            df_urls = df_tab3[df_tab3['url'].notna() & (df_tab3['url'] != "")]
+            
+            if not df_urls.empty:
+                url_stats = df_urls.groupby('url').agg(
+                    Mentions=('id', 'count')
+                ).reset_index().sort_values('Mentions', ascending=False).head(100)
+
+                st.dataframe(
+                    url_stats,
+                    use_container_width=True,
+                    column_config={
+                        "url": st.column_config.LinkColumn("Посилання"),
+                        "Mentions": st.column_config.NumberColumn("К-сть цитувань")
+                    },
+                    hide_index=True
+                )
+            else:
+                st.info("URL-адреси відсутні.")
+        else:
+            if df_sources.empty:
+                st.info("Даних немає.")
+            else:
+                st.warning("Оберіть хоча б одну модель.")
 
     # -------------------------------------------------------
     # TAB 3: ТОП СТОРІНОК (Тактичний рівень)
