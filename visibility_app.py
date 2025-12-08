@@ -2096,11 +2096,25 @@ def sidebar_menu():
     role = st.session_state.get("role", "user")
     current_proj = st.session_state.get("current_project")
 
+    # --- 🎨 CSS ДЛЯ АДМІНА (Заливка сайдбару) ---
+    if role == "admin":
+        st.markdown("""
+        <style>
+            [data-testid="stSidebar"] {
+                background-color: #E8F5E9; /* Світло-зелений фон для Адміна */
+                border-right: 2px solid #00C896; /* Акцентна лінія справа */
+            }
+            /* Можна підфарбувати заголовки, щоб було стильно */
+            [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+                color: #00695C;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
     with st.sidebar:
-        # 1. ЛОГОТИП (Повернуто!)
-        # Якщо у вас є файл logo.png або посилання, вставте його сюди
-        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150) 
-        # st.markdown("## 🚀 VIRSHI") # Заглушка, якщо картинки немає
+        # 1. ЛОГОТИП
+        # st.image("logo.png", width=150) 
+        st.markdown("## 🚀 VIRSHI") 
 
         # Профіль
         user_name = "Користувач"
@@ -2110,12 +2124,11 @@ def sidebar_menu():
 
         st.caption(f"👤 {user_name}")
         
-        if role == "admin":
-            st.caption("🛡️ Admin Mode")
+        # ❌ ТУТ ПРИБРАЛИ НАПИС "Admin Mode"
         
         st.divider()
 
-        # 2. ВИБІР ПРОЕКТУ (ДЛЯ АДМІНА - ПОШУК)
+        # 2. ВИБІР ПРОЕКТУ
         if role == "admin":
             try:
                 if 'supabase' in globals():
@@ -2124,13 +2137,10 @@ def sidebar_menu():
                 else:
                     projects_list = []
 
-                # Формуємо список: Назва (ID: ...)
-                # ID мусить бути в рядку, щоб працював пошук!
                 options_map = {f"{p['brand_name']} (ID: {p['id']})": p for p in projects_list}
                 
                 current_index = 0
                 if current_proj:
-                    # Шукаємо поточний проект у списку
                     current_key = f"{current_proj['brand_name']} (ID: {current_proj['id']})"
                     if current_key in options_map:
                         current_index = list(options_map.keys()).index(current_key)
@@ -2140,7 +2150,7 @@ def sidebar_menu():
                     options=list(options_map.keys()),
                     index=current_index,
                     placeholder="Пошук по Назві або ID...",
-                    help="Можна вводити ID проекту для пошуку"
+                    help="Введіть ID для пошуку"
                 )
 
                 if selected_key:
@@ -2153,16 +2163,15 @@ def sidebar_menu():
                 st.error(f"Error: {e}")
 
         else:
-            # ДЛЯ ЮЗЕРА (Тільки перегляд)
+            # ЮЗЕР
             if current_proj:
                 st.markdown(f"### 📂 {current_proj.get('brand_name')}")
-                # ID схований в info, щоб не заважав, але можна було скопіювати
                 with st.expander("ℹ️ Project ID"):
                     st.code(current_proj.get('id'), language=None)
             else:
                 st.warning("Проект не обрано")
 
-        st.write("") # Відступ
+        st.write("") 
 
     # 3. НАВІГАЦІЯ
     with st.sidebar:
@@ -2173,11 +2182,11 @@ def sidebar_menu():
             menu_icon="cast",
             default_index=0,
             styles={
-                "nav-link-selected": {"background-color": "#00C896"}, # Зелений бренд-колір
+                "nav-link-selected": {"background-color": "#00C896"}, 
             }
         )
 
-    # 4. ФУТЕР (Support + Вихід)
+    # 4. ФУТЕР
     with st.sidebar:
         st.divider()
         
@@ -2189,15 +2198,18 @@ def sidebar_menu():
         
         st.write("")
         
-        # Support (Повернуто!)
+        # ✅ ТУТ ДОДАЛИ НАПИС "Admin Mode" (Тільки для адміна)
+        if role == "admin":
+            st.caption("🛡️ Admin Mode")
+
+        # Support
         st.caption("Support: hi@virshi.ai")
 
-        # Кнопка Виходу (Текстом!)
+        # Кнопка Виходу
         if st.button("Вийти з акаунту", key="logout_btn", use_container_width=True):
             logout()
 
     return selected
-
 
 def main():
     # 1. Спробуємо відновити сесію з куки
