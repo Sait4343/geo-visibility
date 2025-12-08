@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timedelta, date
-
+import plotly.express as px 
 import pandas as pd
 import plotly.graph_objects as go
 import requests
@@ -557,26 +557,26 @@ def onboarding_wizard():
 # =========================
 
 
-# Додай це вгорі файлу, якщо ще немає:
-import plotly.express as px 
 
 def show_dashboard():
     proj = st.session_state.get("current_project", {})
     if not proj:
-        st.info("Оберіть або створіть проект.")
+        st.info("Спочатку створіть проект.")
         return
 
-    # Заголовок і фільтр
+    # Заголовок і фільтр періоду
     c1, c2 = st.columns([3, 1])
     with c1:
         st.title(f"📊 Дашборд: {proj.get('brand_name')}")
-        st.caption("Зведена аналітика видимості у LLM")
+        st.caption("Зведена аналітика видимості у LLM (Perplexity, GPT, Gemini)")
     with c2:
+        # Поки що логіка фільтрації візуальна, SQL View повертає всі дані
         st.selectbox("Період:", ["Останні 30 днів", "Все"], index=0)
     
     st.markdown("---")
 
-    # 1. Завантаження KPI з бази (SQL View 1)
+    # 1. ЗАВАНТАЖЕННЯ KPI (З SQL VIEW)
+    # Ми звертаємося до віртуальної таблиці, яку створили в SQL
     try:
         stats_resp = supabase.table("project_dashboard_stats").select("*").eq("project_id", proj["id"]).execute()
         if stats_resp.data:
@@ -584,17 +584,22 @@ def show_dashboard():
         else:
             stats = {}
     except Exception as e:
-        st.error(f"Помилка завантаження KPI: {e}")
+        # Якщо View ще не створена або помилка, показуємо нулі, щоб не крашити додаток
+        # st.error(f"Помилка KPI: {e}") 
         stats = {}
 
-    # Розпаковка даних (з захистом від нулів)
+    # Розпаковка даних (безпечно, з дефолтними нулями)
     sov = stats.get("sov", 0)
     off_src = stats.get("official_source_pct", 0)
     avg_sent = stats.get("avg_sentiment", 0)
     avg_pos = stats.get("avg_position", 0)
-    presence = stats.get("brand_presence_pct", 0)
+    
+    # Абсолютні цифри (з JSON поля absolute_counts)
+    abs_counts = stats.get("absolute_counts", {})
+    total_mentions = abs_counts.get("total_mentions", 0)
+    my_mentions = abs_counts.get("my_mentions", 0)
 
-    # 2. Відображення карток KPI
+    # 2. ВІДОБРАЖЕННЯ КАРТОК KPI
     k1, k2, k3, k4 = st.columns(4)
     
     with k1:
@@ -602,9 +607,9 @@ def show_dashboard():
             st.metric(
                 "📢 Share of Voice", 
                 f"{sov:.1f}%", 
-                help="Частка згадок вашого бренду серед усіх брендів"
+                help=f"Вас згадали {my_mentions} разів із {total_mentions} загальних згадок брендів."
             )
-            # Міні-чарт
+            # Малюємо міні-графік (пончик)
             st.plotly_chart(get_donut_chart(sov, "#8041F6"), use_container_width=True, key="d_sov")
 
     with k2:
@@ -612,80 +617,97 @@ def show_dashboard():
             st.metric(
                 "🛡️ Official Sources", 
                 f"{off_src:.1f}%",
-                help="% посилань, які ведуть на ваші ресурси (з WhiteList)"
+                help="Відсоток посилань, які ведуть саме на ваші сайти (з Whitelist)"
             )
             st.plotly_chart(get_donut_chart(off_src, "#00C896"), use_container_width=True, key="d_off")
 
     with k3:
         with st.container(border=True):
-            # Колір тональності
-            sent_color = "normal"
-            if avg_sent > 75: sent_color = "normal" # Streamlit сам зробить зеленим якщо delta
-            
             st.metric(
                 "❤️ Sentiment", 
                 f"{avg_sent:.0f}/100",
-                help="Середня тональність (0 - негатив, 100 - позитив)"
+                help="Середня тональність (0-негатив, 100-позитив)"
             )
+            # Прогресбар тональності
             st.progress(int(avg_sent))
 
     with k4:
         with st.container(border=True):
+            # Якщо позиція 0, значить нас ніде не знайшли, пишемо прочерк
             pos_display = f"#{avg_pos:.1f}" if avg_pos > 0 else "-"
             st.metric(
                 "🏆 Avg Position", 
                 pos_display,
-                help="Середня позиція у списках рекомендацій (де бренд знайдено)"
+                help="Середня позиція у списках рекомендацій (де бренд був знайдений)"
             )
             if avg_pos > 0:
-                # Чим менше число, тим краще, тому інвертуємо прогресбар
-                st.progress(max(0, 100 - int(avg_pos * 10)))
+                # Чим менше число (ближче до 1), тим краще, тому інвертуємо прогресбар
+                # Якщо позиція 1 -> 100%, якщо позиція 10 -> 0%
+                val = max(0, 100 - (int(avg_pos) - 1) * 10)
+                st.progress(val)
             else:
-                st.write("_Немає даних_")
+                st.caption("Немає даних")
 
-    # 3. Графік Динаміки (SQL View 2)
-    st.markdown("### 📈 Динаміка Тональності")
-    
-    try:
-        trends_resp = supabase.table("daily_sentiment_trends").select("*").eq("project_id", proj["id"]).execute()
-        trends_data = trends_resp.data
-    except:
-        trends_data = []
+    # 3. ГРАФІК ДИНАМІКИ (З SQL VIEW 2)
+    c_chart, c_list = st.columns([2, 1])
 
-    if trends_data:
-        df_trends = pd.DataFrame(trends_data)
-        
-        fig = px.line(
-            df_trends, 
-            x="scan_date", 
-            y="avg_sentiment",
-            markers=True,
-            title="Зміна настрою ШІ по днях",
-            labels={"scan_date": "Дата", "avg_sentiment": "Тональність (0-100)"}
-        )
-        fig.update_traces(line_color='#8041F6', line_width=3)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Недостатньо даних для побудови графіка. Запустіть більше сканувань.")
+    with c_chart:
+        st.subheader("📈 Динаміка Настрою (Sentiment)")
+        try:
+            trends_resp = supabase.table("daily_sentiment_trends").select("*").eq("project_id", proj["id"]).execute()
+            trends_data = trends_resp.data
+        except:
+            trends_data = []
 
-    # 4. Швидкий доступ до запитів
-    st.markdown("### 🔥 Останні активні запити")
-    try:
-        # Беремо останні 5 запитів
-        recent_kws = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).limit(5).execute().data
-    except:
-        recent_kws = []
+        if trends_data:
+            df_trends = pd.DataFrame(trends_data)
+            
+            fig = px.line(
+                df_trends, 
+                x="scan_date", 
+                y="avg_sentiment",
+                markers=True,
+                title="Як змінювалася тональність згадок",
+                labels={"scan_date": "Дата", "avg_sentiment": "Бали (0-100)"}
+            )
+            # Стилізація графіка під бренд
+            fig.update_traces(line_color='#8041F6', line_width=3)
+            fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", 
+                plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=350
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            # Заглушка, якщо даних ще немає
+            st.info("Графік будується... Запустіть більше сканувань у різні дні.")
 
-    if recent_kws:
-        for k in recent_kws:
-            with st.container(border=True):
-                c1, c2 = st.columns([4, 1])
-                c1.markdown(f"**{k['keyword_text']}**")
-                if c2.button("Аналіз", key=f"dash_go_{k['id']}"):
-                    st.session_state["focus_keyword_id"] = k["id"]
-                    st.rerun()
-    else:
-        st.caption("Запитів ще немає.")
+    # 4. СПИСОК ОСТАННІХ ЗАПИТІВ (Права колонка)
+    with c_list:
+        st.subheader("🔥 Активні запити")
+        try:
+            # Беремо останні 5 запитів
+            recent_kws = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).limit(5).execute().data
+        except:
+            recent_kws = []
+
+        if recent_kws:
+            for k in recent_kws:
+                with st.container(border=True):
+                    col_txt, col_btn = st.columns([3, 1])
+                    col_txt.markdown(f"**{k['keyword_text']}**")
+                    # Кнопка для швидкого переходу до аналізу
+                    if col_btn.button("🔍", key=f"dash_go_{k['id']}"):
+                        st.session_state["focus_keyword_id"] = k["id"]
+                        # Примусово перемикаємо сторінку (якщо використовується option_menu)
+                        st.session_state["force_page"] = "Перелік запитів" 
+                        st.rerun()
+        else:
+            st.caption("Тут з'являться ваші останні запити.")
+            if st.button("Додати перший запит"):
+                st.session_state["force_page"] = "Перелік запитів"
+                st.rerun()
 
 # =========================
 # 7. КЕРУВАННЯ ЗАПИТАМИ
