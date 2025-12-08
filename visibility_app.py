@@ -726,30 +726,32 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Відображає детальну аналітику по конкретному запиту.
-    ВЕРСІЯ З ПІДТРИМКОЮ ІСТОРІЇ ТА РІЗНИХ LLM
+    ВЕРСІЯ З ВНУТРІШНІМИ ІМПОРТАМИ (Виправляє NameError)
     """
-    # 1. ЗАХИСНІ ІМПОРТИ
+    # 1. ЗАХИСНІ ІМПОРТИ (Це виправить помилку!)
     import pandas as pd
     import streamlit as st
-    import plotly.express as px  # Для графіка історії
     
-    # Перевірка підключення
+    # Перевірка підключення до бази
     if 'supabase' not in globals():
+        # Спробуємо дістати з сесії, якщо глобальна змінна невидима
         if 'supabase' in st.session_state:
-            supabase = st.session_state['supabase']
+            supabase = st.session_state['supabase'] # Локальна змінна
         else:
-            st.error("🚨 Змінна 'supabase' не знайдена.")
+            st.error("🚨 Критична помилка: Змінна 'supabase' не знайдена. Перевірте підключення на початку файлу.")
             return
     else:
+        # Використовуємо глобальну
         supabase = globals()['supabase']
 
     # -------------------------------------------
     
+    # 2. Кнопка "Назад"
     if st.button("⬅ Назад до списку", key="back_btn"):
         st.session_state["focus_keyword_id"] = None
         st.rerun()
 
-    # Отримуємо текст запиту
+    # 3. Отримуємо текст запиту
     try:
         kw_data = supabase.table("keywords").select("*").eq("id", kw_id).execute()
         if not kw_data.data:
@@ -757,72 +759,43 @@ def show_keyword_details(kw_id):
             return
         keyword_text = kw_data.data[0]["keyword_text"]
     except Exception as e:
-        st.error(f"Помилка БД: {e}")
+        st.error(f"Помилка БД (Keywords): {e}")
         return
 
     st.title(f"🔍 Аналіз: {keyword_text}")
 
-    # --- ЗАВАНТАЖУЄМО ВСЮ ІСТОРІЮ СКАНУВАНЬ ---
+    # 4. Отримуємо результати сканування
     try:
         scans = (
             supabase.table("scan_results")
             .select("*")
             .eq("keyword_id", kw_id)
-            .order("created_at", desc=True) # Спочатку нові
+            .order("created_at", desc=True)
             .execute()
             .data
         )
     except Exception as e:
-        st.error(f"Не вдалося завантажити історію: {e}")
+        st.error(f"Не вдалося завантажити сканування: {e}")
         scans = []
 
     if not scans:
-        st.info("⚠️ Немає результатів. Запустіть сканування.")
+        st.info("⚠️ Для цього запиту ще немає результатів. Натисніть 'Просканувати' у списку запитів.")
         return 
 
-    # =======================================================
-    # 👇 БЛОК ВИБОРУ ВЕРСІЇ (СЕЛЕКТОР) 👇
-    # =======================================================
-    
-    # Формуємо словник для вибору: "Дата | Провайдер" -> об'єкт скану
-    scan_options = {}
-    for s in scans:
-        # Форматуємо дату: 2023-12-08 14:30
-        date_str = str(s['created_at'])[:16].replace('T', ' ')
-        prov_str = s.get('provider', 'unknown').upper()
-        label = f"{date_str} | {prov_str}"
-        scan_options[label] = s
-
-    # Якщо сканів багато, даємо вибрати. Якщо один - беремо його мовчки.
-    selected_scan = scans[0] # За замовчуванням найновіший
-    
-    if len(scans) > 1:
-        c_sel, c_stat = st.columns([2, 1])
-        with c_sel:
-            st.markdown("### 🕒 Оберіть версію аналізу")
-            selected_label = st.selectbox(
-                "Історія перевірок (Дата | AI Модель):", 
-                list(scan_options.keys()), 
-                index=0
-            )
-            selected_scan = scan_options[selected_label]
-        with c_stat:
-            # Показуємо скільки всього було перевірок
-            st.metric("Всього перевірок", len(scans))
-            
-    scan_id = selected_scan["id"]
+    last_scan = scans[0]
+    scan_id = last_scan["id"]
     
     # =======================================================
     # БЛОК 1: ВІДПОВІДЬ ШІ
     # =======================================================
-    raw_text = selected_scan.get("raw_response", "")
-    provider = selected_scan.get("provider", "Unknown")
+    raw_text = last_scan.get("raw_response", "")
+    provider = last_scan.get("provider", "Unknown")
 
     st.markdown("---")
-    st.subheader(f"📝 Відповідь від {str(provider).capitalize()}")
-    st.caption(f"ID сканування: {scan_id}")
+    st.subheader(f"📝 Повна відповідь від {str(provider).capitalize()}")
+    st.caption(f"Дата сканування: {last_scan.get('created_at', '')[:10]}")
 
-    with st.expander(f"📄 Читати текст ({str(selected_scan['created_at'])[:10]})", expanded=False):
+    with st.expander("📄 Читати оригінальний текст відповіді ШІ", expanded=False):
         if raw_text:
             my_brand_name = st.session_state.get("current_project", {}).get("brand_name", "")
             if my_brand_name:
@@ -831,7 +804,7 @@ def show_keyword_details(kw_id):
             else:
                 st.markdown(raw_text)
         else:
-            st.warning("Текст відповіді відсутній.")
+            st.warning("Текст відповіді відсутній (можливо, це старий скан).")
 
     # =======================================================
     # БЛОК 2: ТАБЛИЦЯ БРЕНДІВ
@@ -849,10 +822,14 @@ def show_keyword_details(kw_id):
         
         if mentions:
             df = pd.DataFrame(mentions)
+            # Перевірка наявності колонок перед виводом
             cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
+            # Залишаємо тільки ті колонки, які реально є в df
             available_cols = [c for c in cols if c in df.columns]
+            
             show_df = df[available_cols].copy()
             
+            # Перейменування (безпечне)
             rename_map = {
                 "rank_position": "Ранг",
                 "brand_name": "Бренд",
@@ -867,10 +844,10 @@ def show_keyword_details(kw_id):
             
             st.dataframe(show_df, use_container_width=True, hide_index=True)
         else:
-            st.info("Брендів не знайдено у цьому звіті.")
+            st.info("Брендів не знайдено.")
             
     except Exception as e:
-        st.error(f"Помилка брендів: {e}")
+        st.error(f"Помилка таблиці брендів: {e}")
 
     # =======================================================
     # БЛОК 3: ДЖЕРЕЛА
@@ -887,11 +864,18 @@ def show_keyword_details(kw_id):
 
         if sources_data:
             df_sources = pd.DataFrame(sources_data)
+            
+            # Вибираємо колонки
             cols_src = ["domain", "url", "is_official"]
             available_src = [c for c in cols_src if c in df_sources.columns]
+            
             show_sources_df = df_sources[available_src].copy()
             
-            rename_src = {"domain": "Домен", "url": "Посилання", "is_official": "Офіційне?"}
+            rename_src = {
+                "domain": "Домен",
+                "url": "Посилання",
+                "is_official": "Офіційне?"
+            }
             show_sources_df.rename(columns=rename_src, inplace=True)
             
             if "Офіційне?" in show_sources_df.columns:
@@ -901,13 +885,15 @@ def show_keyword_details(kw_id):
                 show_sources_df, 
                 use_container_width=True, 
                 hide_index=True,
-                column_config={"Посилання": st.column_config.LinkColumn("Посилання")}
+                column_config={
+                    "Посилання": st.column_config.LinkColumn("Посилання")
+                }
             )
         else:
-            st.info("Джерел не знайдено.")
+            st.info("Джерел для цього сканування не знайдено. Спробуйте запустити новий скан.")
 
     except Exception as e:
-        st.error(f"Помилка джерел: {e}")
+        st.error(f"Помилка таблиці джерел: {e}")
 
 
 def show_keywords_page():
