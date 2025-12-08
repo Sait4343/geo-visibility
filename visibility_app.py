@@ -594,6 +594,255 @@ def onboarding_wizard():
 # 6. DASHBOARD
 # =========================
 
+def show_competitors_page():
+    """
+    Сторінка глибокого конкурентного аналізу.
+    Включає: Матрицю репутації, Share of Voice, Детальну таблицю.
+    """
+    import pandas as pd
+    import plotly.express as px
+    import streamlit as st
+    
+    # --- 0. ПІДКЛЮЧЕННЯ ДО БАЗИ ---
+    if 'supabase' not in globals():
+        if 'supabase' in st.session_state:
+            supabase = st.session_state['supabase']
+        else:
+            st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
+            return
+    else:
+        supabase = globals()['supabase']
+
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Спочатку створіть проект.")
+        return
+
+    # Мапінг для фільтрів (Красива назва -> Технічна назва)
+    MODEL_MAPPING = {
+        "Perplexity": "perplexity",
+        "OpenAI GPT": "gpt-4o",
+        "Google Gemini": "gemini-1.5-pro"
+    }
+
+    st.title("👥 Аналіз Конкурентів")
+
+    # --- 1. ЗАВАНТАЖЕННЯ ДАНИХ (RAW DATA) ---
+    try:
+        # A. Завантажуємо всі сканування
+        scans_resp = supabase.table("scan_results")\
+            .select("id, provider, keyword_id, created_at")\
+            .eq("project_id", proj["id"])\
+            .execute()
+        
+        if not scans_resp.data:
+            st.info("Даних немає. Запустіть сканування у вкладці 'Перелік запитів'.")
+            return
+            
+        df_scans = pd.DataFrame(scans_resp.data)
+        
+        # B. Завантажуємо тексти запитів (для фільтру по словах)
+        kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+        kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data}
+        
+        # Додаємо текст запиту до таблиці сканувань
+        df_scans['keyword_text'] = df_scans['keyword_id'].map(kw_map)
+
+        # C. Завантажуємо всі згадки брендів
+        scan_ids = df_scans['id'].tolist()
+        mentions_resp = supabase.table("brand_mentions")\
+            .select("*")\
+            .in_("scan_result_id", scan_ids)\
+            .execute()
+        
+        if not mentions_resp.data:
+            st.info("Брендів ще не знайдено.")
+            return
+
+        df_mentions = pd.DataFrame(mentions_resp.data)
+
+        # D. Об'єднуємо все в один великий датафрейм (Master Data)
+        # Приєднуємо до згадки бренду інформацію про те, який це був скан, яка модель і який запит
+        df_full = pd.merge(df_mentions, df_scans, left_on='scan_result_id', right_on='id', how='left')
+
+    except Exception as e:
+        st.error(f"Помилка обробки даних: {e}")
+        return
+
+    # --- 2. ФІЛЬТРИ ---
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            # Фільтр по ЛЛМ
+            all_models = list(MODEL_MAPPING.keys())
+            sel_models = st.multiselect("Фільтр по ЛЛМ:", all_models, default=all_models)
+            
+            # Конвертація в технічні назви для пошуку
+            sel_tech_models = [MODEL_MAPPING[m] for m in sel_models]
+
+        with c2:
+            # Фільтр по Запитах
+            # Беремо унікальні запити, які є в даних
+            all_kws = df_full['keyword_text'].dropna().unique().tolist()
+            sel_kws = st.multiselect("Фільтр по Запитах:", all_kws, default=all_kws)
+
+    # --- 3. ЗАСТОСУВАННЯ ФІЛЬТРІВ ---
+    
+    # Фільтр моделей
+    if sel_tech_models:
+        # Шукаємо входження (наприклад, 'gpt-4o' в списку провайдерів)
+        mask_model = df_full['provider'].apply(lambda x: any(t in str(x) for t in sel_tech_models))
+    else:
+        mask_model = df_full['provider'].apply(lambda x: False) # Якщо нічого не обрано - пусто
+
+    # Фільтр слів
+    if sel_kws:
+        mask_kw = df_full['keyword_text'].isin(sel_kws)
+    else:
+        mask_kw = df_full['keyword_text'].apply(lambda x: False)
+
+    # Застосовуємо обидва фільтри
+    df_filtered = df_full[mask_model & mask_kw]
+
+    if df_filtered.empty:
+        st.warning("За обраними фільтрами даних немає.")
+        return
+
+    st.divider()
+
+    # --- 4. АГРЕГАЦІЯ ТА МЕТРИКИ ---
+    
+    # Хелпер: Переводимо текстову тональність в цифри для графіків
+    def sentiment_to_score(s):
+        if s == 'Позитивний': return 100
+        if s == 'Негативний': return 0
+        return 50 # Нейтральний
+    
+    df_filtered['sent_score_num'] = df_filtered['sentiment_score'].apply(sentiment_to_score)
+
+    # Групуємо дані по Брендах
+    stats = df_filtered.groupby('brand_name').agg(
+        Mentions=('id_x', 'count'), # Кількість разів, коли бренд згадали
+        Avg_Rank=('rank_position', 'mean'), # Середня позиція в списках
+        Avg_Sentiment=('sent_score_num', 'mean'), # Середній бал репутації (0-100)
+        Is_My_Brand=('is_my_brand', 'max') # Чи це мій бренд (True/False)
+    ).reset_index()
+
+    # Сортування таблиці
+    sort_col = st.selectbox(
+        "Сортувати за:", 
+        ["Кількість згадок (SOV)", "Найкраща репутація", "Найвищі позиції (топ-1)"]
+    )
+    
+    if sort_col == "Кількість згадок (SOV)":
+        stats = stats.sort_values('Mentions', ascending=False)
+    elif sort_col == "Найкраща репутація":
+        stats = stats.sort_values('Avg_Sentiment', ascending=False)
+    elif sort_col == "Найвищі позиції (топ-1)":
+        stats = stats.sort_values('Avg_Rank', ascending=True) # Чим менше число, тим вище ранг
+
+    # --- 5. ВІЗУАЛІЗАЦІЯ (ГРАФІКИ) ---
+    
+    # Додаємо кольори: Наш бренд = Зелений (#00C896), Конкуренти = Сірий (#9EA0A5)
+    stats['Color'] = stats['Is_My_Brand'].apply(lambda x: '#00C896' if x else '#9EA0A5')
+    stats['Size'] = stats['Mentions'] * 2 # Розмір бульбашки залежить від кількості згадок
+
+    col_chart1, col_chart2 = st.columns([1.5, 1])
+
+    with col_chart1:
+        st.subheader("🗺️ Матриця Репутації")
+        st.caption("Аналіз: Хто найпопулярніший (справа) і кого найбільше люблять (зверху).")
+        
+        fig_scatter = px.scatter(
+            stats,
+            x="Mentions",
+            y="Avg_Sentiment",
+            size="Size",
+            color="Is_My_Brand", 
+            hover_name="brand_name",
+            text="brand_name",
+            color_discrete_map={True: '#00C896', False: '#999999'}, # Легенда кольорів
+            labels={
+                "Is_My_Brand": "Це ми?", 
+                "Mentions": "Кількість згадок (Видимість)", 
+                "Avg_Sentiment": "Репутація (0-100)"
+            }
+        )
+        fig_scatter.update_traces(textposition='top center')
+        fig_scatter.update_layout(
+            height=450,
+            yaxis_range=[0, 110], # Фіксуємо шкалу від 0 до 100
+            xaxis_title="Видимість (Кількість згадок)",
+            yaxis_title="Якість (Тональність)",
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        # Додаємо лінію "нейтральності" (50 балів)
+        fig_scatter.add_hline(y=50, line_dash="dot", line_color="#ddd")
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    with col_chart2:
+        st.subheader("📊 Share of Voice")
+        st.caption("Хто займає найбільше місця в інфополі.")
+        
+        # Беремо топ-10 брендів, щоб графік не був перевантажений
+        top_10 = stats.sort_values('Mentions', ascending=False).head(10)
+        
+        fig_bar = px.bar(
+            top_10,
+            x="Mentions",
+            y="brand_name",
+            orientation='h', # Горизонтальні стовпчики
+            text="Mentions",
+            color="Is_My_Brand",
+            color_discrete_map={True: '#00C896', False: '#E0E0E0'}
+        )
+        fig_bar.update_layout(
+            height=450,
+            yaxis=dict(autorange="reversed"), # Лідер зверху
+            xaxis_title="Кількість згадок",
+            yaxis_title="",
+            showlegend=False,
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    st.divider()
+
+    # --- 6. ДЕТАЛЬНА ТАБЛИЦЯ ---
+    st.subheader("📋 Детальний рейтинг брендів")
+    
+    # Готуємо красиву таблицю для виводу
+    display_df = stats[['brand_name', 'Mentions', 'Avg_Sentiment', 'Avg_Rank', 'Is_My_Brand']].copy()
+    display_df.columns = ['Бренд', 'Згадок', 'Репутація', 'Сер. Позиція', 'Це ми?']
+    
+    # Округлення чисел
+    display_df['Сер. Позиція'] = display_df['Сер. Позиція'].apply(lambda x: f"#{x:.1f}")
+    display_df['Репутація'] = display_df['Репутація'].astype(int)
+    
+    # Перетворюємо True/False на галочки (технічно це boolean, але для Streamlit config)
+    display_df['Це ми?'] = display_df['Це ми?'].apply(lambda x: True if x else False)
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        column_config={
+            "Згадок": st.column_config.ProgressColumn(
+                "Згадок", 
+                format="%d", 
+                min_value=0, 
+                max_value=int(stats['Mentions'].max()),
+                help="Загальна кількість згадок у вибраних фільтрах"
+            ),
+            "Репутація": st.column_config.NumberColumn(
+                "Репутація",
+                format="%d / 100",
+                help="Середня тональність (0 - негатив, 100 - позитив)"
+            ),
+            "Це ми?": st.column_config.CheckboxColumn("Наш бренд?", disabled=True)
+        },
+        hide_index=True
+    )
 
 
 def show_dashboard():
