@@ -740,18 +740,18 @@ def show_keyword_details(kw_id):
             return
         keyword_text = kw_data.data[0]["keyword_text"]
     except Exception as e:
-        st.error(f"Помилка БД: {e}")
+        st.error(f"Помилка БД (Keywords): {e}")
         return
 
     st.title(f"🔍 Аналіз: {keyword_text}")
 
-    # 3. Отримуємо результати сканування
+    # 3. Отримуємо результати сканування (Тут вже є raw_response!)
     try:
         scans = (
             supabase.table("scan_results")
             .select("*")
             .eq("keyword_id", kw_id)
-            .order("created_at", desc=True)
+            .order("created_at", desc=True) # Найсвіжіші зверху
             .execute()
             .data
         )
@@ -761,68 +761,66 @@ def show_keyword_details(kw_id):
 
     if not scans:
         st.info("⚠️ Для цього запиту ще немає результатів аналізу. Запустіть сканування або зачекайте кілька хвилин.")
-        return
+        return 
 
-    # 4. Формуємо вкладки по провайдерах
-    latest_scans = {}
-    for scan in scans:
-        prov = scan.get("provider", "Unknown")
-        if prov not in latest_scans:
-            latest_scans[prov] = scan
+    # =======================================================
+    # 👇 НОВИЙ КОД: ВІДОБРАЖЕННЯ ДАНИХ 👇
+    # =======================================================
     
-    provider_names = list(latest_scans.keys())
+    # Беремо останнє (найсвіжіше) сканування
+    last_scan = scans[0]
+    scan_id = last_scan["id"]
     
-    if not provider_names:
-        st.warning("Дані пошкоджені: відсутній провайдер.")
-        return
+    # --- БЛОК 1: ВІДПОВІДЬ ШІ (RAW RESPONSE) ---
+    raw_text = last_scan.get("raw_response", "")
+    provider = last_scan.get("provider", "Unknown")
 
-    tabs = st.tabs([p.upper() for p in provider_names])
+    st.markdown("---")
+    st.subheader(f"📝 Повна відповідь від {provider.capitalize()}")
+    st.caption(f"Дата сканування: {last_scan.get('created_at', '')[:10]}")
 
-    # 5. Наповнюємо вкладки
-    for tab, provider in zip(tabs, provider_names):
-        scan_data = latest_scans[provider]
-        scan_id = scan_data["id"]
+    with st.expander("📄 Читати оригінальний текст відповіді ШІ", expanded=False):
+        if raw_text:
+            # Підсвічуємо наш бренд, якщо він є в проекті
+            my_brand_name = st.session_state.get("current_project", {}).get("brand_name", "")
+            if my_brand_name:
+                # Проста підсвітка жирним
+                display_text = raw_text.replace(my_brand_name, f"**{my_brand_name}**")
+                st.markdown(display_text)
+            else:
+                st.markdown(raw_text)
+        else:
+            st.warning("Текст відповіді відсутній у базі (можливо, це старий скан до оновлення n8n).")
+
+    # --- БЛОК 2: ТАБЛИЦЯ БРЕНДІВ (Згадки) ---
+    st.subheader("📊 Знайдені бренди")
+    try:
+        mentions = (
+            supabase.table("brand_mentions")
+            .select("*")
+            .eq("scan_result_id", scan_id)
+            .order("rank_position", nullsfirst=False)
+            .execute()
+            .data
+        )
         
-        with tab:
-            mentions = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
-            sources = supabase.table("extracted_sources").select("*").eq("scan_result_id", scan_id).execute().data
+        if mentions:
+            # Робимо красиву табличку
+            df = pd.DataFrame(mentions)
             
-            my_brand_info = next((m for m in mentions if m.get("is_my_brand")), None)
+            # Вибираємо і перейменовуємо колонки для краси
+            show_df = df[["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]]
+            show_df.columns = ["Ранг", "Бренд", "Тональність", "К-сть згадок", "Це ми?"]
             
-            m1, m2, m3, m4 = st.columns(4)
-            rank = my_brand_info['rank_position'] if my_brand_info else None
-            m1.metric("Наша Позиція", f"#{rank}" if rank else "❌")
-            sent = my_brand_info['sentiment_score'] if my_brand_info else 0
-            m2.metric("Тональність", f"{sent}/100")
-            m3.metric("Всього брендів", len(mentions))
-            off_sources = len([s for s in sources if s.get("is_official")])
-            m4.metric("Офіційні джерела", f"{off_sources} / {len(sources)}")
+            # Форматуємо
+            show_df["Це ми?"] = show_df["Це ми?"].apply(lambda x: "✅" if x else "")
             
-            st.divider()
+            st.dataframe(show_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Брендів у цьому скануванні не знайдено.")
             
-            col_text, col_tables = st.columns([1.5, 1])
-            with col_text:
-                st.subheader("📝 Відповідь моделі")
-                raw_html = scan_data.get("raw_response") or "_Текст відсутній_"
-                st.markdown(f'<div class="ai-response-box">{raw_html}</div>', unsafe_allow_html=True)
-                st.caption(f"ID: {scan_id} | {scan_data['created_at'][:16]}")
-
-            with col_tables:
-                st.subheader("📊 Знайдені Бренди")
-                if mentions:
-                    df_m = pd.DataFrame(mentions)
-                    cols = ['brand_name', 'rank_position', 'sentiment_score']
-                    st.dataframe(df_m[cols], use_container_width=True, hide_index=True)
-                else:
-                    st.info("Брендів не знайдено.")
-
-                st.subheader("🔗 Джерела")
-                if sources:
-                    df_s = pd.DataFrame(sources)
-                    df_s['Official'] = df_s['is_official'].apply(lambda x: "✅" if x else "")
-                    st.dataframe(df_s[['domain', 'Official']], use_container_width=True, hide_index=True)
-                else:
-                    st.info("Джерел не знайдено.")
+    except Exception as e:
+        st.error(f"Помилка завантаження брендів: {e}")
 
 
 def show_keywords_page():
