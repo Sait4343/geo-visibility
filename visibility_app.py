@@ -2233,7 +2233,6 @@ def show_admin_page():
                 st.write("") # Відступ
 
                 # 2. Збираємо детальну статистику по кожному клієнту
-                # (Це цикл, тому при 100+ клієнтах краще робити SQL View, але поки так)
                 client_data = []
                 
                 with st.spinner("Завантаження статистики по клієнтах..."):
@@ -2253,6 +2252,11 @@ def show_admin_page():
                         assets_list = [a['domain_or_url'] for a in assets_res.data]
                         assets_str = ", ".join(assets_list) if assets_list else "-"
 
+                        # Г. CRON Статус (НОВЕ)
+                        is_cron = p.get("cron_enabled", False)
+                        cron_status = "✅ ON" if is_cron else "⏸️ OFF"
+                        cron_freq = p.get("cron_frequency", "-") if is_cron else "-"
+
                         client_data.append({
                             "ID": pid,
                             "User (Email)": p.get("user_id", "N/A"),
@@ -2260,6 +2264,8 @@ def show_admin_page():
                             "Домен": p.get("domain"),
                             "Регіон": p.get("region", "UA"),
                             "Статус": p.get("status", "trial").upper(),
+                            "CRON": cron_status,    # <--- Додано
+                            "Частота": cron_freq,   # <--- Додано
                             "Запитів": kw_count,
                             "Аналізів": scan_count,
                             "Джерела": assets_str,
@@ -2274,7 +2280,8 @@ def show_admin_page():
                     use_container_width=True,
                     column_config={
                         "ID": st.column_config.TextColumn("ID", help="Скопіюйте це ID для редагування", width="small"),
-                        "Статус": st.column_config.TextColumn("Статус", help="Trial або Active"),
+                        "Статус": st.column_config.TextColumn("Статус", help="Trial або Active", width="small"),
+                        "CRON": st.column_config.TextColumn("Авто-Скан", width="small"), # <--- Додано
                         "Запитів": st.column_config.ProgressColumn("Запитів", format="%d", min_value=0, max_value=max(df["Запитів"].max(), 10)),
                         "Аналізів": st.column_config.NumberColumn("Запусків"),
                         "Джерела": st.column_config.TextColumn("Whitelist", width="medium")
@@ -2350,7 +2357,7 @@ def show_admin_page():
                 else:
                     st.warning("Вкажіть User ID та Назву бренду.")
 
-    # ========================================================
+   # ========================================================
     # TAB 3: РЕДАГУВАННЯ (ЗМІНА СТАТУСУ, КРОН)
     # ========================================================
     with tab_edit:
@@ -2371,32 +2378,63 @@ def show_admin_page():
                 curr_data = supabase.table("projects").select("*").eq("id", pid).single().execute().data
                 
                 st.divider()
+                
                 with st.form("edit_client_form"):
+                    st.subheader("1. Загальні налаштування")
                     c1, c2 = st.columns(2)
                     with c1:
                         edit_brand = st.text_input("Назва бренду", value=curr_data.get("brand_name"))
-                        edit_status = st.selectbox("Статус (План)", ["trial", "active", "expired"], index=["trial", "active", "expired"].index(curr_data.get("status", "trial")))
+                        # Знаходимо індекс поточного статусу
+                        status_opts = ["trial", "active", "expired"]
+                        curr_status = curr_data.get("status", "trial")
+                        st_idx = status_opts.index(curr_status) if curr_status in status_opts else 0
+                        
+                        edit_status = st.selectbox("Статус (План)", status_opts, index=st_idx)
                     
                     with c2:
-                        edit_region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=["UA", "US", "EU", "Global"].index(curr_data.get("region", "UA")))
-                        # Заглушки для майбутнього функціоналу
-                        edit_models = st.multiselect("Активні моделі (Доступ)", ["Perplexity", "GPT-4o", "Gemini"], default=["Perplexity", "GPT-4o", "Gemini"])
-                        edit_cron = st.checkbox("Автоматичний аналіз (CRON)", value=False, help="Поки не активний")
+                        region_opts = ["UA", "US", "EU", "Global"]
+                        curr_reg = curr_data.get("region", "UA")
+                        reg_idx = region_opts.index(curr_reg) if curr_reg in region_opts else 0
+                        
+                        edit_region = st.selectbox("Регіон", region_opts, index=reg_idx)
+                        
+                        # Моделі поки залишаємо візуально (можна додати логіку збереження в JSON пізніше)
+                        st.multiselect("Активні моделі (Доступ)", ["Perplexity", "GPT-4o", "Gemini"], default=["Perplexity", "GPT-4o", "Gemini"], disabled=True)
 
-                    st.markdown("**Системна інформація:**")
-                    st.caption(f"Project ID: {pid}")
-                    st.caption(f"Created At: {curr_data.get('created_at')}")
+                    # --- БЛОК CRON (НОВИЙ) ---
+                    st.divider()
+                    st.subheader("2. Автоматизація (CRON)")
+                    
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        # Чекбокс бере значення з бази (Default: False)
+                        edit_cron_enabled = st.checkbox("✅ Увімкнути авто-сканування", value=curr_data.get("cron_enabled", False))
+                    
+                    with cc2:
+                        # Частота береться з бази (Default: daily)
+                        freq_opts = ["daily", "weekly", "monthly"]
+                        curr_freq = curr_data.get("cron_frequency", "daily")
+                        freq_idx = freq_opts.index(curr_freq) if curr_freq in freq_opts else 0
+                        
+                        edit_cron_freq = st.selectbox("Частота запуску", freq_opts, index=freq_idx)
+
+                    st.markdown("---")
+                    st.caption(f"Project ID: {pid} | Created: {curr_data.get('created_at')}")
 
                     submitted_edit = st.form_submit_button("💾 Зберегти зміни", type="primary")
                     
                     if submitted_edit:
                         try:
+                            # Оновлюємо ВСІ поля, включаючи CRON
                             supabase.table("projects").update({
                                 "brand_name": edit_brand,
                                 "status": edit_status,
-                                "region": edit_region
+                                "region": edit_region,
+                                "cron_enabled": edit_cron_enabled,   # <--- Зберігаємо статус крона
+                                "cron_frequency": edit_cron_freq     # <--- Зберігаємо частоту
                             }).eq("id", pid).execute()
-                            st.success("Дані оновлено!")
+                            
+                            st.success("Налаштування проекту оновлено!")
                             time.sleep(1)
                             st.rerun()
                         except Exception as e:
