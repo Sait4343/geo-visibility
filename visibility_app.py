@@ -725,48 +725,91 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Відображає детальну аналітику по конкретному запиту.
-    ВЕРСІЯ З ВНУТРІШНІМИ ІМПОРТАМИ (Виправляє NameError)
+    Відображає детальну аналітику по конкретному запиту з історією та вкладками моделей.
     """
-    # 1. ЗАХИСНІ ІМПОРТИ (Це виправить помилку!)
     import pandas as pd
     import streamlit as st
     
-    # Перевірка підключення до бази
+    # --- 0. ПІДКЛЮЧЕННЯ ДО БАЗИ (Safety Check) ---
     if 'supabase' not in globals():
-        # Спробуємо дістати з сесії, якщо глобальна змінна невидима
         if 'supabase' in st.session_state:
-            supabase = st.session_state['supabase'] # Локальна змінна
+            supabase = st.session_state['supabase']
         else:
-            st.error("🚨 Критична помилка: Змінна 'supabase' не знайдена. Перевірте підключення на початку файлу.")
+            st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
             return
     else:
-        # Використовуємо глобальну
         supabase = globals()['supabase']
 
-    # -------------------------------------------
-    
-    # 2. Кнопка "Назад"
-    if st.button("⬅ Назад до списку", key="back_btn"):
-        st.session_state["focus_keyword_id"] = None
-        st.rerun()
-
-    # 3. Отримуємо текст запиту
+    # --- 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ ---
     try:
-        kw_data = supabase.table("keywords").select("*").eq("id", kw_id).execute()
-        if not kw_data.data:
+        kw_resp = supabase.table("keywords").select("*").eq("id", kw_id).execute()
+        if not kw_resp.data:
             st.error("Запит не знайдено.")
+            if st.button("⬅ Назад"):
+                st.session_state["focus_keyword_id"] = None
+                st.rerun()
             return
-        keyword_text = kw_data.data[0]["keyword_text"]
+        
+        keyword_record = kw_resp.data[0]
+        keyword_text = keyword_record["keyword_text"]
+        project_id = keyword_record["project_id"]
     except Exception as e:
-        st.error(f"Помилка БД (Keywords): {e}")
+        st.error(f"Помилка БД: {e}")
         return
 
-    st.title(f"🔍 Аналіз: {keyword_text}")
+    # --- 2. HEADER ТА НАВІГАЦІЯ ---
+    col_back, col_title = st.columns([1, 5])
+    with col_back:
+        if st.button("⬅ Назад", key="back_main"):
+            st.session_state["focus_keyword_id"] = None
+            st.rerun()
+    
+    with col_title:
+        st.title(f"🔍 {keyword_text}")
 
-    # 4. Отримуємо результати сканування
+    # --- 3. БЛОК УПРАВЛІННЯ (РЕДАГУВАННЯ ТА СКАНУВАННЯ) ---
+    with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
+        c1, c2 = st.columns(2)
+        
+        # А: Редагування тексту
+        with c1:
+            st.subheader("✏️ Редагувати запит")
+            new_text = st.text_input("Текст запиту", value=keyword_text, key="edit_kw_input")
+            if st.button("💾 Зберегти зміни", key="save_kw_btn"):
+                if new_text and new_text != keyword_text:
+                    supabase.table("keywords").update({"keyword_text": new_text}).eq("id", kw_id).execute()
+                    st.success("Збережено!")
+                    st.rerun()
+
+        # Б: Запуск сканування
+        with c2:
+            st.subheader("🚀 Запустити тест")
+            available_models = ["perplexity", "gpt-4o", "gemini-1.5-pro"]
+            selected_models = st.multiselect(
+                "Оберіть моделі для тесту:", 
+                available_models, 
+                default=["perplexity"],
+                key="rescan_models"
+            )
+            
+            if st.button("▶️ Сканувати зараз", key="rescan_btn"):
+                if selected_models:
+                    proj = st.session_state.get("current_project", {})
+                    brand_name = proj.get("brand_name", "MyBrand")
+                    
+                    with st.spinner(f"Запускаємо {', '.join(selected_models)}..."):
+                        # Виклик існуючої функції n8n_trigger_analysis
+                        success = n8n_trigger_analysis(project_id, [new_text], brand_name, models=selected_models)
+                        if success:
+                            st.success("Задачу відправлено! Оновіть сторінку за хвилину.")
+                else:
+                    st.warning("Оберіть хоча б одну модель.")
+
+    st.divider()
+
+    # --- 4. ОТРИМАННЯ ВСІХ СКАНУВАНЬ ---
     try:
-        scans = (
+        scans_data = (
             supabase.table("scan_results")
             .select("*")
             .eq("keyword_id", kw_id)
@@ -775,126 +818,119 @@ def show_keyword_details(kw_id):
             .data
         )
     except Exception as e:
-        st.error(f"Не вдалося завантажити сканування: {e}")
-        scans = []
+        st.error(f"Не вдалося завантажити історію: {e}")
+        scans_data = []
 
-    if not scans:
-        st.info("⚠️ Для цього запиту ще немає результатів. Натисніть 'Просканувати' у списку запитів.")
-        return 
+    if not scans_data:
+        st.info("📭 Для цього запиту ще немає результатів. Скористайтеся формою вище, щоб запустити сканування.")
+        return
 
-    last_scan = scans[0]
-    scan_id = last_scan["id"]
-    
-    # =======================================================
-    # БЛОК 1: ВІДПОВІДЬ ШІ
-    # =======================================================
-    raw_text = last_scan.get("raw_response", "")
-    provider = last_scan.get("provider", "Unknown")
+    # --- 5. ВКЛАДКИ ПО МОДЕЛЯХ (TABS) ---
+    # Визначаємо, які моделі взагалі є в базі + стандартні
+    # (Щоб завжди були вкладки, навіть якщо даних ще немає)
+    model_tabs_names = ["perplexity", "gpt-4o", "gemini-1.5-pro"]
+    tabs = st.tabs([m.upper() for m in model_tabs_names])
 
-    st.markdown("---")
-    st.subheader(f"📝 Повна відповідь від {str(provider).capitalize()}")
-    st.caption(f"Дата сканування: {last_scan.get('created_at', '')[:10]}")
+    for tab, model_key in zip(tabs, model_tabs_names):
+        with tab:
+            # Фільтруємо сканування тільки для цієї моделі
+            # (Ми шукаємо входження, бо іноді provider може бути 'perplexity/sonar' тощо)
+            model_scans = [s for s in scans_data if model_key in (s.get("provider") or "").lower()]
+            
+            if not model_scans:
+                st.write(f"📉 Даних від **{model_key}** ще немає.")
+                continue
 
-    with st.expander("📄 Читати оригінальний текст відповіді ШІ", expanded=False):
-        if raw_text:
-            my_brand_name = st.session_state.get("current_project", {}).get("brand_name", "")
-            if my_brand_name:
-                display_text = raw_text.replace(my_brand_name, f"**{my_brand_name}**")
-                st.markdown(display_text)
-            else:
-                st.markdown(raw_text)
-        else:
-            st.warning("Текст відповіді відсутній (можливо, це старий скан).")
-
-    # =======================================================
-    # БЛОК 2: ТАБЛИЦЯ БРЕНДІВ
-    # =======================================================
-    st.subheader("📊 Знайдені бренди")
-    try:
-        mentions = (
-            supabase.table("brand_mentions")
-            .select("*")
-            .eq("scan_result_id", scan_id)
-            .order("rank_position", nullsfirst=False)
-            .execute()
-            .data
-        )
-        
-        if mentions:
-            df = pd.DataFrame(mentions)
-            # Перевірка наявності колонок перед виводом
-            cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
-            # Залишаємо тільки ті колонки, які реально є в df
-            available_cols = [c for c in cols if c in df.columns]
+            # --- ВИПАДАЮЧИЙ СПИСОК ІСТОРІЇ ---
+            # Словник: "2023-10-12 14:30" -> scan_object
+            history_options = {s["created_at"][:16].replace("T", " "): s for s in model_scans}
             
-            show_df = df[available_cols].copy()
-            
-            # Перейменування (безпечне)
-            rename_map = {
-                "rank_position": "Ранг",
-                "brand_name": "Бренд",
-                "sentiment_score": "Тональність",
-                "mention_count": "К-сть згадок",
-                "is_my_brand": "Це ми?"
-            }
-            show_df.rename(columns=rename_map, inplace=True)
-            
-            if "Це ми?" in show_df.columns:
-                show_df["Це ми?"] = show_df["Це ми?"].apply(lambda x: "✅" if x else "")
-            
-            st.dataframe(show_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Брендів не знайдено.")
-            
-    except Exception as e:
-        st.error(f"Помилка таблиці брендів: {e}")
-
-    # =======================================================
-    # БЛОК 3: ДЖЕРЕЛА
-    # =======================================================
-    st.subheader("🔗 Знайдені джерела")
-    try:
-        sources_data = (
-            supabase.table("extracted_sources")
-            .select("*")
-            .eq("scan_result_id", scan_id)
-            .execute()
-            .data
-        )
-
-        if sources_data:
-            df_sources = pd.DataFrame(sources_data)
-            
-            # Вибираємо колонки
-            cols_src = ["domain", "url", "is_official"]
-            available_src = [c for c in cols_src if c in df_sources.columns]
-            
-            show_sources_df = df_sources[available_src].copy()
-            
-            rename_src = {
-                "domain": "Домен",
-                "url": "Посилання",
-                "is_official": "Офіційне?"
-            }
-            show_sources_df.rename(columns=rename_src, inplace=True)
-            
-            if "Офіційне?" in show_sources_df.columns:
-                show_sources_df["Офіційне?"] = show_sources_df["Офіційне?"].apply(lambda x: "✅" if x else "")
-
-            st.dataframe(
-                show_sources_df, 
-                use_container_width=True, 
-                hide_index=True,
-                column_config={
-                    "Посилання": st.column_config.LinkColumn("Посилання")
-                }
+            selected_time = st.selectbox(
+                f"📅 Оберіть дату сканування ({model_key}):", 
+                list(history_options.keys()),
+                key=f"hist_sel_{model_key}"
             )
-        else:
-            st.info("Джерел для цього сканування не знайдено. Спробуйте запустити новий скан.")
+            
+            # Отримуємо конкретний об'єкт сканування
+            current_scan = history_options[selected_time]
+            scan_id = current_scan["id"]
 
-    except Exception as e:
-        st.error(f"Помилка таблиці джерел: {e}")
+            # === ВІДОБРАЖЕННЯ ДАНИХ (Як раніше) ===
+            
+            # 1. Текст відповіді
+            raw_text = current_scan.get("raw_response", "")
+            st.markdown("##### 📝 Відповідь ШІ")
+            with st.expander("Читати повний текст", expanded=False):
+                if raw_text:
+                    my_brand = st.session_state.get("current_project", {}).get("brand_name", "")
+                    if my_brand:
+                        st.markdown(raw_text.replace(my_brand, f"**{my_brand}**"))
+                    else:
+                        st.markdown(raw_text)
+                else:
+                    st.caption("Текст відсутній.")
 
+            # 2. Таблиця Брендів
+            st.markdown("##### 📊 Знайдені бренди")
+            try:
+                mentions = (
+                    supabase.table("brand_mentions")
+                    .select("*")
+                    .eq("scan_result_id", scan_id)
+                    .order("rank_position", nullsfirst=False)
+                    .execute()
+                    .data
+                )
+                if mentions:
+                    df_brands = pd.DataFrame(mentions)
+                    cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
+                    avail_cols = [c for c in cols if c in df_brands.columns]
+                    show_df = df_brands[avail_cols].copy()
+                    
+                    rename_map = {
+                        "rank_position": "Ранг", "brand_name": "Бренд", 
+                        "sentiment_score": "Тон", "mention_count": "Згадок", "is_my_brand": "Ми?"
+                    }
+                    show_df.rename(columns=rename_map, inplace=True)
+                    if "Ми?" in show_df.columns:
+                        show_df["Ми?"] = show_df["Ми?"].apply(lambda x: "✅" if x else "")
+                    
+                    st.dataframe(show_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Брендів не знайдено.")
+            except Exception as e:
+                st.error(f"Помилка брендів: {e}")
+
+            # 3. Таблиця Джерел
+            st.markdown("##### 🔗 Джерела")
+            try:
+                sources = (
+                    supabase.table("extracted_sources")
+                    .select("*")
+                    .eq("scan_result_id", scan_id)
+                    .execute()
+                    .data
+                )
+                if sources:
+                    df_src = pd.DataFrame(sources)
+                    s_cols = ["domain", "url", "is_official"]
+                    s_avail = [c for c in s_cols if c in df_src.columns]
+                    show_src = df_src[s_avail].copy()
+                    
+                    show_src.rename(columns={"domain": "Домен", "url": "URL", "is_official": "Оф?"}, inplace=True)
+                    if "Оф?" in show_src.columns:
+                        show_src["Оф?"] = show_src["Оф?"].apply(lambda x: "✅" if x else "")
+
+                    st.dataframe(
+                        show_src, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config={"URL": st.column_config.LinkColumn("URL")}
+                    )
+                else:
+                    st.info("Джерел не знайдено.")
+            except Exception as e:
+                st.error(f"Помилка джерел: {e}")
 
 def show_keywords_page():
     """
