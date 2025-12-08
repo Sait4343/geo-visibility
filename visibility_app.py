@@ -1522,7 +1522,10 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    FIX: Виправлено KeyError: 'url' (автоматичне створення колонки).
+    Логіка: 
+    1. Беремо URL з бази.
+    2. Python сам витягує з них домени (нормалізація).
+    3. Будуємо два окремі звіти: по Доменах і по URL.
     """
     import pandas as pd
     import streamlit as st
@@ -1554,10 +1557,11 @@ def show_sources_page():
     
     # === 1. ЗАВАНТАЖЕННЯ ДАНИХ ===
     try:
-        # Whitelist
+        # Whitelist (Офіційні сайти)
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
         assets = assets_resp.data if assets_resp.data else []
-        whitelist = [a['domain_or_url'] for a in assets]
+        # Список доменів для перевірки (нормалізуємо їх теж для точності)
+        whitelist = [a['domain_or_url'].replace("https://", "").replace("http://", "").strip().rstrip("/") for a in assets]
 
         # Скани та Джерела
         scans_q = supabase.table("scan_results").select("id, provider").eq("project_id", proj["id"]).execute()
@@ -1565,6 +1569,7 @@ def show_sources_page():
         scan_ids = list(scan_map.keys())
 
         if scan_ids:
+            # Завантажуємо URL
             sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
             df_sources = pd.DataFrame(sources_resp.data)
         else:
@@ -1574,41 +1579,35 @@ def show_sources_page():
         st.error(f"Помилка завантаження даних: {e}")
         return
 
-    # === 2. ПОПЕРЕДНЯ ОБРОБКА (SAFETY FIX) ===
+    # === 2. ОБРОБКА ДАНИХ (PYTHON MAGIC) ===
     
-    # 🔥 ГОЛОВНЕ ВИПРАВЛЕННЯ: Гарантуємо, що колонки існують
-    if not df_sources.empty:
-        if 'url' not in df_sources.columns:
-            df_sources['url'] = None # Створюємо пусту колонку, щоб не було KeyError
-        if 'domain' not in df_sources.columns:
-            df_sources['domain'] = None
-    else:
-        # Якщо даних немає взагалі, створюємо пустий DF з потрібними колонками
-        df_sources = pd.DataFrame(columns=['url', 'domain', 'scan_result_id', 'provider'])
-
-    # Функція нормалізації
-    def extract_clean_domain(url_str):
-        if not url_str: return "unknown"
+    # Функція: перетворює "https://www.forbes.com/article" -> "forbes.com"
+    def get_domain_from_url(url_str):
+        if not url_str: return None
         try:
-            txt = str(url_str).strip()
+            txt = str(url_str).strip().lower()
             if not txt.startswith(('http://', 'https://')):
                 txt = 'http://' + txt
             parsed = urlparse(txt).netloc
-            return parsed.replace('www.', '').lower()
+            return parsed.replace('www.', '')
         except:
-            return "unknown"
+            return None
 
     if not df_sources.empty:
-        # Провайдер
+        # Гарантуємо, що колонка URL існує
+        if 'url' not in df_sources.columns:
+            df_sources['url'] = None
+
+        # 1. Прив'язуємо ЛЛМ
         df_sources['provider'] = df_sources['scan_result_id'].map(scan_map)
         
-        # Заповнюємо домен (якщо його немає в базі, витягуємо з URL)
-        # Використовуємо .apply тільки до рядків, де url не пустий
-        df_sources['domain'] = df_sources.apply(
-            lambda x: x['domain'] if x['domain'] else extract_clean_domain(x['url']), axis=1
-        )
+        # 2. Створюємо колонку 'clean_domain' прямо тут
+        df_sources['clean_domain'] = df_sources['url'].apply(get_domain_from_url)
+        
+        # Видаляємо пусті (технічні помилки парсингу)
+        df_sources = df_sources.dropna(subset=['clean_domain'])
     
-    # === 3. ВКЛАДКИ ===
+    # === 3. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ===
     tab1, tab2, tab3 = st.tabs(["🛡️ Мої Активи", "🌐 Ренкінг доменів", "📄 Топ Сторінок (URL)"])
 
     # -------------------------------------------------------
@@ -1649,16 +1648,17 @@ def show_sources_page():
             st.info("Список пустий.")
 
     # -------------------------------------------------------
-    # TAB 2: РЕНКІНГ ДОМЕНІВ
+    # TAB 2: РЕНКІНГ ДОМЕНІВ (Групуємо по clean_domain)
     # -------------------------------------------------------
     with tab2:
+        # Фільтр
         c_filter, _ = st.columns([2, 2])
         with c_filter:
             sel_models_tab2 = st.multiselect("Фільтр ЛЛМ:", ALL_MODELS_KEYS, default=ALL_MODELS_KEYS, key="filter_domains")
         
-        # Фільтрація
         if not df_sources.empty and sel_models_tab2:
             sel_tech = [MODEL_MAPPING[m] for m in sel_models_tab2]
+            # Фільтруємо
             mask = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech))
             df_tab2 = df_sources[mask]
         else:
@@ -1667,36 +1667,37 @@ def show_sources_page():
         st.markdown(f"##### 🏆 Топ Доменів")
         
         if not df_tab2.empty:
-            # Групуємо (тільки якщо є дані в колонці domain)
-            if df_tab2['domain'].notna().any():
-                domain_stats = df_tab2.groupby('domain').agg(
-                    Mentions=('id', 'count'),
-                    Queries=('scan_result_id', 'nunique')
-                ).reset_index().sort_values('Mentions', ascending=False)
+            # ГРУПУВАННЯ ПО ДОМЕНУ
+            domain_stats = df_tab2.groupby('clean_domain').agg(
+                Mentions=('id', 'count'),
+                Queries=('scan_result_id', 'nunique')
+            ).reset_index().sort_values('Mentions', ascending=False)
 
-                def check_off(d): return any(w in str(d) for w in whitelist)
-                domain_stats['Type'] = domain_stats['domain'].apply(lambda x: "✅ Офіційний" if check_off(x) else "🔗 Зовнішній")
-                
-                show_dom = domain_stats[['domain', 'Type', 'Mentions', 'Queries']].copy()
-                show_dom.columns = ['Домен', 'Тип', 'К-сть цитувань', 'Охоплення запитів']
+            # Перевірка на офіційність (пошук входження)
+            def check_off(d): 
+                return any(w in d for w in whitelist)
 
-                st.dataframe(
-                    show_dom, 
-                    use_container_width=True,
-                    column_config={
-                        "К-сть цитувань": st.column_config.ProgressColumn("Цитувань", format="%d", min_value=0, max_value=int(show_dom['К-сть цитувань'].max()))
-                    },
-                    hide_index=True
-                )
-            else:
-                st.info("Доменів не знайдено (спробуйте запустити новий скан).")
+            domain_stats['Type'] = domain_stats['clean_domain'].apply(lambda x: "✅ Офіційний" if check_off(x) else "🔗 Зовнішній")
+            
+            show_dom = domain_stats[['clean_domain', 'Type', 'Mentions', 'Queries']].copy()
+            show_dom.columns = ['Домен', 'Тип', 'К-сть цитувань', 'Охоплення запитів']
+
+            st.dataframe(
+                show_dom, 
+                use_container_width=True,
+                column_config={
+                    "К-сть цитувань": st.column_config.ProgressColumn("Цитувань", format="%d", min_value=0, max_value=int(show_dom['К-сть цитувань'].max()))
+                },
+                hide_index=True
+            )
         else:
-            st.info("Даних немає.")
+            st.info("Даних немає або не обрано моделі.")
 
     # -------------------------------------------------------
-    # TAB 3: ТОП СТОРІНОК (URL)
+    # TAB 3: ТОП СТОРІНОК (Групуємо по url)
     # -------------------------------------------------------
     with tab3:
+        # Фільтр
         c_filter_url, _ = st.columns([2, 2])
         with c_filter_url:
             sel_models_tab3 = st.multiselect("Фільтр ЛЛМ:", ALL_MODELS_KEYS, default=ALL_MODELS_KEYS, key="filter_urls")
@@ -1710,31 +1711,23 @@ def show_sources_page():
 
         st.markdown("##### 📄 Топ Конкретних Сторінок")
         
-        # Перевіряємо наявність URL перед групуванням
-        if not df_tab3.empty and df_tab3['url'].notna().any():
-            # Беремо тільки не пусті URL
-            df_urls = df_tab3[df_tab3['url'].notna() & (df_tab3['url'] != "")]
-            
-            if not df_urls.empty:
-                try:
-                    url_stats = df_urls.groupby('url').agg(Mentions=('id', 'count')).reset_index()
-                    url_stats = url_stats.sort_values('Mentions', ascending=False).head(100)
+        if not df_tab3.empty:
+            # ГРУПУВАННЯ ПО URL
+            url_stats = df_tab3.groupby('url').agg(
+                Mentions=('id', 'count')
+            ).reset_index().sort_values('Mentions', ascending=False).head(100)
 
-                    st.dataframe(
-                        url_stats,
-                        use_container_width=True,
-                        column_config={
-                            "url": st.column_config.LinkColumn("Посилання"),
-                            "Mentions": st.column_config.NumberColumn("К-сть цитувань")
-                        },
-                        hide_index=True
-                    )
-                except Exception as e:
-                    st.error(f"Помилка групування URL: {e}")
-            else:
-                st.info("URL-адреси відсутні.")
+            st.dataframe(
+                url_stats,
+                use_container_width=True,
+                column_config={
+                    "url": st.column_config.LinkColumn("Посилання"),
+                    "Mentions": st.column_config.NumberColumn("К-сть цитувань")
+                },
+                hide_index=True
+            )
         else:
-            st.info("Немає даних URL. (Переконайтеся, що n8n записує поле 'url').")
+            st.info("Даних немає.")
             
 def show_chat_page():
     proj = st.session_state.get("current_project")
