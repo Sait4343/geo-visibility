@@ -753,7 +753,7 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Відображає детальну аналітику по запиту з KPI картками перед відповіддю.
+    Відображає детальну аналітику по запиту з KPI картками у стилі Virshi (Green/White).
     """
     import pandas as pd
     import streamlit as st
@@ -768,7 +768,7 @@ def show_keyword_details(kw_id):
     else:
         supabase = globals()['supabase']
 
-    # Локальний мапінг (щоб уникнути помилок)
+    # Локальний мапінг
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
@@ -793,33 +793,31 @@ def show_keyword_details(kw_id):
         return
 
     # --- 2. HEADER ---
-    col_back, col_title = st.columns([1, 6])
+    col_back, col_title = st.columns([1, 10])
     with col_back:
-        if st.button("⬅ Назад", key="back_main"):
+        if st.button("⬅", key="back_main", help="Назад до списку"):
             st.session_state["focus_keyword_id"] = None
             st.rerun()
     
     with col_title:
-        st.title(f"🔍 {keyword_text}")
+        st.markdown(f"<h2 style='margin-top: -10px;'>🔍 {keyword_text}</h2>", unsafe_allow_html=True)
 
-    # --- 3. БЛОК УПРАВЛІННЯ ---
+    # --- 3. БЛОК УПРАВЛІННЯ (Прихований в експандер для чистоти) ---
     with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
-            st.subheader("✏️ Редагувати запит")
-            new_text = st.text_input("Текст запиту", value=keyword_text, key="edit_kw_input")
-            if st.button("💾 Зберегти зміни", key="save_kw_btn"):
+            new_text = st.text_input("Редагувати запит", value=keyword_text, key="edit_kw_input")
+            if st.button("💾 Зберегти", key="save_kw_btn"):
                 if new_text and new_text != keyword_text:
                     supabase.table("keywords").update({"keyword_text": new_text}).eq("id", kw_id).execute()
                     st.success("Збережено!")
                     st.rerun()
 
         with c2:
-            st.subheader("🚀 Запустити тест")
             model_choices = list(MODEL_MAPPING.keys())
-            selected_models_ui = st.multiselect("Оберіть ЛЛМ:", model_choices, default=["Perplexity"], key="rescan_models_select")
+            selected_models_ui = st.multiselect("Запустити пересканування:", model_choices, default=["Perplexity"], key="rescan_models_select")
             
-            if st.button("▶️ Сканувати зараз", key="rescan_btn"):
+            if st.button("🚀 Сканувати", key="rescan_btn"):
                 if selected_models_ui:
                     proj = st.session_state.get("current_project", {})
                     brand_name = proj.get("brand_name", "MyBrand")
@@ -830,7 +828,7 @@ def show_keyword_details(kw_id):
                 else:
                     st.warning("Оберіть хоча б одну ЛЛМ.")
 
-    st.divider()
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # --- 4. ЗАВАНТАЖЕННЯ ІСТОРІЇ ---
     try:
@@ -862,138 +860,145 @@ def show_keyword_details(kw_id):
                 st.write(f"📉 Даних від **{ui_model_name}** ще немає.")
                 continue
 
+            # Вибір дати
             history_options = {s["created_at"][:16].replace("T", " "): s for s in model_scans}
-            
-            selected_time = st.selectbox(
-                f"📅 Дата аналізу ({ui_model_name}):", 
-                list(history_options.keys()),
-                key=f"hist_sel_{tech_model_id}"
-            )
+            col_date, _ = st.columns([2, 4])
+            with col_date:
+                selected_time = st.selectbox(
+                    f"📅 Дата аналізу ({ui_model_name}):", 
+                    list(history_options.keys()),
+                    key=f"hist_sel_{tech_model_id}"
+                )
             
             current_scan = history_options[selected_time]
             scan_id = current_scan["id"]
 
             # =========================================================
-            # 👇 НОВА ЛОГІКА: КАРТКИ KPI (Згадки, Тон, Позиція, SOV)
+            # 👇 НОВИЙ UI: КАРТКИ KPI (Як на макеті)
             # =========================================================
             
-            # 1. Завантажуємо згадки для цього конкретного сканування
+            # 1. Завантажуємо згадки
             try:
                 mentions_kpi = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
             except:
                 mentions_kpi = []
 
-            # 2. Рахуємо метрики
-            total_market_mentions = 0
-            my_brand_data = None
+            # 2. Розрахунок метрик
+            total_market_mentions = sum(item.get("mention_count", 0) for item in mentions_kpi) if mentions_kpi else 0
+            my_brand_data = next((item for item in mentions_kpi if item.get("is_my_brand") is True), None)
 
-            if mentions_kpi:
-                # Рахуємо загальну кількість згадок всіх брендів
-                total_market_mentions = sum(item.get("mention_count", 0) for item in mentions_kpi)
-                # Шукаємо наш бренд
-                my_brand_data = next((item for item in mentions_kpi if item.get("is_my_brand") is True), None)
-
-            # 3. Визначаємо значення для карток
             if my_brand_data:
                 val_count = my_brand_data.get("mention_count", 0)
                 val_sentiment = my_brand_data.get("sentiment_score", "Нейтральний")
                 val_position = my_brand_data.get("rank_position", 0)
-                
-                # Розрахунок SOV (Share of Voice)
-                if total_market_mentions > 0:
-                    val_sov = (val_count / total_market_mentions) * 100
-                else:
-                    val_sov = 0
+                val_sov = (val_count / total_market_mentions * 100) if total_market_mentions > 0 else 0
             else:
-                # Якщо нашого бренду немає в списку
                 val_count = 0
                 val_sentiment = "Не згадано"
-                val_position = 0
+                val_position = 0 # Якщо не знайдено
                 val_sov = 0
 
-            # 4. Візуалізація карток (HTML/CSS)
+            # Колір для сентименту
+            sent_color = "#333"
+            if val_sentiment == "Позитивний": sent_color = "#00C896"
+            elif val_sentiment == "Негативний": sent_color = "#FF4B4B"
+            elif val_sentiment == "Не згадано": sent_color = "#999"
+
+            # 3. HTML/CSS Стилізація (Зелений контур, Тіні, Шрифт)
             st.markdown(f"""
             <style>
-                .kpi-container {{
-                    display: flex;
+                .virshi-kpi-container {{
+                    display: grid;
+                    grid-template-columns: repeat(4, 1fr);
                     gap: 15px;
-                    margin-bottom: 20px;
-                    flex-wrap: wrap;
+                    margin-bottom: 25px;
+                    font-family: 'Source Sans Pro', sans-serif;
                 }}
-                .kpi-card {{
-                    flex: 1;
-                    min-width: 140px;
+                .virshi-card {{
                     background-color: white;
-                    border: 2px solid #00C896; /* Зелений колір рамки */
-                    border-radius: 12px;
-                    padding: 15px;
+                    border: 1px solid #E0E0E0;
+                    border-top: 4px solid #00C896; /* Зелений верхній бордюр */
+                    border-radius: 8px;
+                    padding: 20px 15px;
                     text-align: center;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.04);
+                    transition: transform 0.2s;
                 }}
-                .kpi-title {{
+                .virshi-card:hover {{
+                    transform: translateY(-2px);
+                    box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+                }}
+                .virshi-label {{
                     color: #888;
                     font-size: 11px;
                     text-transform: uppercase;
+                    letter-spacing: 1px;
                     font-weight: 600;
-                    margin-bottom: 5px;
-                    letter-spacing: 0.5px;
+                    margin-bottom: 10px;
                 }}
-                .kpi-value {{
-                    color: #000;
-                    font-size: 22px;
+                .virshi-value {{
+                    color: #111;
+                    font-size: 28px;
                     font-weight: 700;
+                    line-height: 1.2;
                 }}
-                /* Адаптивність для мобільних */
-                @media (max-width: 600px) {{
-                    .kpi-container {{ flex-direction: column; }}
+                .virshi-sub {{
+                    font-size: 14px;
+                    color: {sent_color};
+                    font-weight: 600;
+                }}
+                /* Мобільна адаптація */
+                @media (max-width: 768px) {{
+                    .virshi-kpi-container {{ grid-template-columns: repeat(2, 1fr); }}
                 }}
             </style>
 
-            <div class="kpi-container">
-                <div class="kpi-card">
-                    <div class="kpi-title">КІЛЬКІСТЬ ЗГАДОК</div>
-                    <div class="kpi-value">{val_count}</div>
+            <div class="virshi-kpi-container">
+                <div class="virshi-card">
+                    <div class="virshi-label">Частка Голосу (SOV)</div>
+                    <div class="virshi-value">{val_sov:.1f}%</div>
                 </div>
-                <div class="kpi-card">
-                    <div class="kpi-title">ТОНАЛЬНІСТЬ</div>
-                    <div class="kpi-value" style="font-size: 18px;">{val_sentiment}</div>
+                <div class="virshi-card">
+                    <div class="virshi-label">Згадок Бренду</div>
+                    <div class="virshi-value">{val_count}</div>
                 </div>
-                <div class="kpi-card">
-                    <div class="kpi-title">ПОЗИЦІЯ БРЕНДУ</div>
-                    <div class="kpi-value">{val_position if val_position > 0 else "0"}</div>
+                <div class="virshi-card">
+                    <div class="virshi-label">Тональність</div>
+                    <div class="virshi-value virshi-sub">{val_sentiment}</div>
                 </div>
-                <div class="kpi-card">
-                    <div class="kpi-title">ЧАСТКА ГОЛОСУ</div>
-                    <div class="kpi-value">{val_sov:.1f}%</div>
+                <div class="virshi-card">
+                    <div class="virshi-label">Позиція у списку</div>
+                    <div class="virshi-value">{val_position if val_position > 0 else "-"}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
             # =========================================================
-            # ВІДОБРАЖЕННЯ ТЕКСТУ ТА ТАБЛИЦЬ (Як і було)
+            # ВІДПОВІДЬ ШІ (Зелений заголовок)
             # =========================================================
-
-            # Текст відповіді
             raw_text = current_scan.get("raw_response", "")
-            st.markdown("##### 📝 Відповідь ЛЛМ")
-            with st.expander("Читати повний текст", expanded=False):
+            
+            st.markdown("#### 📝 Відповідь ЛЛМ")
+            with st.container(border=True):
                 if raw_text:
                     my_brand = st.session_state.get("current_project", {}).get("brand_name", "")
-                    if my_brand:
-                        # Підсвітка бренду
-                        st.markdown(raw_text.replace(my_brand, f"**{my_brand}**"))
-                    else:
-                        st.markdown(raw_text)
+                    # Підсвітка бренду зеленим жирним
+                    highlighted_text = raw_text.replace(my_brand, f"<span style='color:#00C896; font-weight:bold;'>{my_brand}</span>")
+                    # Заміна markdown bold на зелений bold, якщо треба, або просто рендер
+                    st.markdown(highlighted_text, unsafe_allow_html=True)
                 else:
-                    st.caption("Текст відсутній.")
+                    st.caption("Текст відповіді не збережено.")
 
-            # Таблиця Брендів
-            st.markdown("##### 📊 Знайдені бренди")
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # =========================================================
+            # ТАБЛИЦІ (Clean Table Style)
+            # =========================================================
             
-            # (Ми вже завантажили mentions_kpi вище, використаємо їх)
+            # 1. БРЕНДИ
+            st.markdown("#### 📊 Конкурентний аналіз")
             if mentions_kpi:
                 df_brands = pd.DataFrame(mentions_kpi)
-                # Сортуємо по рангу
                 df_brands = df_brands.sort_values(by="rank_position", ascending=True)
                 
                 cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
@@ -1001,19 +1006,34 @@ def show_keyword_details(kw_id):
                 show_df = df_brands[avail_cols].copy()
                 
                 rename_map = {
-                    "rank_position": "Ранг", "brand_name": "Бренд", 
-                    "sentiment_score": "Тональність", "mention_count": "К-сть згадок", "is_my_brand": "Це ми?"
+                    "rank_position": "Позиція", 
+                    "brand_name": "Бренд", 
+                    "sentiment_score": "Настрій", 
+                    "mention_count": "Згадок", 
+                    "is_my_brand": "Це ми?"
                 }
                 show_df.rename(columns=rename_map, inplace=True)
+                
+                # Додаємо галочку
                 if "Це ми?" in show_df.columns:
                     show_df["Це ми?"] = show_df["Це ми?"].apply(lambda x: "✅" if x else "")
-                
-                st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+                st.dataframe(
+                    show_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "Позиція": st.column_config.NumberColumn("Позиція", format="%d"),
+                        "Згадок": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(show_df["Згадок"].max())),
+                    }
+                )
             else:
                 st.info("Брендів не знайдено.")
 
-            # Таблиця Джерел
-            st.markdown("##### 🔗 Джерела")
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # 2. ДЖЕРЕЛА
+            st.markdown("#### 🔗 Цитовані джерела")
             try:
                 sources = (
                     supabase.table("extracted_sources")
@@ -1028,21 +1048,23 @@ def show_keyword_details(kw_id):
                     s_avail = [c for c in s_cols if c in df_src.columns]
                     show_src = df_src[s_avail].copy()
                     
-                    show_src.rename(columns={"domain": "Домен", "url": "URL", "is_official": "Оф?"}, inplace=True)
-                    if "Оф?" in show_src.columns:
-                        show_src["Оф?"] = show_src["Оф?"].apply(lambda x: "✅" if x else "")
+                    show_src.rename(columns={"domain": "Домен", "url": "Посилання", "is_official": "Офіційне?"}, inplace=True)
+                    
+                    if "Офіційне?" in show_src.columns:
+                        show_src["Офіційне?"] = show_src["Офіційне?"].apply(lambda x: "✅" if x else "")
 
                     st.dataframe(
                         show_src, 
                         use_container_width=True, 
                         hide_index=True,
-                        column_config={"URL": st.column_config.LinkColumn("URL")}
+                        column_config={
+                            "Посилання": st.column_config.LinkColumn("Посилання")
+                        }
                     )
                 else:
-                    st.info("Джерел не знайдено.")
+                    st.caption("Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка джерел: {e}")
-
 def show_keywords_page():
     """
     Сторінка списку запитів з розширеним сортуванням та масовим вибором.
