@@ -2089,105 +2089,129 @@ def show_chat_page():
 
 
 def sidebar_menu():
+    from streamlit_option_menu import option_menu
+    
+    # Отримуємо дані користувача
+    user = st.session_state.get("user")
+    role = st.session_state.get("role", "user")
+    current_proj = st.session_state.get("current_project")
+
+    # 1. ВЕРХНЯ ЧАСТИНА: ПРОФІЛЬ
     with st.sidebar:
-        st.markdown(
-            '<div class="sidebar-logo-container"><img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png"></div>',
-            unsafe_allow_html=True,
-        )
+        # Отримуємо ім'я з метаданих або пошти
+        user_name = "Користувач"
+        if user:
+            meta = user.user_metadata
+            # Спробуємо знайти повне ім'я, інакше беремо email
+            full_name = meta.get("full_name") or meta.get("name")
+            if full_name:
+                user_name = full_name
+            else:
+                user_name = user.email.split("@")[0]
 
-        if st.session_state["role"] == "admin":
-            st.markdown("### 🛠 Admin Select")
+        # Відображення імені
+        st.markdown(f"### 👤 {user_name}")
+        
+        # Підпис для адміна
+        if role == "admin":
+            st.caption("🛡️ Статус Адміністратора")
+        
+        st.divider()
+
+        # 2. БЛОК ПРОЕКТУ
+        if role == "admin":
+            # --- ЛОГІКА ДЛЯ АДМІНА (Вибір будь-якого проекту) ---
             try:
-                projs = supabase.table("projects").select("*").execute().data
-                if projs:
-                    opts = {p["brand_name"]: p for p in projs}
-                    sel = st.selectbox("Project", list(opts.keys()))
-                    if (
-                        st.session_state.get("current_project", {}).get(
-                            "brand_name"
-                        )
-                        != sel
-                    ):
-                        st.session_state["current_project"] = opts[sel]
-                        st.rerun()
-            except Exception:
-                pass
+                # Завантажуємо всі проекти
+                if 'supabase' in globals():
+                    projs_resp = supabase.table("projects").select("id, brand_name, status").execute()
+                    projects_list = projs_resp.data
+                else:
+                    projects_list = []
 
-        st.divider()
+                # Формуємо список для пошуку: "Назва (ID)"
+                # Це дозволяє шукати і по назві, і по ID
+                options_map = {f"{p['brand_name']} (ID: {p['id']})": p for p in projects_list}
+                
+                # Знаходимо поточний індекс
+                current_index = 0
+                if current_proj:
+                    current_key = f"{current_proj['brand_name']} (ID: {current_proj['id']})"
+                    if current_key in options_map:
+                        current_index = list(options_map.keys()).index(current_key)
 
-        if st.session_state.get("current_project"):
-            p = st.session_state["current_project"]
-            st.markdown(
-                "<div class='sidebar-label'>Current Brand</div>",
-                unsafe_allow_html=True,
-            )
-            badge = (
-                "<span class='badge-trial'>TRIAL</span>"
-                if p.get("status") == "trial"
-                else "<span class='badge-active'>PRO</span>"
-            )
-            st.markdown(
-                f"**{p.get('brand_name') or p.get('name')}** {badge}",
-                unsafe_allow_html=True,
-            )
-
-            if p.get("status") == "trial":
-                st.markdown(
-                    '<a href="mailto:hi@virshi.ai" class="upgrade-btn">⭐ Підвищити план</a>',
-                    unsafe_allow_html=True,
+                selected_key = st.selectbox(
+                    "📂 Активний проект",
+                    options=list(options_map.keys()),
+                    index=current_index,
+                    placeholder="Оберіть проект...",
+                    help="Введіть Назву або ID для пошуку"
                 )
-            st.divider()
 
-        opts = [
-            "Дашборд",
-            "Перелік запитів",
-            "Джерела",
-            "Конкуренти",
-            "Рекомендації",
-        ]
-        icons = ["speedometer2", "list-ul", "hdd-network", "people", "lightbulb"]
+                # Оновлюємо проект, якщо змінився
+                if selected_key:
+                    new_proj = options_map[selected_key]
+                    if not current_proj or new_proj['id'] != current_proj['id']:
+                        st.session_state["current_project"] = new_proj
+                        st.rerun()
 
-        opts.append("GPT-Visibility")
-        icons.append("robot")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-        if st.session_state["role"] == "admin":
-            opts.append("Адмін")
-            icons.append("shield-lock")
+        else:
+            # --- ЛОГІКА ДЛЯ КОРИСТУВАЧА (Тільки перегляд) ---
+            if current_proj:
+                st.markdown(f"**📂 Проект:** {current_proj.get('brand_name')}")
+                # ID в експандері, щоб можна було скопіювати
+                with st.expander("🆔 ID Проекту"):
+                    st.code(current_proj.get('id'), language=None)
+            else:
+                st.warning("Проект не обрано")
 
-        default_index = 0
-        if st.session_state.get("force_page") in opts:
-            default_index = opts.index(st.session_state["force_page"])
-            st.session_state["force_page"] = None
+        st.write("") # Відступ
 
+    # 3. НАВІГАЦІЯ (Меню)
+    # Визначаємо, який пункт меню активний зараз (косметично)
+    # Але option_menu сам повертає вибір
+    
+    with st.sidebar:
         selected = option_menu(
-            menu_title=None,
-            options=opts,
-            icons=icons,
+            "Меню",
+            ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility", "Адмін"] if role == "admin" else ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility"],
+            icons=["speedometer2", "list-task", "router", "people", "lightbulb", "robot", "shield-lock"],
             menu_icon="cast",
-            default_index=default_index,
+            default_index=0,
             styles={
-                "nav-link-selected": {"background-color": "#8041F6"},
-                "container": {"padding": "0!important"},
-            },
+                "nav-link-selected": {"background-color": "#6c5ce7"},
+            }
         )
-        st.divider()
 
-        if st.session_state["user"]:
-            d = st.session_state.get("user_details", {})
-            full = f"{d.get('first_name','')} {d.get('last_name','')}".strip()
-            st.markdown(
-                f"<div class='sidebar-name'>{full}</div>", unsafe_allow_html=True
-            )
-            st.markdown("**Support:** [hi@virshi.ai](mailto:hi@virshi.ai)")
-            if st.button("Вийти"):
+    # 4. ФУТЕР (Статус + Вихід)
+    with st.sidebar:
+        st.divider()
+        
+        # Отримуємо статус
+        status_text = "TRIAL"
+        if st.session_state.get("current_project"):
+            status_text = st.session_state["current_project"].get("status", "TRIAL").upper()
+        
+        # Колір статусу
+        status_color = "#FFA500" if "TRIAL" in status_text else "#00C896" # Оранжевий або Зелений
+
+        # Верстка в дві колонки
+        c_stat, c_exit = st.columns([3, 1])
+        
+        with c_stat:
+            st.caption("Статус плану")
+            st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>● {status_text}</span>", unsafe_allow_html=True)
+        
+        with c_exit:
+            st.write("") # Вирівнювання
+            # Кнопка виходу (компактна)
+            if st.button("🚪", help="Вийти з акаунту"):
                 logout()
 
     return selected
-
-
-# =========================
-# 10. ROUTER
-# =========================
 
 
 def main():
