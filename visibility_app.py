@@ -2091,64 +2091,58 @@ def show_chat_page():
 def sidebar_menu():
     from streamlit_option_menu import option_menu
     
-    # Отримуємо дані користувача
+    # Отримуємо дані
     user = st.session_state.get("user")
     role = st.session_state.get("role", "user")
     current_proj = st.session_state.get("current_project")
 
-    # 1. ВЕРХНЯ ЧАСТИНА: ПРОФІЛЬ
     with st.sidebar:
-        # Отримуємо ім'я з метаданих або пошти
+        # 1. ЛОГОТИП (Повернуто!)
+        # Якщо у вас є файл logo.png або посилання, вставте його сюди
+        # st.image("logo.png", width=150) 
+        st.markdown("## 🚀 VIRSHI") # Заглушка, якщо картинки немає
+
+        # Профіль
         user_name = "Користувач"
         if user:
             meta = user.user_metadata
-            # Спробуємо знайти повне ім'я, інакше беремо email
-            full_name = meta.get("full_name") or meta.get("name")
-            if full_name:
-                user_name = full_name
-            else:
-                user_name = user.email.split("@")[0]
+            user_name = meta.get("full_name") or meta.get("name") or user.email.split("@")[0]
 
-        # Відображення імені
-        st.markdown(f"### 👤 {user_name}")
+        st.caption(f"👤 {user_name}")
         
-        # Підпис для адміна
         if role == "admin":
-            st.caption("🛡️ Статус Адміністратора")
+            st.caption("🛡️ Admin Mode")
         
         st.divider()
 
-        # 2. БЛОК ПРОЕКТУ
+        # 2. ВИБІР ПРОЕКТУ (ДЛЯ АДМІНА - ПОШУК)
         if role == "admin":
-            # --- ЛОГІКА ДЛЯ АДМІНА (Вибір будь-якого проекту) ---
             try:
-                # Завантажуємо всі проекти
                 if 'supabase' in globals():
                     projs_resp = supabase.table("projects").select("id, brand_name, status").execute()
                     projects_list = projs_resp.data
                 else:
                     projects_list = []
 
-                # Формуємо список для пошуку: "Назва (ID)"
-                # Це дозволяє шукати і по назві, і по ID
+                # Формуємо список: Назва (ID: ...)
+                # ID мусить бути в рядку, щоб працював пошук!
                 options_map = {f"{p['brand_name']} (ID: {p['id']})": p for p in projects_list}
                 
-                # Знаходимо поточний індекс
                 current_index = 0
                 if current_proj:
+                    # Шукаємо поточний проект у списку
                     current_key = f"{current_proj['brand_name']} (ID: {current_proj['id']})"
                     if current_key in options_map:
                         current_index = list(options_map.keys()).index(current_key)
 
                 selected_key = st.selectbox(
-                    "📂 Активний проект",
+                    "📂 Оберіть проект:",
                     options=list(options_map.keys()),
                     index=current_index,
-                    placeholder="Оберіть проект...",
-                    help="Введіть Назву або ID для пошуку"
+                    placeholder="Пошук по Назві або ID...",
+                    help="Можна вводити ID проекту для пошуку"
                 )
 
-                # Оновлюємо проект, якщо змінився
                 if selected_key:
                     new_proj = options_map[selected_key]
                     if not current_proj or new_proj['id'] != current_proj['id']:
@@ -2159,21 +2153,18 @@ def sidebar_menu():
                 st.error(f"Error: {e}")
 
         else:
-            # --- ЛОГІКА ДЛЯ КОРИСТУВАЧА (Тільки перегляд) ---
+            # ДЛЯ ЮЗЕРА (Тільки перегляд)
             if current_proj:
-                st.markdown(f"**📂 Проект:** {current_proj.get('brand_name')}")
-                # ID в експандері, щоб можна було скопіювати
-                with st.expander("🆔 ID Проекту"):
+                st.markdown(f"### 📂 {current_proj.get('brand_name')}")
+                # ID схований в info, щоб не заважав, але можна було скопіювати
+                with st.expander("ℹ️ Project ID"):
                     st.code(current_proj.get('id'), language=None)
             else:
                 st.warning("Проект не обрано")
 
         st.write("") # Відступ
 
-    # 3. НАВІГАЦІЯ (Меню)
-    # Визначаємо, який пункт меню активний зараз (косметично)
-    # Але option_menu сам повертає вибір
-    
+    # 3. НАВІГАЦІЯ
     with st.sidebar:
         selected = option_menu(
             "Меню",
@@ -2182,34 +2173,28 @@ def sidebar_menu():
             menu_icon="cast",
             default_index=0,
             styles={
-                "nav-link-selected": {"background-color": "#6c5ce7"},
+                "nav-link-selected": {"background-color": "#00C896"}, # Зелений бренд-колір
             }
         )
 
-    # 4. ФУТЕР (Статус + Вихід)
+    # 4. ФУТЕР (Support + Вихід)
     with st.sidebar:
         st.divider()
         
-        # Отримуємо статус
-        status_text = "TRIAL"
+        # Статус плану
         if st.session_state.get("current_project"):
             status_text = st.session_state["current_project"].get("status", "TRIAL").upper()
+            color = "#FFA500" if "TRIAL" in status_text else "#00C896"
+            st.markdown(f"Статус: <span style='color:{color}; font-weight:bold;'>● {status_text}</span>", unsafe_allow_html=True)
         
-        # Колір статусу
-        status_color = "#FFA500" if "TRIAL" in status_text else "#00C896" # Оранжевий або Зелений
+        st.write("")
+        
+        # Support (Повернуто!)
+        st.caption("Support: hi@virshi.ai")
 
-        # Верстка в дві колонки
-        c_stat, c_exit = st.columns([3, 1])
-        
-        with c_stat:
-            st.caption("Статус плану")
-            st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>● {status_text}</span>", unsafe_allow_html=True)
-        
-        with c_exit:
-            st.write("") # Вирівнювання
-            # Кнопка виходу (компактна)
-            if st.button("🚪", help="Вийти з акаунту"):
-                logout()
+        # Кнопка Виходу (Текстом!)
+        if st.button("Вийти з акаунту", key="logout_btn", use_container_width=True):
+            logout()
 
     return selected
 
