@@ -55,6 +55,36 @@ st.markdown(
 
     .sidebar-name { font-size: 14px; font-weight: 600; color: #333; margin-top: 5px;}
     .sidebar-label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 15px;}
+
+    /* Додати до існуючих стилів */
+    .ai-response-box {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 20px;
+        font-family: 'Source Sans Pro', sans-serif;
+        line-height: 1.6;
+        color: #31333F;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        max-height: 600px;
+        overflow-y: auto;
+    }
+    .metric-card-small {
+        background-color: #F0F2F6;
+        border-radius: 6px;
+        padding: 10px;
+        text-align: center;
+    }
+    .metric-value {
+        font-size: 18px;
+        font-weight: bold;
+        color: #8041F6;
+    }
+    .metric-label {
+        font-size: 12px;
+        color: #666;
+    }
+    
 </style>
 """,
     unsafe_allow_html=True,
@@ -662,146 +692,175 @@ def show_dashboard():
 # 7. КЕРУВАННЯ ЗАПИТАМИ
 # =========================
 
+def show_keyword_details(kw_id):
+    """
+    Відображає детальну аналітику по конкретному запиту.
+    """
+    # 1. Кнопка "Назад"
+    if st.button("⬅ Назад до списку", key="back_btn"):
+        st.session_state["focus_keyword_id"] = None
+        st.rerun()
+
+    # 2. Отримуємо текст самого запиту
+    try:
+        kw_data = supabase.table("keywords").select("*").eq("id", kw_id).execute()
+        if not kw_data.data:
+            st.error("Запит не знайдено.")
+            return
+        keyword_text = kw_data.data[0]["keyword_text"]
+    except Exception as e:
+        st.error(f"Помилка БД: {e}")
+        return
+
+    st.title(f"🔍 Аналіз: {keyword_text}")
+
+    # 3. Отримуємо результати сканування
+    try:
+        scans = (
+            supabase.table("scan_results")
+            .select("*")
+            .eq("keyword_id", kw_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+        )
+    except Exception as e:
+        st.error(f"Не вдалося завантажити сканування: {e}")
+        scans = []
+
+    if not scans:
+        st.info("⚠️ Для цього запиту ще немає результатів аналізу. Запустіть сканування або зачекайте кілька хвилин.")
+        return
+
+    # 4. Формуємо вкладки по провайдерах
+    latest_scans = {}
+    for scan in scans:
+        prov = scan.get("provider", "Unknown")
+        if prov not in latest_scans:
+            latest_scans[prov] = scan
+    
+    provider_names = list(latest_scans.keys())
+    
+    if not provider_names:
+        st.warning("Дані пошкоджені: відсутній провайдер.")
+        return
+
+    tabs = st.tabs([p.upper() for p in provider_names])
+
+    # 5. Наповнюємо вкладки
+    for tab, provider in zip(tabs, provider_names):
+        scan_data = latest_scans[provider]
+        scan_id = scan_data["id"]
+        
+        with tab:
+            mentions = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
+            sources = supabase.table("extracted_sources").select("*").eq("scan_result_id", scan_id).execute().data
+            
+            my_brand_info = next((m for m in mentions if m.get("is_my_brand")), None)
+            
+            m1, m2, m3, m4 = st.columns(4)
+            rank = my_brand_info['rank_position'] if my_brand_info else None
+            m1.metric("Наша Позиція", f"#{rank}" if rank else "❌")
+            sent = my_brand_info['sentiment_score'] if my_brand_info else 0
+            m2.metric("Тональність", f"{sent}/100")
+            m3.metric("Всього брендів", len(mentions))
+            off_sources = len([s for s in sources if s.get("is_official")])
+            m4.metric("Офіційні джерела", f"{off_sources} / {len(sources)}")
+            
+            st.divider()
+            
+            col_text, col_tables = st.columns([1.5, 1])
+            with col_text:
+                st.subheader("📝 Відповідь моделі")
+                raw_html = scan_data.get("raw_response") or "_Текст відсутній_"
+                st.markdown(f'<div class="ai-response-box">{raw_html}</div>', unsafe_allow_html=True)
+                st.caption(f"ID: {scan_id} | {scan_data['created_at'][:16]}")
+
+            with col_tables:
+                st.subheader("📊 Знайдені Бренди")
+                if mentions:
+                    df_m = pd.DataFrame(mentions)
+                    cols = ['brand_name', 'rank_position', 'sentiment_score']
+                    st.dataframe(df_m[cols], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Брендів не знайдено.")
+
+                st.subheader("🔗 Джерела")
+                if sources:
+                    df_s = pd.DataFrame(sources)
+                    df_s['Official'] = df_s['is_official'].apply(lambda x: "✅" if x else "")
+                    st.dataframe(df_s[['domain', 'Official']], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Джерел не знайдено.")
+
 
 def show_keywords_page():
+    """
+    Головна функція сторінки запитів. Маршрутизує між списком та деталями.
+    """
     proj = st.session_state.get("current_project")
     if not proj:
         st.info("Спочатку створіть проект в онбордингу.")
         return
 
+    # Якщо вибрано ID - показуємо деталі
+    if st.session_state.get("focus_keyword_id"):
+        show_keyword_details(st.session_state["focus_keyword_id"])
+        return
+
     st.title("📋 Перелік запитів")
 
-    # --- Форма додавання нового запиту ---
-    with st.form("add_keyword_form"):
-        new_kw = st.text_input("Новий запит")
-        new_type = st.selectbox(
-            "Тип запиту", ["ranking", "accuracy", "other"], index=0
-        )
-        add_submitted = st.form_submit_button("Додати")
-        if add_submitted:
-            if not new_kw:
-                st.warning("Введіть текст запиту.")
-            else:
-                try:
-                    supabase.table("keywords").insert(
-                        {
-                            "project_id": proj["id"],
-                            "keyword_text": new_kw,
-                            "type": new_type,
-                        }
-                    ).execute()
-                    st.success("Запит додано.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(
-                        f"Помилка додавання: {getattr(e, 'args', [str(e)])[0]}"
-                    )
+    # Форма додавання
+    with st.expander("➕ Додати новий запит", expanded=False):
+        with st.form("add_keyword_form"):
+            new_kw = st.text_input("Введіть запит")
+            model_choices = ["perplexity", "gpt-4o", "gemini-1.5-pro"]
+            selected_models = st.multiselect("Оберіть моделі:", model_choices, default=["perplexity"])
+            
+            if st.form_submit_button("Додати та Просканувати"):
+                if new_kw:
+                    try:
+                        res = supabase.table("keywords").insert({
+                            "project_id": proj["id"], "keyword_text": new_kw, "is_active": True
+                        }).execute()
+                        if res.data:
+                            # Запуск сканування
+                            n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models)
+                            st.success(f"Запит '{new_kw}' додано.")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Помилка: {e}")
 
     st.markdown("---")
-    st.markdown("### Поточні запити")
-
+    
+    # Список запитів
     try:
-        resp = (
-            supabase.table("keywords")
-            .select("*")
-            .eq("project_id", proj["id"])
-            .order("id")
-            .execute()
-        )
-        keywords = resp.data or []
-    except Exception as e:
-        st.error(f"Помилка завантаження: {e}")
+        keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).execute().data
+    except:
         keywords = []
 
     if not keywords:
-        st.info("Запити поки що відсутні.")
+        st.info("Запити відсутні.")
         return
 
-    # --- Вибір запитів для аналізу в n8n ---
-    st.markdown("#### Виберіть запити для аналізу в n8n")
-
-    kw_labels = [k["keyword_text"] for k in keywords]
-    selected_labels = st.multiselect(
-        "Запити для аналізу:", kw_labels, key="kw_for_n8n"
-    )
-
-    model_choices = ["chatgpt", "claude", "gemini"]
-    selected_models = st.multiselect(
-        "Які LLM використовувати:",
-        model_choices,
-        default=["chatgpt", "gemini"],
-    )
-
-    if st.button("🔍 Запустити аналіз у n8n"):
-        if not selected_labels:
-            st.warning("Оберіть щонайменше один запит.")
-        else:
-            try:
-                n8n_trigger_analysis(
-                    proj["id"],
-                    selected_labels,
-                    proj.get("brand_name"),
-                    models=selected_models,
-                )
-                st.success("Аналіз запущено в n8n.")
-            except Exception as e:
-                st.error(f"Не вдалося відправити запити в n8n: {e}")
-
-    st.markdown("#### Редагування запитів")
+    col_h1, col_h2, col_h3 = st.columns([3, 1, 1])
+    col_h1.markdown("**Запит**")
+    col_h2.markdown("**Статус**")
+    col_h3.markdown("**Дії**")
 
     for k in keywords:
-        expanded = (
-            st.session_state.get("focus_keyword_id") == k["id"]
-            if st.session_state.get("focus_keyword_id")
-            else False
-        )
-        with st.expander(
-            k.get("keyword_text", "") or "Запит", expanded=expanded
-        ):
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                txt = st.text_input(
-                    "Текст запиту",
-                    value=k.get("keyword_text", ""),
-                    key=f"kw_txt_{k['id']}",
-                )
-            with col2:
-                ktype = st.selectbox(
-                    "Тип",
-                    ["ranking", "accuracy", "other"],
-                    index=(
-                        ["ranking", "accuracy", "other"].index(k.get("type", "ranking"))
-                        if k.get("type") in ["ranking", "accuracy", "other"]
-                        else 0
-                    ),
-                    key=f"kw_type_{k['id']}",
-                )
-
-            c_save, c_delete = st.columns(2)
-            if c_save.button("💾 Зберегти", key=f"save_kw_{k['id']}"):
-                try:
-                    supabase.table("keywords").update(
-                        {"keyword_text": txt, "type": ktype}
-                    ).eq("id", k["id"]).execute()
-                    st.success("Збережено.")
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 1, 1])
+            c1.markdown(f"**{k['keyword_text']}**")
+            c2.markdown("✅ Active")
+            with c3:
+                if st.button("🔍 Деталі", key=f"det_{k['id']}"):
                     st.session_state["focus_keyword_id"] = k["id"]
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Помилка збереження: {e}")
-
-            if c_delete.button("🗑 Видалити", key=f"del_kw_{k['id']}"):
-                try:
+                if st.button("🗑", key=f"del_{k['id']}"):
                     supabase.table("keywords").delete().eq("id", k["id"]).execute()
-                    st.success("Видалено.")
-                    if st.session_state.get("focus_keyword_id") == k["id"]:
-                        st.session_state["focus_keyword_id"] = None
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Помилка видалення: {e}")
-
-    # після першого відкриття скидаємо фокус, щоб не застрягати
-    st.session_state["focus_keyword_id"] = None
-
 
 # =========================
 # 8. РЕКОМЕНДАЦІЇ
