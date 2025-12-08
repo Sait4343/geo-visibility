@@ -954,8 +954,17 @@ def show_keyword_details(kw_id):
 
 def show_keywords_page():
     """
-    Сторінка списку запитів з масовими діями та датами.
+    Сторінка списку запитів.
     """
+    # 👇 ДОДАЙТЕ ЦЕЙ БЛОК НА ПОЧАТОК ФУНКЦІЇ 👇
+    MODEL_MAPPING = {
+        "Perplexity": "perplexity",
+        "OpenAI GPT": "gpt-4o",
+        "Google Gemini": "gemini-1.5-pro"
+    }
+    # ----------------------------------------
+
+    proj = st.session_state.get("current_project")
     proj = st.session_state.get("current_project")
     if not proj:
         st.info("Спочатку створіть проект в онбордингу.")
