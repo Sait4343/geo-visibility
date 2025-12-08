@@ -725,7 +725,10 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Відображає детальну аналітику по конкретному запиту.
+    Відображає детальну аналітику по конкретному запиту:
+    1. Текст відповіді ШІ.
+    2. Знайдені бренди.
+    3. Знайдені джерела.
     """
     # 1. Кнопка "Назад"
     if st.button("⬅ Назад до списку", key="back_btn"):
@@ -745,13 +748,13 @@ def show_keyword_details(kw_id):
 
     st.title(f"🔍 Аналіз: {keyword_text}")
 
-    # 3. Отримуємо результати сканування (Тут вже є raw_response!)
+    # 3. Отримуємо результати сканування
     try:
         scans = (
             supabase.table("scan_results")
             .select("*")
             .eq("keyword_id", kw_id)
-            .order("created_at", desc=True) # Найсвіжіші зверху
+            .order("created_at", desc=True)
             .execute()
             .data
         )
@@ -763,15 +766,13 @@ def show_keyword_details(kw_id):
         st.info("⚠️ Для цього запиту ще немає результатів аналізу. Запустіть сканування або зачекайте кілька хвилин.")
         return 
 
-    # =======================================================
-    # 👇 НОВИЙ КОД: ВІДОБРАЖЕННЯ ДАНИХ 👇
-    # =======================================================
-    
     # Беремо останнє (найсвіжіше) сканування
     last_scan = scans[0]
     scan_id = last_scan["id"]
     
-    # --- БЛОК 1: ВІДПОВІДЬ ШІ (RAW RESPONSE) ---
+    # =======================================================
+    # БЛОК 1: ВІДПОВІДЬ ШІ (RAW RESPONSE)
+    # =======================================================
     raw_text = last_scan.get("raw_response", "")
     provider = last_scan.get("provider", "Unknown")
 
@@ -781,18 +782,18 @@ def show_keyword_details(kw_id):
 
     with st.expander("📄 Читати оригінальний текст відповіді ШІ", expanded=False):
         if raw_text:
-            # Підсвічуємо наш бренд, якщо він є в проекті
             my_brand_name = st.session_state.get("current_project", {}).get("brand_name", "")
             if my_brand_name:
-                # Проста підсвітка жирним
                 display_text = raw_text.replace(my_brand_name, f"**{my_brand_name}**")
                 st.markdown(display_text)
             else:
                 st.markdown(raw_text)
         else:
-            st.warning("Текст відповіді відсутній у базі (можливо, це старий скан до оновлення n8n).")
+            st.warning("Текст відповіді відсутній у базі.")
 
-    # --- БЛОК 2: ТАБЛИЦЯ БРЕНДІВ (Згадки) ---
+    # =======================================================
+    # БЛОК 2: ТАБЛИЦЯ БРЕНДІВ
+    # =======================================================
     st.subheader("📊 Знайдені бренди")
     try:
         mentions = (
@@ -805,91 +806,61 @@ def show_keyword_details(kw_id):
         )
         
         if mentions:
-            # Робимо красиву табличку
             df = pd.DataFrame(mentions)
-            
-            # Вибираємо і перейменовуємо колонки для краси
-            show_df = df[["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]]
+            # Залишаємо тільки потрібні колонки
+            cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
+            show_df = df[cols].copy()
             show_df.columns = ["Ранг", "Бренд", "Тональність", "К-сть згадок", "Це ми?"]
             
-            # Форматуємо
             show_df["Це ми?"] = show_df["Це ми?"].apply(lambda x: "✅" if x else "")
             
             st.dataframe(show_df, use_container_width=True, hide_index=True)
         else:
-            st.info("Брендів у цьому скануванні не знайдено.")
+            st.info("Брендів не знайдено.")
             
     except Exception as e:
         st.error(f"Помилка завантаження брендів: {e}")
 
-
-def show_keywords_page():
-    """
-    Головна функція сторінки запитів. Маршрутизує між списком та деталями.
-    """
-    proj = st.session_state.get("current_project")
-    if not proj:
-        st.info("Спочатку створіть проект в онбордингу.")
-        return
-
-    # Якщо вибрано ID - показуємо деталі
-    if st.session_state.get("focus_keyword_id"):
-        show_keyword_details(st.session_state["focus_keyword_id"])
-        return
-
-    st.title("📋 Перелік запитів")
-
-    # Форма додавання
-    with st.expander("➕ Додати новий запит", expanded=False):
-        with st.form("add_keyword_form"):
-            new_kw = st.text_input("Введіть запит")
-            model_choices = ["perplexity", "gpt-4o", "gemini-1.5-pro"]
-            selected_models = st.multiselect("Оберіть моделі:", model_choices, default=["perplexity"])
-            
-            if st.form_submit_button("Додати та Просканувати"):
-                if new_kw:
-                    try:
-                        res = supabase.table("keywords").insert({
-                            "project_id": proj["id"], "keyword_text": new_kw, "is_active": True
-                        }).execute()
-                        if res.data:
-                            # Запуск сканування
-                            n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models)
-                            st.success(f"Запит '{new_kw}' додано.")
-                            time.sleep(1)
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Помилка: {e}")
-
-    st.markdown("---")
-    
-    # Список запитів
+    # =======================================================
+    # 👇 БЛОК 3: ДЖЕРЕЛА (НОВЕ) 👇
+    # =======================================================
+    st.subheader("🔗 Знайдені джерела")
     try:
-        keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).execute().data
-    except:
-        keywords = []
+        sources_data = (
+            supabase.table("extracted_sources")
+            .select("*")
+            .eq("scan_result_id", scan_id)
+            .execute()
+            .data
+        )
 
-    if not keywords:
-        st.info("Запити відсутні.")
-        return
+        if sources_data:
+            df_sources = pd.DataFrame(sources_data)
+            
+            # Вибираємо колонки для відображення
+            # domain, url, is_official
+            show_sources_df = df_sources[["domain", "url", "is_official"]].copy()
+            
+            # Перейменування для краси
+            show_sources_df.columns = ["Домен", "Посилання", "Офіційне?"]
+            
+            # Робимо галочку для офіційних
+            show_sources_df["Офіційне?"] = show_sources_df["Офіційне?"].apply(lambda x: "✅" if x else "")
 
-    col_h1, col_h2, col_h3 = st.columns([3, 1, 1])
-    col_h1.markdown("**Запит**")
-    col_h2.markdown("**Статус**")
-    col_h3.markdown("**Дії**")
+            # Відображаємо таблицю з клікабельними лінками
+            st.dataframe(
+                show_sources_df, 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "Посилання": st.column_config.LinkColumn("Посилання") # Магія Streamlit: робить URL активним
+                }
+            )
+        else:
+            st.info("Джерел не знайдено.")
 
-    for k in keywords:
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 1, 1])
-            c1.markdown(f"**{k['keyword_text']}**")
-            c2.markdown("✅ Active")
-            with c3:
-                if st.button("🔍 Деталі", key=f"det_{k['id']}"):
-                    st.session_state["focus_keyword_id"] = k["id"]
-                    st.rerun()
-                if st.button("🗑", key=f"del_{k['id']}"):
-                    supabase.table("keywords").delete().eq("id", k["id"]).execute()
-                    st.rerun()
+    except Exception as e:
+        st.error(f"Помилка завантаження джерел: {e}")
 
 # =========================
 # 8. РЕКОМЕНДАЦІЇ
