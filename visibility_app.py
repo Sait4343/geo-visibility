@@ -1083,7 +1083,134 @@ def show_sources_page():
         # Просто додайте try/except блок, як було раніше
         pass 
         # ... (код з попередньої відповіді)
+def show_competitors_page():
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Спочатку створіть проект.")
+        return
 
+    st.title("⚔️ Аналіз Конкурентів")
+    st.caption("Кого ШІ рекомендує поруч із вами? Порівняння видимості та репутації.")
+
+    # 1. Завантаження даних з SQL View
+    try:
+        data = (
+            supabase.table("competitor_stats")
+            .select("*")
+            .eq("project_id", proj["id"])
+            .execute()
+            .data
+        )
+    except Exception as e:
+        st.error(f"Помилка завантаження даних: {e}")
+        data = []
+
+    if not data:
+        st.info("Даних ще недостатньо. Запустіть кілька сканувань у 'Перелік запитів', щоб ШІ знайшов конкурентів.")
+        return
+
+    # Перетворюємо в DataFrame для зручної роботи
+    df = pd.DataFrame(data)
+
+    # 2. Метрики лідера (Хто головний конкурент?)
+    # Виключаємо наш бренд, щоб знайти реального ворога
+    competitors_only = df[df['is_my_brand'] == False]
+    
+    if not competitors_only.empty:
+        # Сортуємо за кількістю згадок
+        top_rival = competitors_only.sort_values(by="total_mentions", ascending=False).iloc[0]
+        
+        # Знаходимо нас
+        my_brand = df[df['is_my_brand'] == True]
+        my_mentions = my_brand.iloc[0]['total_mentions'] if not my_brand.empty else 0
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Головний конкурент", top_rival['brand_name'])
+        c2.metric("Його згадок", top_rival['total_mentions'], delta=int(top_rival['total_mentions'] - my_mentions), delta_color="inverse")
+        c3.metric("Його тональність", f"{int(top_rival['avg_sentiment'])}/100")
+    
+    st.divider()
+
+    # 3. Графік 1: КАРТА РЕПУТАЦІЇ (Scatter Plot)
+    # Це найкрутіший графік для GEO.
+    st.subheader("🗺️ Карта Репутації (Magic Quadrant)")
+    st.caption("Чим вище — тим краще відгукуються. Чим правіше — тим частіше згадують.")
+
+    if not df.empty:
+        # Додаємо колонку кольору: Мій бренд = Фіолетовий, Інші = Сірий
+        df['Color'] = df['is_my_brand'].apply(lambda x: 'Мій Бренд' if x else 'Конкурент')
+        df['Size'] = df['total_mentions'] * 2 # Розмір бульбашки
+
+        fig = px.scatter(
+            df,
+            x="total_mentions",
+            y="avg_sentiment",
+            size="Size",
+            color="Color",
+            text="brand_name",
+            color_discrete_map={'Мій Бренд': '#8041F6', 'Конкурент': '#9EA0A5'},
+            hover_data=["avg_rank"],
+            height=500
+        )
+        # Налаштування вигляду
+        fig.update_traces(textposition='top center')
+        fig.update_layout(
+            xaxis_title="Кількість згадок (Видимість)",
+            yaxis_title="Середня тональність (Якість)",
+            yaxis_range=[0, 105], # Щоб графік завжди був від 0 до 100
+            showlegend=True
+        )
+        # Малюємо лінії середини
+        fig.add_hline(y=50, line_dash="dot", line_color="lightgray")
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+    # 4. Графік 2: Рейтинг за часткою голосу (Bar Chart)
+    st.subheader("📊 Рейтинг за часткою голосу (Share of Voice)")
+    
+    if not df.empty:
+        # Сортуємо для краси
+        df_sorted = df.sort_values(by="total_mentions", ascending=True) # Ascending для горизонтального бару
+        
+        fig_bar = px.bar(
+            df_sorted,
+            x="total_mentions",
+            y="brand_name",
+            orientation='h',
+            text="total_mentions",
+            color="is_my_brand",
+            color_discrete_map={True: '#8041F6', False: '#D1D1D6'}
+        )
+        fig_bar.update_layout(showlegend=False, xaxis_title="Кількість згадок", yaxis_title="")
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    # 5. Детальна таблиця
+    with st.expander("📋 Дивитися детальні дані таблицею"):
+        # Готуємо красиву таблицю
+        display_df = df[['brand_name', 'total_mentions', 'avg_sentiment', 'avg_rank', 'is_my_brand']].copy()
+        display_df.columns = ['Бренд', 'Згадок', 'Тональність', 'Сер. Позиція', 'Це ми?']
+        
+        # Форматуємо числа
+        display_df['Тональність'] = display_df['Тональність'].astype(int)
+        display_df['Сер. Позиція'] = display_df['Сер. Позиція'].apply(lambda x: f"#{x:.1f}" if x else "-")
+        display_df['Це ми?'] = display_df['Це ми?'].apply(lambda x: "✅" if x else "")
+        
+        # Сортуємо
+        display_df = display_df.sort_values(by="Згадок", ascending=False)
+        
+        st.dataframe(
+            display_df, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Згадок": st.column_config.ProgressColumn(
+                    "Частка",
+                    format="%d",
+                    min_value=0,
+                    max_value=int(df['total_mentions'].max())
+                )
+            }
+        )
 def sidebar_menu():
     with st.sidebar:
         st.markdown(
@@ -1216,8 +1343,7 @@ def main():
         elif page == "Джерела":
             show_sources_page()
         elif page == "Конкуренти":
-            st.title("⚔️ Конкуренти")
-            st.info("У розробці...")
+            show_competitors_page()
         elif page == "Рекомендації":
             show_recommendations_page()
         elif page == "GPT-Visibility":
