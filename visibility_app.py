@@ -597,155 +597,296 @@ def onboarding_wizard():
 
 
 def show_dashboard():
+    import plotly.graph_objects as go
+    from datetime import datetime, timedelta
+    
     proj = st.session_state.get("current_project", {})
     if not proj:
         st.info("Спочатку створіть проект.")
         return
 
-    # Заголовок і фільтр періоду
-    c1, c2 = st.columns([3, 1])
-    with c1:
+    # --- 1. ЗАГОЛОВОК І ФІЛЬТР ДАТ ---
+    c_title, c_date = st.columns([3, 1])
+    with c_title:
         st.title(f"📊 Дашборд: {proj.get('brand_name')}")
-        st.caption("Зведена аналітика видимості у LLM (Perplexity, GPT, Gemini)")
-    with c2:
-        # Поки що логіка фільтрації візуальна, SQL View повертає всі дані
-        st.selectbox("Період:", ["Останні 30 днів", "Все"], index=0)
     
+    with c_date:
+        # Дефолт: останні 30 днів
+        today = datetime.now()
+        last_30 = today - timedelta(days=30)
+        
+        date_range = st.date_input(
+            "Період аналізу:",
+            value=(last_30, today),
+            max_value=today,
+            format="DD.MM.YYYY"
+        )
+
     st.markdown("---")
 
-    # 1. ЗАВАНТАЖЕННЯ KPI (З SQL VIEW)
-    # Ми звертаємося до віртуальної таблиці, яку створили в SQL
+    # Перевірка коректності дат
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        st.warning("Оберіть дату початку і кінця.")
+        return
+
+    # --- 2. ЗАВАНТАЖЕННЯ ДАНИХ (Фільтрованих по даті) ---
+    # Нам потрібно витягнути дані з кількох таблиць і об'єднати їх
     try:
-        stats_resp = supabase.table("project_dashboard_stats").select("*").eq("project_id", proj["id"]).execute()
-        if stats_resp.data:
-            stats = stats_resp.data[0]
-        else:
-            stats = {}
+        # A. Отримуємо ID сканувань за цей період
+        scans_query = supabase.table("scan_results")\
+            .select("id, created_at, keyword_id")\
+            .eq("project_id", proj["id"])\
+            .gte("created_at", start_date.isoformat())\
+            .lte("created_at", end_date.isoformat())\
+            .execute()
+        
+        scan_ids = [s['id'] for s in scans_query.data]
+        scan_map = {s['id']: s for s in scans_query.data} # Для прив'язки дати
+
+        if not scan_ids:
+            st.info("За обраний період даних не знайдено.")
+            return
+
+        # B. Отримуємо згадки брендів для цих сканувань
+        mentions_resp = supabase.table("brand_mentions")\
+            .select("*")\
+            .in_("scan_result_id", scan_ids)\
+            .execute()
+        
+        df_mentions = pd.DataFrame(mentions_resp.data)
+
+        # C. Отримуємо джерела для цих сканувань
+        sources_resp = supabase.table("extracted_sources")\
+            .select("*")\
+            .in_("scan_result_id", scan_ids)\
+            .execute()
+        
+        df_sources = pd.DataFrame(sources_resp.data)
+
+        # D. Отримуємо тексти запитів
+        keywords_resp = supabase.table("keywords")\
+            .select("id, keyword_text")\
+            .eq("project_id", proj["id"])\
+            .execute()
+        kw_map = {k['id']: k['keyword_text'] for k in keywords_resp.data}
+
     except Exception as e:
-        # Якщо View ще не створена або помилка, показуємо нулі, щоб не крашити додаток
-        # st.error(f"Помилка KPI: {e}") 
-        stats = {}
+        st.error(f"Помилка завантаження даних: {e}")
+        return
 
-    # Розпаковка даних (безпечно, з дефолтними нулями)
-    sov = stats.get("sov", 0)
-    off_src = stats.get("official_source_pct", 0)
-    avg_sent = stats.get("avg_sentiment", 0)
-    avg_pos = stats.get("avg_position", 0)
+    # --- 3. РОЗРАХУНОК МЕТРИК ---
     
-    # Абсолютні цифри (з JSON поля absolute_counts)
-    abs_counts = stats.get("absolute_counts", {})
-    total_mentions = abs_counts.get("total_mentions", 0)
-    my_mentions = abs_counts.get("my_mentions", 0)
+    # --- KPI 1: Share of Voice (SOV) ---
+    total_mentions = df_mentions['mention_count'].sum() if not df_mentions.empty else 0
+    my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum() if not df_mentions.empty else 0
+    sov = (my_mentions / total_mentions * 100) if total_mentions > 0 else 0
 
-    # 2. ВІДОБРАЖЕННЯ КАРТОК KPI
-    k1, k2, k3, k4 = st.columns(4)
+    # --- KPI 2: % Офіційних джерел ---
+    total_sources = len(df_sources)
+    official_sources = len(df_sources[df_sources['is_official'] == True])
+    official_pct = (official_sources / total_sources * 100) if total_sources > 0 else 0
+
+    # --- KPI 3: Середній настрій (Sentiment) ---
+    # Переводимо текст в цифри: Позитивний=100, Нейтральний=50, Негативний=0
+    my_brand_rows = df_mentions[df_mentions['is_my_brand'] == True].copy()
     
-    with k1:
+    def calc_sent_score(s):
+        if s == 'Позитивний': return 100
+        if s == 'Негативний': return 0
+        return 50 # Нейтральний або Не знайдено
+    
+    if not my_brand_rows.empty:
+        my_brand_rows['score'] = my_brand_rows['sentiment_score'].apply(calc_sent_score)
+        avg_sentiment = my_brand_rows['score'].mean()
+    else:
+        avg_sentiment = 0
+
+    # --- KPI 4: Середня позиція ---
+    # Рахуємо тільки там, де нас знайшли (rank_position > 0)
+    found_rows = my_brand_rows[my_brand_rows['rank_position'].notnull()]
+    avg_pos = found_rows['rank_position'].mean() if not found_rows.empty else 0
+
+    # --- KPI 5: Присутність (Visibility Rate) ---
+    # У скількох скануваннях ми взагалі з'явилися?
+    total_scans_count = len(scan_ids)
+    scans_with_me = found_rows['scan_result_id'].nunique()
+    visibility_rate = (scans_with_me / total_scans_count * 100) if total_scans_count > 0 else 0
+
+    # --- 4. ВІЗУАЛІЗАЦІЯ (СТИЛЬ VIRSHI) ---
+    
+    # Хелпер для кругових діаграм
+    def make_donut(value, label, color="#00C896"):
+        fig = go.Figure(data=[go.Pie(
+            values=[value, 100-value],
+            hole=.75,
+            marker_colors=[color, "#EEF0F2"],
+            textinfo='none',
+            hoverinfo='none'
+        )])
+        fig.update_layout(
+            showlegend=False,
+            margin=dict(t=0, b=0, l=0, r=0),
+            height=120,
+            annotations=[dict(text=f"{value:.1f}%", x=0.5, y=0.5, font_size=20, showarrow=False, font_weight='bold')]
+        )
+        return fig
+
+    # Стилі CSS для карток
+    st.markdown("""
+    <style>
+        .dash-card {
+            background-color: white;
+            border: 1px solid #E0E0E0;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+            height: 280px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .dash-title {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: #888;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .dash-val {
+            font-size: 32px;
+            font-weight: 800;
+            color: #333;
+        }
+        .dash-sub {
+            font-size: 12px;
+            color: #999;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # РЯДОК 1: 3 КАРТКИ
+    r1_c1, r1_c2, r1_c3 = st.columns(3)
+
+    # Card 1: SOV
+    with r1_c1:
         with st.container(border=True):
-            st.metric(
-                "📢 Share of Voice", 
-                f"{sov:.1f}%", 
-                help=f"Вас згадали {my_mentions} разів із {total_mentions} загальних згадок брендів."
-            )
-            # Малюємо міні-графік (пончик)
-            st.plotly_chart(get_donut_chart(sov, "#8041F6"), use_container_width=True, key="d_sov")
+            st.markdown("<div class='dash-title'>ЧАСТКА ГОЛОСУ (SOV)</div>", unsafe_allow_html=True)
+            st.plotly_chart(make_donut(sov, "SOV"), use_container_width=True, key="don_sov")
+            st.markdown(f"<div style='text-align:center; color:#666;'>Ви: {int(my_mentions)} | Ринок: {int(total_mentions)}</div>", unsafe_allow_html=True)
 
-    with k2:
+    # Card 2: Official Sources
+    with r1_c2:
         with st.container(border=True):
-            st.metric(
-                "🛡️ Official Sources", 
-                f"{off_src:.1f}%",
-                help="Відсоток посилань, які ведуть саме на ваші сайти (з Whitelist)"
-            )
-            st.plotly_chart(get_donut_chart(off_src, "#00C896"), use_container_width=True, key="d_off")
+            st.markdown("<div class='dash-title'>% ОФІЦІЙНИХ ДЖЕРЕЛ</div>", unsafe_allow_html=True)
+            st.plotly_chart(make_donut(official_pct, "OFF", color="#36A2EB"), use_container_width=True, key="don_off")
+            st.markdown(f"<div style='text-align:center; color:#666;'>Офіційних: {official_sources}</div>", unsafe_allow_html=True)
 
-    with k3:
+    # Card 3: Sentiment
+    with r1_c3:
         with st.container(border=True):
-            st.metric(
-                "❤️ Sentiment", 
-                f"{avg_sent:.0f}/100",
-                help="Середня тональність (0-негатив, 100-позитив)"
-            )
-            # Прогресбар тональності
-            st.progress(int(avg_sent))
-
-    with k4:
-        with st.container(border=True):
-            # Якщо позиція 0, значить нас ніде не знайшли, пишемо прочерк
-            pos_display = f"#{avg_pos:.1f}" if avg_pos > 0 else "-"
-            st.metric(
-                "🏆 Avg Position", 
-                pos_display,
-                help="Середня позиція у списках рекомендацій (де бренд був знайдений)"
-            )
-            if avg_pos > 0:
-                # Чим менше число (ближче до 1), тим краще, тому інвертуємо прогресбар
-                # Якщо позиція 1 -> 100%, якщо позиція 10 -> 0%
-                val = max(0, 100 - (int(avg_pos) - 1) * 10)
-                st.progress(val)
-            else:
-                st.caption("Немає даних")
-
-    # 3. ГРАФІК ДИНАМІКИ (З SQL VIEW 2)
-    c_chart, c_list = st.columns([2, 1])
-
-    with c_chart:
-        st.subheader("📈 Динаміка Настрою (Sentiment)")
-        try:
-            trends_resp = supabase.table("daily_sentiment_trends").select("*").eq("project_id", proj["id"]).execute()
-            trends_data = trends_resp.data
-        except:
-            trends_data = []
-
-        if trends_data:
-            df_trends = pd.DataFrame(trends_data)
+            st.markdown("<div class='dash-title'>ЗАГАЛЬНИЙ НАСТРІЙ</div>", unsafe_allow_html=True)
+            # Замість пончика тут краще прогрес бар або просто цифра
+            # Але для стилю зробимо пончик
+            st.plotly_chart(make_donut(avg_sentiment, "Sent", color="#FFCE56"), use_container_width=True, key="don_sent")
             
-            fig = px.line(
-                df_trends, 
-                x="scan_date", 
-                y="avg_sentiment",
-                markers=True,
-                title="Як змінювалася тональність згадок",
-                labels={"scan_date": "Дата", "avg_sentiment": "Бали (0-100)"}
-            )
-            # Стилізація графіка під бренд
-            fig.update_traces(line_color='#8041F6', line_width=3)
-            fig.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", 
-                plot_bgcolor="rgba(0,0,0,0)",
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=350
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            # Заглушка, якщо даних ще немає
-            st.info("Графік будується... Запустіть більше сканувань у різні дні.")
+            sent_text = "Нейтральний"
+            if avg_sentiment > 60: sent_text = "Позитивний"
+            if avg_sentiment < 40: sent_text = "Негативний"
+            st.markdown(f"<div style='text-align:center; font-weight:bold;'>{sent_text}</div>", unsafe_allow_html=True)
 
-    # 4. СПИСОК ОСТАННІХ ЗАПИТІВ (Права колонка)
-    with c_list:
-        st.subheader("🔥 Активні запити")
-        try:
-            # Беремо останні 5 запитів
-            recent_kws = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).limit(5).execute().data
-        except:
-            recent_kws = []
+    # РЯДОК 2: 3 КАРТКИ (Позиція, Присутність, Ще щось)
+    r2_c1, r2_c2, r2_c3 = st.columns(3)
 
-        if recent_kws:
-            for k in recent_kws:
-                with st.container(border=True):
-                    col_txt, col_btn = st.columns([3, 1])
-                    col_txt.markdown(f"**{k['keyword_text']}**")
-                    # Кнопка для швидкого переходу до аналізу
-                    if col_btn.button("🔍", key=f"dash_go_{k['id']}"):
-                        st.session_state["focus_keyword_id"] = k["id"]
-                        # Примусово перемикаємо сторінку (якщо використовується option_menu)
-                        st.session_state["force_page"] = "Перелік запитів" 
-                        st.rerun()
-        else:
-            st.caption("Тут з'являться ваші останні запити.")
-            if st.button("Додати перший запит"):
-                st.session_state["force_page"] = "Перелік запитів"
-                st.rerun()
+    with r2_c1:
+        with st.container(border=True):
+            st.markdown("<div class='dash-title'>СЕРЕДНЯ ПОЗИЦІЯ</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align:center; font-size: 48px; font-weight: bold; color: #00C896; margin-top: 30px;'>{avg_pos:.1f}</div>", unsafe_allow_html=True)
+            # Напівколо для візуалізації
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge",
+                value = avg_pos,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                gauge = {
+                    'axis': {'range': [10, 1], 'visible': False}, # Інверсія: 1 - найкраще
+                    'bar': {'color': "#00C896"},
+                    'bgcolor': "white",
+                }
+            ))
+            fig_gauge.update_layout(height=100, margin=dict(t=0,b=0,l=20,r=20))
+            st.plotly_chart(fig_gauge, use_container_width=True, key="gauge_pos")
+
+    with r2_c2:
+        with st.container(border=True):
+            st.markdown("<div class='dash-title'>ПРИСУТНІСТЬ БРЕНДУ</div>", unsafe_allow_html=True)
+            st.plotly_chart(make_donut(visibility_rate, "Vis", color="#9966FF"), use_container_width=True, key="don_vis")
+            st.markdown(f"<div style='text-align:center; color:#666;'>У {scans_with_me} з {total_scans_count} відповідей</div>", unsafe_allow_html=True)
+
+    with r2_c3:
+        # Заглушка або інша метрика (наприклад, згадки домену)
+        # Тут можна порахувати % згадок саме домену
+        domain_mentions = len(df_sources[df_sources['domain'].str.contains(proj.get('domain', 'MISSING'), na=False, case=False)])
+        domain_pct = (domain_mentions / total_sources * 100) if total_sources > 0 else 0
+        
+        with st.container(border=True):
+            st.markdown("<div class='dash-title'>ЗГАДКИ ДОМЕНУ</div>", unsafe_allow_html=True)
+            st.plotly_chart(make_donut(domain_pct, "Dom", color="#FF9F40"), use_container_width=True, key="don_dom")
+            st.markdown(f"<div style='text-align:center; color:#666;'>{domain_mentions} посилань</div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # --- 5. ПЕРЕЛІК ЗАПИТІВ (ЯК НА СКРІНШОТІ) ---
+    st.subheader("📋 Перелік запитів")
+    
+    # Готуємо дані для таблиці
+    # Нам треба для кожного запиту знайти останній скан і його результати
+    
+    # Групуємо скани по keyword_id і беремо останній
+    latest_scans_df = pd.DataFrame(scans_query.data)
+    if not latest_scans_df.empty:
+        latest_scans_df = latest_scans_df.sort_values('created_at', ascending=False).drop_duplicates('keyword_id')
+        
+        table_rows = []
+        for index, row in latest_scans_df.iterrows():
+            kw_text = kw_map.get(row['keyword_id'], "Невідомий запит")
+            
+            # Шукаємо згадку бренду в цьому скані
+            scan_mentions = df_mentions[df_mentions['scan_result_id'] == row['id']]
+            my_mention = scan_mentions[scan_mentions['is_my_brand'] == True]
+            
+            if not my_mention.empty:
+                pos = my_mention.iloc[0]['rank_position']
+                sent = my_mention.iloc[0]['sentiment_score']
+                is_present = True
+            else:
+                pos = "-"
+                sent = "Не знайдено"
+                is_present = False
+                
+            table_rows.append({
+                "Запит": kw_text,
+                "Дата": datetime.fromisoformat(row['created_at']).strftime("%d.%m.%Y"),
+                "Позиція": pos,
+                "Тональність": sent,
+                "Знайдено?": is_present
+            })
+            
+        df_table = pd.DataFrame(table_rows)
+        
+        # Відображаємо стильну таблицю
+        st.dataframe(
+            df_table,
+            use_container_width=True,
+            column_config={
+                "Знайдено?": st.column_config.CheckboxColumn("Знайдено?", disabled=True),
+                "Позиція": st.column_config.TextColumn("Позиція", help="Ранг вашого бренду"),
+            },
+            hide_index=True
+        )
+    else:
+        st.info("Немає даних для формування таблиці.")
 
 # =========================
 # 7. КЕРУВАННЯ ЗАПИТАМИ
