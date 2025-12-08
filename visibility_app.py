@@ -600,14 +600,24 @@ def show_dashboard():
     import plotly.graph_objects as go
     from datetime import datetime, timedelta, time as dt_time
     
+    # Перевірка підключення (Safe Check)
+    if 'supabase' not in globals():
+        if 'supabase' in st.session_state:
+            supabase = st.session_state['supabase']
+        else:
+            st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
+            return
+    else:
+        supabase = globals()['supabase']
+
     proj = st.session_state.get("current_project", {})
     if not proj:
         st.info("Спочатку створіть проект.")
         return
 
-    # --- 1. ВИЗНАЧЕННЯ ПЕРІОДУ (SMART DATE RANGE) ---
+    # --- 1. ВИЗНАЧЕННЯ ПЕРІОДУ ---
+    today = datetime.now().date()
     
-    # Спробуємо знайти дату найпершого сканування, щоб виставити її як старт
     try:
         first_scan = supabase.table("scan_results")\
             .select("created_at")\
@@ -617,16 +627,12 @@ def show_dashboard():
             .execute()
         
         if first_scan.data:
-            # Парсимо дату першого сканування
             min_date_str = first_scan.data[0]['created_at']
             min_date = datetime.fromisoformat(min_date_str.replace('Z', '+00:00')).date()
         else:
-            # Якщо даних немає, ставимо "сьогодні - 30 днів"
-            min_date = datetime.now().date() - timedelta(days=30)
-    except:
-        min_date = datetime.now().date() - timedelta(days=30)
-
-    today = datetime.now().date()
+            min_date = today - timedelta(days=1)
+    except Exception:
+        min_date = today - timedelta(days=30)
 
     # ВЕРХНЯ ПАНЕЛЬ
     c_title, c_date = st.columns([3, 1])
@@ -634,7 +640,6 @@ def show_dashboard():
         st.title(f"📊 Дашборд: {proj.get('brand_name')}")
     
     with c_date:
-        # По дефолту беремо від min_date до today (ВЕСЬ ПЕРІОД)
         date_range = st.date_input(
             "Період аналізу:",
             value=(min_date, today),
@@ -645,20 +650,21 @@ def show_dashboard():
 
     st.markdown("---")
 
-    # Валідація дат
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date, end_date = date_range
-    elif isinstance(date_range, tuple) and len(date_range) == 1:
-        # Якщо користувач тільки клацнув на першу дату
-        start_date = date_range[0]
-        end_date = today
+    if isinstance(date_range, tuple):
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+        elif len(date_range) == 1:
+            start_date = date_range[0]
+            end_date = today
+        else:
+            start_date = min_date
+            end_date = today
     else:
         start_date = min_date
         end_date = today
 
     # --- 2. ЗАВАНТАЖЕННЯ ДАНИХ ---
     try:
-        # Перетворюємо дати в ISO формат для Supabase (початок дня і кінець дня)
         iso_start = datetime.combine(start_date, dt_time.min).isoformat()
         iso_end = datetime.combine(end_date, dt_time.max).isoformat()
 
@@ -672,35 +678,21 @@ def show_dashboard():
         
         scan_ids = [s['id'] for s in scans_query.data]
         
-        # --- ПЕРЕВІРКА НА ПУСТОТУ ---
         if not scan_ids:
-            st.warning(f"🔍 За період з {start_date.strftime('%d.%m')} по {end_date.strftime('%d.%m')} даних не знайдено.")
-            st.info("👉 Перейдіть у вкладку **'Перелік запитів'** та запустіть нове сканування, або оберіть ширший діапазон дат.")
-            return # Зупиняємо виконання, щоб не показувати пусті графіки
+            st.warning(f"🔍 За період з {start_date.strftime('%d.%m.%Y')} по {end_date.strftime('%d.%m.%Y')} даних не знайдено.")
+            return 
 
-        # B. Згадки
-        mentions_resp = supabase.table("brand_mentions")\
-            .select("*")\
-            .in_("scan_result_id", scan_ids)\
-            .execute()
+        # B. Згадки та Джерела
+        mentions_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
+        sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
+        keywords_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+        
         df_mentions = pd.DataFrame(mentions_resp.data)
-
-        # C. Джерела
-        sources_resp = supabase.table("extracted_sources")\
-            .select("*")\
-            .in_("scan_result_id", scan_ids)\
-            .execute()
         df_sources = pd.DataFrame(sources_resp.data)
-
-        # D. Ключові слова
-        keywords_resp = supabase.table("keywords")\
-            .select("id, keyword_text")\
-            .eq("project_id", proj["id"])\
-            .execute()
         kw_map = {k['id']: k['keyword_text'] for k in keywords_resp.data}
 
     except Exception as e:
-        st.error(f"Помилка обробки даних: {e}")
+        st.error(f"Помилка завантаження: {e}")
         return
 
     # --- 3. РОЗРАХУНОК МЕТРИК ---
@@ -715,158 +707,129 @@ def show_dashboard():
     official_sources = len(df_sources[df_sources['is_official'] == True])
     official_pct = (official_sources / total_sources * 100) if total_sources > 0 else 0.0
 
-    # Card 3: Sentiment (Breakdown)
+    # 3. Sentiment Data
+    if not df_mentions.empty:
+        my_brand_rows = df_mentions[df_mentions['is_my_brand'] == True].copy()
+    else:
+        my_brand_rows = pd.DataFrame()
+
+    # 4. Позиція
+    if not my_brand_rows.empty:
+        found_rows = my_brand_rows[my_brand_rows['rank_position'].notnull()]
+        avg_pos = found_rows['rank_position'].mean() if not found_rows.empty else 0
+    else:
+        avg_pos = 0
+
+    # 5. Присутність
+    total_scans_count = len(scan_ids)
+    scans_with_me = 0
+    if not my_brand_rows.empty:
+        scans_with_me = my_brand_rows['scan_result_id'].nunique()
+    visibility_rate = (scans_with_me / total_scans_count * 100) if total_scans_count > 0 else 0.0
+
+    # --- 4. ВІЗУАЛІЗАЦІЯ ---
+    
+    def make_donut(value, color="#00C896"):
+        fig = go.Figure(data=[go.Pie(
+            values=[value, 100-value], hole=.75,
+            marker_colors=[color, "#EEF0F2"], textinfo='none', hoverinfo='none'
+        )])
+        fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=120,
+            annotations=[dict(text=f"{value:.1f}%", x=0.5, y=0.5, font_size=20, showarrow=False, font_weight='bold')])
+        return fig
+
+    st.markdown("""
+    <style>
+        .dash-card { background-color: white; border: 1px solid #E0E0E0; border-radius: 10px; padding: 20px; text-align: center; height: 280px; display: flex; flex-direction: column; justify-content: space-between; }
+        .dash-title { font-size: 12px; text-transform: uppercase; color: #888; font-weight: 600; margin-bottom: 10px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # === РЯДОК 1 (СТВОРЮЄМО КОЛОНКИ ТУТ) ===
+    # ⚠️ Ось цей рядок був пропущений, тому виникала помилка
+    r1_c1, r1_c2, r1_c3 = st.columns(3)
+
+    # Картка 1: SOV
+    with r1_c1:
+        with st.container(border=True):
+            st.markdown("<div class='dash-title'>ЧАСТКА ГОЛОСУ (SOV)</div>", unsafe_allow_html=True)
+            st.plotly_chart(make_donut(sov, "#00C896"), use_container_width=True, key="d_sov")
+            st.caption(f"Ви: {int(my_mentions)} | Всього: {int(total_mentions)}")
+
+    # Картка 2: Офіційні джерела
+    with r1_c2:
+        with st.container(border=True):
+            st.markdown("<div class='dash-title'>% ОФІЦІЙНИХ ДЖЕРЕЛ</div>", unsafe_allow_html=True)
+            st.plotly_chart(make_donut(official_pct, "#36A2EB"), use_container_width=True, key="d_off")
+            st.caption(f"Офіційних: {official_sources}")
+
+    # Картка 3: ЗАГАЛЬНИЙ НАСТРІЙ (НОВИЙ ДИЗАЙН)
     with r1_c3:
         with st.container(border=True):
             st.markdown("<div class='dash-title'>ЗАГАЛЬНИЙ НАСТРІЙ</div>", unsafe_allow_html=True)
             
-            # 1. Рахуємо кількість кожної тональності для нашого бренду
+            # 1. Рахуємо
             if not my_brand_rows.empty:
-                sent_counts = my_brand_rows['sentiment_score'].value_counts()
-                pos_count = sent_counts.get('Позитивний', 0)
-                neu_count = sent_counts.get('Нейтральний', 0)
-                neg_count = sent_counts.get('Негативний', 0)
+                s_counts = my_brand_rows['sentiment_score'].value_counts()
+                pos_count = s_counts.get('Позитивний', 0)
+                neu_count = s_counts.get('Нейтральний', 0)
+                neg_count = s_counts.get('Негативний', 0)
                 total_sent = pos_count + neu_count + neg_count
             else:
                 pos_count = neu_count = neg_count = total_sent = 0
 
-            # 2. Рахуємо відсотки
+            # 2. Відсотки
             pos_pct = (pos_count / total_sent * 100) if total_sent > 0 else 0
             neu_pct = (neu_count / total_sent * 100) if total_sent > 0 else 0
             neg_pct = (neg_count / total_sent * 100) if total_sent > 0 else 0
 
-            # 3. Малюємо Stacked Bar Chart
+            # 3. Графік (Смужка)
             fig_sent = go.Figure()
-            
-            # Позитив (Зелений)
             fig_sent.add_trace(go.Bar(
-                y=[''], x=[pos_pct], name='Позитив', orientation='h',
+                y=[''], x=[pos_pct], name='Pos', orientation='h',
                 marker=dict(color='#00C896', line=dict(width=0)),
                 hovertemplate='%{x:.1f}%<extra></extra>'
             ))
-            # Нейтрал (Сірий)
             fig_sent.add_trace(go.Bar(
-                y=[''], x=[neu_pct], name='Нейтрал', orientation='h',
+                y=[''], x=[neu_pct], name='Neu', orientation='h',
                 marker=dict(color='#E0E0E0', line=dict(width=0)),
                 hovertemplate='%{x:.1f}%<extra></extra>'
             ))
-            # Негатив (Червоний)
             fig_sent.add_trace(go.Bar(
-                y=[''], x=[neg_pct], name='Негатив', orientation='h',
+                y=[''], x=[neg_pct], name='Neg', orientation='h',
                 marker=dict(color='#FF4B4B', line=dict(width=0)),
                 hovertemplate='%{x:.1f}%<extra></extra>'
             ))
 
             fig_sent.update_layout(
-                barmode='stack',
-                showlegend=False,
-                margin=dict(t=0, b=0, l=0, r=0),
-                height=60,
+                barmode='stack', showlegend=False,
+                margin=dict(t=0, b=0, l=0, r=0), height=60,
                 xaxis=dict(showgrid=False, showticklabels=False, zeroline=False, range=[0, 100]),
                 yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-                paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)'
+                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
             )
             
-            st.plotly_chart(fig_sent, use_container_width=True, config={'displayModeBar': False}, key="bar_sent")
+            st.plotly_chart(fig_sent, use_container_width=True, config={'displayModeBar': False})
 
-            # 4. Легенда з цифрами
+            # 4. Легенда
             st.markdown(f"""
-            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 10px;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 5px;">
                 <div style="text-align: center;"><span style="color:#00C896;">●</span> {pos_pct:.0f}%</div>
                 <div style="text-align: center;"><span style="color:#999;">●</span> {neu_pct:.0f}%</div>
                 <div style="text-align: center;"><span style="color:#FF4B4B;">●</span> {neg_pct:.0f}%</div>
             </div>
             """, unsafe_allow_html=True)
             
-            # Загальний висновок
+            # Висновок
             main_mood = "Даних немає"
             if total_sent > 0:
                 if pos_pct >= max(neu_pct, neg_pct): main_mood = "Переважно Позитивний"
                 elif neg_pct >= max(pos_pct, neu_pct): main_mood = "Переважно Негативний"
                 else: main_mood = "Переважно Нейтральний"
             
-            st.markdown(f"<div style='text-align:center; font-weight:bold; margin-top:5px; font-size:14px;'>{main_mood}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='text-align:center; font-weight:bold; margin-top:5px; font-size:14px; color:#333;'>{main_mood}</div>", unsafe_allow_html=True)
 
-    # 4. Позиція
-    found_rows = my_brand_rows[my_brand_rows['rank_position'].notnull()] if not my_brand_rows.empty else pd.DataFrame()
-    avg_pos = found_rows['rank_position'].mean() if not found_rows.empty else 0
-
-    # 5. Присутність
-    total_scans_count = len(scan_ids)
-    scans_with_me = found_rows['scan_result_id'].nunique() if not found_rows.empty else 0
-    visibility_rate = (scans_with_me / total_scans_count * 100) if total_scans_count > 0 else 0.0
-
-    # --- 4. ВІЗУАЛІЗАЦІЯ (СТИЛЬ VIRSHI) ---
-    
-    def make_donut(value, label, color="#00C896"):
-        fig = go.Figure(data=[go.Pie(
-            values=[value, 100-value],
-            hole=.75,
-            marker_colors=[color, "#EEF0F2"],
-            textinfo='none',
-            hoverinfo='none'
-        )])
-        fig.update_layout(
-            showlegend=False,
-            margin=dict(t=0, b=0, l=0, r=0),
-            height=120,
-            annotations=[dict(text=f"{value:.1f}%", x=0.5, y=0.5, font_size=20, showarrow=False, font_weight='bold')]
-        )
-        return fig
-
-    st.markdown("""
-    <style>
-        .dash-card {
-            background-color: white;
-            border: 1px solid #E0E0E0;
-            border-radius: 10px;
-            padding: 20px;
-            text-align: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-            height: 280px;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-        }
-        .dash-title {
-            font-size: 12px;
-            text-transform: uppercase;
-            color: #888;
-            font-weight: 600;
-            margin-bottom: 10px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # --- РЯДОК 1 ---
-    r1_c1, r1_c2, r1_c3 = st.columns(3)
-
-    with r1_c1:
-        with st.container(border=True):
-            st.markdown("<div class='dash-title'>ЧАСТКА ГОЛОСУ (SOV)</div>", unsafe_allow_html=True)
-            st.plotly_chart(make_donut(sov, "SOV"), use_container_width=True, key="d_sov")
-            st.caption(f"Ви: {int(my_mentions)} | Всього: {int(total_mentions)}")
-
-    with r1_c2:
-        with st.container(border=True):
-            st.markdown("<div class='dash-title'>% ОФІЦІЙНИХ ДЖЕРЕЛ</div>", unsafe_allow_html=True)
-            st.plotly_chart(make_donut(official_pct, "OFF", color="#36A2EB"), use_container_width=True, key="d_off")
-            st.caption(f"Офіційних: {official_sources} | Всього: {total_sources}")
-
-    with r1_c3:
-        with st.container(border=True):
-            st.markdown("<div class='dash-title'>ЗАГАЛЬНИЙ НАСТРІЙ</div>", unsafe_allow_html=True)
-            st.plotly_chart(make_donut(avg_sentiment, "Sent", color="#FFCE56"), use_container_width=True, key="d_sent")
-            
-            sent_text = "Нейтральний"
-            if avg_sentiment > 60: sent_text = "Позитивний"
-            if avg_sentiment < 40: sent_text = "Негативний"
-            if avg_sentiment == 0 and my_brand_rows.empty: sent_text = "Даних немає"
-            
-            st.markdown(f"<div style='text-align:center; font-weight:bold;'>{sent_text}</div>", unsafe_allow_html=True)
-
-    # --- РЯДОК 2 ---
+    # === РЯДОК 2 ===
     r2_c1, r2_c2, r2_c3 = st.columns(3)
 
     with r2_c1:
@@ -875,7 +838,6 @@ def show_dashboard():
             val_display = f"{avg_pos:.1f}" if avg_pos > 0 else "-"
             st.markdown(f"<div style='text-align:center; font-size: 48px; font-weight: bold; color: #00C896; margin-top: 30px;'>{val_display}</div>", unsafe_allow_html=True)
             
-            # Gauge Chart
             fig_gauge = go.Figure(go.Indicator(
                 mode = "gauge",
                 value = avg_pos if avg_pos > 0 else 0,
@@ -892,37 +854,33 @@ def show_dashboard():
     with r2_c2:
         with st.container(border=True):
             st.markdown("<div class='dash-title'>ПРИСУТНІСТЬ БРЕНДУ</div>", unsafe_allow_html=True)
-            st.plotly_chart(make_donut(visibility_rate, "Vis", color="#9966FF"), use_container_width=True, key="d_vis")
+            st.plotly_chart(make_donut(visibility_rate, "#9966FF"), use_container_width=True, key="d_vis")
             st.caption(f"Знайдено у {scans_with_me} з {total_scans_count} сканувань")
 
     with r2_c3:
-        # Метрика: Кількість унікальних запитів
-        unique_kws = len(set(scan_ids)) # Це спрощено, краще брати keyword_id
-        # Але краще: Доля посилань на домен
-        domain_mentions = len(df_sources[df_sources['domain'].str.contains(proj.get('domain', 'MISSING'), na=False, case=False)])
-        domain_pct = (domain_mentions / total_sources * 100) if total_sources > 0 else 0
+        domain_mentions = 0
+        if not df_sources.empty:
+            domain_mentions = len(df_sources[df_sources['domain'].str.contains(proj.get('domain', 'MISSING'), na=False, case=False)])
+        domain_pct = (domain_mentions / total_sources * 100) if total_sources > 0 else 0.0
         
         with st.container(border=True):
             st.markdown("<div class='dash-title'>ЗГАДКИ ДОМЕНУ</div>", unsafe_allow_html=True)
-            st.plotly_chart(make_donut(domain_pct, "Dom", color="#FF9F40"), use_container_width=True, key="d_dom")
+            st.plotly_chart(make_donut(domain_pct, "#FF9F40"), use_container_width=True, key="d_dom")
             st.caption(f"{domain_mentions} прямих посилань")
 
     st.markdown("---")
 
-    # --- 5. ТАБЛИЦЯ ЗАПИТІВ (ДИНАМІЧНА) ---
+    # 5. ТАБЛИЦЯ
     st.subheader("📋 Деталізація за період")
     
-    # Формуємо таблицю на основі filtered scans
-    # Беремо найсвіжіший скан для кожного keyword_id В МЕЖАХ ОБРАНОГО ПЕРІОДУ
     latest_scans_df = pd.DataFrame(scans_query.data)
     if not latest_scans_df.empty:
         latest_scans_df = latest_scans_df.sort_values('created_at', ascending=False).drop_duplicates('keyword_id')
         
         table_rows = []
         for index, row in latest_scans_df.iterrows():
-            kw_text = kw_map.get(row['keyword_id'], "Видалений запит")
+            kw_text = kw_map.get(row['keyword_id'], "—")
             
-            # Дані конкретного сканування
             scan_mentions = df_mentions[df_mentions['scan_result_id'] == row['id']]
             my_mention = scan_mentions[scan_mentions['is_my_brand'] == True]
             
@@ -931,22 +889,20 @@ def show_dashboard():
                 sent = my_mention.iloc[0]['sentiment_score']
                 is_present = True
             else:
-                pos = None # Для сортування краще None
+                pos = None
                 sent = "Не знайдено"
                 is_present = False
                 
             table_rows.append({
                 "Запит": kw_text,
-                "Дата": datetime.fromisoformat(row['created_at']).strftime("%d.%m.%Y"),
+                "Дата": datetime.fromisoformat(row['created_at']).strftime("%d.%m"),
                 "Позиція": pos if pos else "-",
                 "Тональність": sent,
                 "Знайдено?": is_present
             })
             
-        df_table = pd.DataFrame(table_rows)
-        
         st.dataframe(
-            df_table,
+            pd.DataFrame(table_rows),
             use_container_width=True,
             column_config={
                 "Знайдено?": st.column_config.CheckboxColumn("Знайдено?", disabled=True),
