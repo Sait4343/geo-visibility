@@ -428,30 +428,31 @@ def register_user(email: str, password: str, first: str, last: str) -> bool:
 
 def logout():
     """
-    Надійний вихід із системи з очищенням куки та сесії.
+    Надійний вихід із системи.
     """
-    # 1. Спроба виходу з Supabase (на сервері)
-    try:
-        supabase.auth.sign_out()
-    except Exception:
-        pass
-
-    # 2. Видалення куки (в браузері)
+    # 1. Видаляємо куку (Token)
     try:
         cookie_manager.delete("virshi_auth_token")
     except Exception:
         pass
 
-    # 3. Очищення ВСЬОГО Session State
-    # Це важливо, щоб прибрати старі змінні (проекти, ID, налаштування фільтрів)
-    # Замість ручного обнулення (st.session_state["user"] = None), ми видаляємо все.
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
+    # 2. Виходимо з Supabase (на стороні сервера)
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        pass
 
-    # 4. Невелика пауза, щоб браузер встиг видалити куку перед перезавантаженням
-    time.sleep(0.5)
+    # 3. 🔥 ПОВНЕ очищення Session State
+    # Це видаляє всі змінні: user, current_project, налаштування фільтрів тощо.
+    st.session_state.clear()
 
-    # 5. Перезавантаження сторінки (тепер check_session не знайде токен і покаже логін)
+    # 4. Ініціалізуємо критичні змінні, щоб не було помилок до перезавантаження
+    st.session_state["user"] = None
+    
+    # 5. Пауза, щоб браузер встиг фізично видалити куку
+    time.sleep(1)
+
+    # 6. Перезавантаження сторінки
     st.rerun()
 
 
@@ -2190,28 +2191,35 @@ def sidebar_menu():
 
 
 def main():
+    # 1. Спробуємо відновити сесію з куки
     check_session()
 
-    if not st.session_state["user"]:
+    # 2. Перевіряємо, чи залогінений користувач
+    # Використовуємо .get(), щоб уникнути KeyError після logout
+    if not st.session_state.get("user"):
         login_page()
+        return  # Зупиняємо виконання, далі йти не треба
 
+    # 3. Логіка Онбордингу (якщо немає проекту і не адмін)
     elif (
         st.session_state.get("current_project") is None
-        and st.session_state["role"] != "admin"
+        and st.session_state.get("role") != "admin"
     ):
         with st.sidebar:
-            if st.button("Вийти"):
+            if st.button("Вийти", key="logout_onb"):
                 logout()
         onboarding_wizard()
 
+    # 4. Основний додаток
     else:
-        if st.session_state["role"] == "admin" and not st.session_state.get(
-            "current_project"
-        ):
+        # Адмінська логіка (якщо треба)
+        if st.session_state.get("role") == "admin" and not st.session_state.get("current_project"):
             pass
 
+        # Відображаємо меню
         page = sidebar_menu()
 
+        # Роутинг сторінок
         if page == "Дашборд":
             show_dashboard()
         elif page == "Перелік запитів":
@@ -2225,15 +2233,17 @@ def main():
         elif page == "GPT-Visibility":
             show_chat_page()
         elif page == "Адмін":
+            # Проста адмінка
             st.title("🛡️ Admin Panel")
             try:
-                df = pd.DataFrame(
-                    supabase.table("projects").select("*").execute().data
-                )
-                st.dataframe(df, use_container_width=True)
-            except Exception:
-                st.error("Помилка доступу до БД.")
-
+                # Перевіряємо, чи є підключення, перед запитом
+                if 'supabase' in globals():
+                    df = pd.DataFrame(
+                        supabase.table("projects").select("*").execute().data
+                    )
+                    st.dataframe(df, use_container_width=True)
+            except Exception as e:
+                st.error(f"Помилка доступу до БД: {e}")
 
 if __name__ == "__main__":
     main()
