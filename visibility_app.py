@@ -966,17 +966,20 @@ def show_keyword_details(kw_id):
 
 def show_keywords_page():
     """
-    Сторінка списку запитів.
+    Сторінка списку запитів з розширеним сортуванням та масовим вибором.
     """
-    # 👇 ДОДАЙТЕ ЦЕЙ БЛОК НА ПОЧАТОК ФУНКЦІЇ 👇
+    import pandas as pd
+    import streamlit as st
+    from datetime import datetime
+    import time # Додаємо імпорт часу
+
+    # Локальний мапінг (щоб уникнути помилок NameError)
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
-    # ----------------------------------------
 
-    proj = st.session_state.get("current_project")
     proj = st.session_state.get("current_project")
     if not proj:
         st.info("Спочатку створіть проект в онбордингу.")
@@ -992,7 +995,6 @@ def show_keywords_page():
     with st.expander("➕ Додати новий запит", expanded=False):
         with st.form("add_keyword_form"):
             new_kw = st.text_input("Введіть запит")
-            # Використовуємо красиві назви зі словника
             model_choices = list(MODEL_MAPPING.keys())
             selected_models = st.multiselect("Оберіть ЛЛМ:", model_choices, default=["Perplexity"])
             
@@ -1012,84 +1014,125 @@ def show_keywords_page():
 
     st.divider()
     
-    # --- 2. ОТРИМАННЯ ДАНИХ (ЗАПИТИ + ДАТИ) ---
+    # --- 2. ОТРИМАННЯ ТА ОБРОБКА ДАНИХ ---
     try:
-        # Отримуємо всі запити
-        keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).execute().data
+        # А. Отримуємо всі запити
+        keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).execute().data
         
-        # Оптимізація: Отримуємо останні дати сканувань для цього проекту одним запитом
-        # (Це швидше, ніж робити запит у циклі)
+        # Б. Отримуємо останні дати сканувань
         last_scans_resp = supabase.table("scan_results")\
             .select("keyword_id, created_at")\
             .eq("project_id", proj["id"])\
             .order("created_at", desc=True)\
             .execute()
             
-        # Створюємо словник {keyword_id: "2023-12-08 14:00"}
+        # Словник {keyword_id: "2023-12-08T14:00..."}
         last_scan_map = {}
         if last_scans_resp.data:
             for s in last_scans_resp.data:
                 kw_id = s['keyword_id']
-                if kw_id not in last_scan_map: # Беремо тільки першу (найновішу) дату
+                if kw_id not in last_scan_map:
                     last_scan_map[kw_id] = s['created_at']
-                    
+        
+        # В. Збагачуємо список запитів датою сканування для сортування
+        for k in keywords:
+            k['last_scan_date'] = last_scan_map.get(k['id'], "1970-01-01T00:00:00+00:00") # Дефолтна стара дата
+
     except Exception as e:
         st.error(f"Помилка завантаження: {e}")
         keywords = []
-        last_scan_map = {}
 
     if not keywords:
         st.info("Запити відсутні.")
         return
 
-    # --- 3. ПАНЕЛЬ МАСОВИХ ДІЙ ---
-    c_bulk_1, c_bulk_2, c_bulk_3 = st.columns([2, 1, 1])
-    with c_bulk_1:
-        st.caption("Оберіть запити нижче та запустіть аналіз пакетом.")
-    with c_bulk_2:
-        bulk_models = st.multiselect("ЛЛМ для аналізу:", list(MODEL_MAPPING.keys()), default=["Perplexity"], label_visibility="collapsed", key="bulk_models_sel")
-    with c_bulk_3:
-        if st.button("🚀 Аналізувати обрані"):
-            # Збираємо ID, які були відмічені
-            selected_kws = []
-            for k in keywords:
-                if st.session_state.get(f"chk_{k['id']}", False):
-                    selected_kws.append(k['keyword_text'])
-            
-            if selected_kws:
-                with st.spinner(f"Відправляємо {len(selected_kws)} запитів на {', '.join(bulk_models)}..."):
-                    n8n_trigger_analysis(proj["id"], selected_kws, proj.get("brand_name"), models=bulk_models)
-                    st.success("Запущено! Оновіть сторінку за хвилину.")
-            else:
-                st.warning("Не обрано жодного запиту.")
+    # --- 3. ПАНЕЛЬ ІНСТРУМЕНТІВ (Сортування та Дії) ---
+    col_tools_1, col_tools_2, col_tools_3 = st.columns([1.5, 1.5, 1])
+    
+    with col_tools_1:
+        # Сортування
+        sort_option = st.selectbox(
+            "Сортувати за:", 
+            ["Найновіші (Додані)", "Найстаріші (Додані)", "Нещодавно проскановані", "Давно не скановані"],
+            label_visibility="collapsed"
+        )
+
+    # Логіка сортування Python
+    if sort_option == "Найновіші (Додані)":
+        keywords.sort(key=lambda x: x['created_at'], reverse=True)
+    elif sort_option == "Найстаріші (Додані)":
+        keywords.sort(key=lambda x: x['created_at'], reverse=False)
+    elif sort_option == "Нещодавно проскановані":
+        keywords.sort(key=lambda x: x['last_scan_date'], reverse=True)
+    elif sort_option == "Давно не скановані":
+        keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
+
+    # --- 4. МАСОВІ ДІЇ ---
+    with st.container(border=True):
+        c_bulk_1, c_bulk_2, c_bulk_3 = st.columns([0.5, 2, 1])
+        
+        # Чекбокс "ОБРАТИ ВСІ"
+        with c_bulk_1:
+            select_all = st.checkbox("Всі", key="select_all_kws")
+        
+        with c_bulk_2:
+            bulk_models = st.multiselect(
+                "ЛЛМ для запуску:", 
+                list(MODEL_MAPPING.keys()), 
+                default=["Perplexity"], 
+                label_visibility="collapsed", 
+                key="bulk_models_sel"
+            )
+        
+        with c_bulk_3:
+            if st.button("🚀 Запустити аналіз", use_container_width=True):
+                # Збираємо ID
+                selected_kws_text = []
+                
+                # Якщо натиснуто "Всі", беремо всі, інакше перевіряємо поштучно
+                if select_all:
+                    selected_kws_text = [k['keyword_text'] for k in keywords]
+                else:
+                    for k in keywords:
+                        if st.session_state.get(f"chk_{k['id']}", False):
+                            selected_kws_text.append(k['keyword_text'])
+                
+                if selected_kws_text:
+                    with st.spinner(f"Відправляємо {len(selected_kws_text)} запитів..."):
+                        n8n_trigger_analysis(proj["id"], selected_kws_text, proj.get("brand_name"), models=bulk_models)
+                        st.success("Успішно! Оновіть сторінку за хвилину.")
+                        # Скидаємо виділення (опціонально)
+                        if select_all: st.session_state["select_all_kws"] = False
+                        time.sleep(2)
+                        st.rerun()
+                else:
+                    st.warning("Оберіть хоча б один запит.")
 
     # Заголовки таблиці
     h1, h2, h3, h4 = st.columns([0.5, 3, 1.5, 1])
-    h1.markdown("✅")
     h2.markdown("**Запит**")
     h3.markdown("**Останній аналіз**")
     h4.markdown("**Дії**")
 
-    # --- 4. СПИСОК ЗАПИТІВ ---
+    # --- 5. ВИВІД СПИСКУ ---
     for k in keywords:
         with st.container(border=True):
             c1, c2, c3, c4 = st.columns([0.5, 3, 1.5, 1])
             
-            # Чекбокс
+            # Чекбокс (якщо Select All увімкнено, то галочка стоїть автоматично)
             with c1:
-                st.checkbox("", key=f"chk_{k['id']}")
+                is_checked = select_all
+                st.checkbox("", key=f"chk_{k['id']}", value=is_checked)
             
-            # Текст запиту
+            # Текст
             with c2:
                 st.markdown(f"**{k['keyword_text']}**")
             
             # Дата
             with c3:
-                date_iso = last_scan_map.get(k['id'])
-                if date_iso:
-                    # Форматуємо дату (YYYY-MM-DD HH:MM)
+                date_iso = k.get('last_scan_date')
+                if date_iso and date_iso != "1970-01-01T00:00:00+00:00":
                     dt_obj = datetime.fromisoformat(date_iso.replace('Z', '+00:00'))
-                    # Конвертуємо в локальний час (+2 години для Києва приблизно, або просто показуємо UTC)
                     formatted_date = dt_obj.strftime("%d.%m.%Y %H:%M")
                     st.caption(f"🕒 {formatted_date}")
                 else:
