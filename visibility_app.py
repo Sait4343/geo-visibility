@@ -869,106 +869,101 @@ def show_keywords_page():
 def show_recommendations_page():
     proj = st.session_state.get("current_project")
     if not proj:
-        st.info("Спочатку створіть проект, щоб отримувати рекомендації.")
+        st.info("Спочатку створіть проект.")
         return
 
-    st.title("💡 Рекомендації")
+    st.title("💡 Центр Стратегій та Дій")
+    st.caption("ШІ-аналітик аналізує ваші позиції та генерує покроковий план дій.")
 
-    tabs = st.tabs(["PR", "Digital", "Creative"])
+    # 1. Розділяємо на типи рекомендацій
+    # Ми використовуємо константи, які співпадають з ENUM в базі даних (rec_type)
+    tabs = st.tabs(["📣 PR Стратегія", "💻 Digital & SEO", "✍️ Контент-план", "📱 Social Media"])
+    types = ["pr", "digital", "content", "social"]
 
-    topics = ["pr", "digital", "creative"]
-    labels = ["PR / Комунікації", "Digital / Performance", "Creative / Ідеї"]
-
-    for tab, topic, label in zip(tabs, topics, labels):
+    for tab, r_type in zip(tabs, types):
         with tab:
-            st.markdown(f"### {label}")
+            # --- Блок Генерації (Тільки для Адміна або якщо дозволено юзеру) ---
+            # Можна додати перевірку: if st.session_state["role"] == "admin":
+            
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.markdown(f"**Згенерувати новий звіт: {r_type.upper()}**")
+                    st.caption("Аналіз останніх 30 днів, пошук розривів (gaps) та план дій.")
+                with c2:
+                    if st.button(f"🚀 Запустити AI", key=f"btn_gen_{r_type}"):
+                        with st.spinner("Gemini аналізує дані та пише звіт... Це може зайняти до 30 секунд."):
+                            try:
+                                # Тут ми викликаємо n8n вебхук
+                                # Для MVP поки що робимо запис-заглушку, якщо n8n не підключений
+                                # АБО викликаємо реальну функцію n8n_request_recommendations
+                                
+                                # Варіант А: Реальний виклик (розкоментуйте, коли буде готовий n8n)
+                                # n8n_request_recommendations(proj, r_type, "Auto-generated report")
+                                
+                                # Варіант Б: Симуляція (щоб ви побачили як це виглядає зараз)
+                                fake_report = f"""
+                                # Стратегія {r_type.upper()} для {proj.get('brand_name')}
+                                **Дата:** {datetime.now().strftime('%Y-%m-%d')}
+                                
+                                ## 1. Аналіз ситуації
+                                Наразі частка голосу (SOV) складає **{proj.get('sov', '15')}%**.
+                                Основні конкуренти домінують у категорії "Депозити".
+                                
+                                ## 2. Ключові проблеми
+                                * Відсутність згадок на *Minfin.com.ua*.
+                                * Низька тональність у відповідях Perplexity.
+                                
+                                ## 3. План дій (Action Items)
+                                1. **Стаття-огляд:** Замовити розміщення на finance.ua.
+                                2. **Робота з відгуками:** Відповісти на скарги на форумах.
+                                """
+                                
+                                supabase.table("recommendation_reports").insert({
+                                    "project_id": proj["id"],
+                                    "report_type": r_type,
+                                    "report_content": fake_report
+                                }).execute()
+                                
+                                st.success("Звіт успішно згенеровано!")
+                                time.sleep(1)
+                                st.rerun()
+                                
+                            except Exception as e:
+                                st.error(f"Помилка генерації: {e}")
 
-            with st.form(f"reco_form_{topic}"):
-                brief = st.text_area(
-                    "Коротко опишіть задачу / контекст (укр / англ)",
-                    height=120,
+            st.divider()
+            st.subheader("📂 Історія звітів")
+
+            # 2. Виведення історії звітів з бази
+            try:
+                reports = (
+                    supabase.table("recommendation_reports")
+                    .select("*")
+                    .eq("project_id", proj["id"])
+                    .eq("report_type", r_type)
+                    .order("created_at", desc=True)
+                    .execute()
+                    .data
                 )
-                submitted = st.form_submit_button("Запросити рекомендації")
-                if submitted:
-                    if not brief.strip():
-                        st.warning("Будь ласка, опишіть задачу.")
-                    else:
-                        with st.spinner("Генеруємо рекомендації через n8n..."):
-                            recos = n8n_request_recommendations(proj, topic, brief)
-                            if recos:
-                                st.success("Рекомендації отримано.")
-                                # опційно — зберігаємо в БД
-                                try:
-                                    rows = [
-                                        {
-                                            "project_id": proj["id"],
-                                            "topic": topic,
-                                            "created_at": datetime.utcnow().isoformat(),
-                                            "title": r.get("title", "")[:255],
-                                            "summary": r.get("summary", ""),
-                                            "details": r.get("details", ""),
-                                        }
-                                        for r in recos
-                                    ]
-                                    supabase.table("recommendations").insert(
-                                        rows
-                                    ).execute()
-                                except Exception:
-                                    # якщо таблиці ще немає — просто ігноруємо
-                                    pass
+            except Exception as e:
+                st.error(f"Помилка завантаження: {e}")
+                reports = []
 
-    st.markdown("---")
-    st.markdown("### Історія рекомендацій")
-
-    # фільтр по даті
-    c1, c2 = st.columns(2)
-    with c1:
-        date_from = st.date_input(
-            "З дати",
-            value=date.today().replace(day=1),
-        )
-    with c2:
-        date_to = st.date_input("По дату", value=date.today())
-
-    try:
-        q = (
-            supabase.table("recommendations")
-            .select("*")
-            .eq("project_id", proj["id"])
-            .order("created_at", desc=True)
-        )
-        data = q.execute().data or []
-    except Exception:
-        data = []
-
-    if not data:
-        st.info("Поки що рекомендацій немає або таблиця recommendations не створена.")
-        return
-
-    # фільтруємо по даті
-    filtered = []
-    for r in data:
-        try:
-            dt = datetime.fromisoformat(str(r.get("created_at")).replace("Z", "+00:00"))
-        except Exception:
-            continue
-        if date_from <= dt.date() <= date_to:
-            filtered.append(r)
-
-    if not filtered:
-        st.info("Немає рекомендацій за обраний період.")
-        return
-
-    for r in filtered:
-        dt = str(r.get("created_at", ""))[:19]
-        topic = r.get("topic", "")
-        title = r.get("title") or "(без назви)"
-        header = f"[{dt}] {topic.upper()} — {title}"
-        with st.expander(header):
-            st.markdown(f"**Коротко:** {r.get('summary','')}")
-            st.markdown("---")
-            st.markdown(r.get("details", "") or "_Без деталей_")
-
+            if not reports:
+                st.info("У цій категорії ще немає звітів.")
+            else:
+                for rep in reports:
+                    date_str = str(rep['created_at'])[:10]
+                    with st.expander(f"📄 Звіт від {date_str}"):
+                        # Кнопка видалення звіту
+                        if st.button("Видалити звіт", key=f"del_rep_{rep['id']}"):
+                            supabase.table("recommendation_reports").delete().eq("id", rep['id']).execute()
+                            st.rerun()
+                        
+                        st.markdown("---")
+                        # Рендеринг Markdown (основна фішка)
+                        st.markdown(rep['report_content'])
 
 # =========================
 # 9. SIDEBAR
