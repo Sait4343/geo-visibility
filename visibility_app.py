@@ -201,6 +201,7 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n.
+    FIX: Розбиває масив моделей на окремі запити, щоб n8n не плутався.
     """
     try:
         user_email = st.session_state["user"].email if st.session_state.get("user") else None
@@ -209,22 +210,32 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         if isinstance(keywords, str):
             keywords = [keywords]
 
-        payload = {
-            "project_id": project_id,
-            "keywords": keywords, # Передаємо масив
-            "brand_name": brand_name,
-            "user_email": user_email,
-            "models": models or ["perplexity"], # За замовчуванням perplexity
-        }
-        
-        # Збільшуємо таймаут, бо n8n може думати пару секунд
-        response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=5)
-        
-        if response.status_code == 200:
-            return True
-        else:
-            st.error(f"N8N Error: {response.text}")
-            return False
+        # Якщо моделі не обрані, беремо дефолтну
+        if not models:
+            models = ["perplexity"]
+
+        success_count = 0
+
+        # 🔄 ЦИКЛ: Для кожної моделі відправляємо окремий запит
+        for model in models:
+            payload = {
+                "project_id": project_id,
+                "keywords": keywords, 
+                "brand_name": brand_name,
+                "user_email": user_email,
+                "provider": model, # <--- ТУТ ТЕПЕР ОДНЕ СЛОВО (String)
+                "models": [model]  # Залишаємо для сумісності
+            }
+            
+            try:
+                # Відправка запиту
+                response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=10)
+                if response.status_code == 200:
+                    success_count += 1
+            except Exception as inner_e:
+                print(f"Error sending to {model}: {inner_e}")
+
+        return success_count > 0
             
     except Exception as e:
         st.error(f"Помилка з'єднання з n8n: {e}")
