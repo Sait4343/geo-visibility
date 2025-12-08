@@ -499,113 +499,76 @@ def login_page():
 
 
 def onboarding_wizard():
-    st.markdown("## 🚀 Налаштування Проекту")
+    """
+    Майстер створення першого проекту для нового користувача.
+    """
+    st.markdown("## 🚀 Налаштування вашого Проекту")
+    st.info("Вітаємо! Створіть свій перший проект, щоб почати аналіз.")
 
-    with st.container(border=True):
-        step = st.session_state.get("onboarding_step", 2)
+    with st.form("onboarding_form"):
+        # Крок 1: Основні дані
+        st.subheader("1. Дані про бренд")
+        c1, c2 = st.columns(2)
+        with c1:
+            brand_name = st.text_input("Назва бренду", placeholder="Наприклад: Monobank")
+        with c2:
+            domain = st.text_input("Офіційний сайт (Домен)", placeholder="monobank.ua")
+        
+        region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=0)
+        
+        # Крок 2: Офіційні ресурси
+        st.subheader("2. Офіційні джерела (Whitelist)")
+        st.caption("Вкажіть ваші соцмережі та сайти через кому. Ми будемо позначати їх як 'Офіційні'.")
+        assets_text = st.text_area("Список URL", placeholder="https://instagram.com/mono, https://t.me/monobankua", help="Розділяйте комою або новим рядком")
 
-        # STEP 2 – дані про бренд
-        if step == 2:
-            st.subheader("Крок 1: Введіть дані про ваш бренд")
+        # Крок 3: Перші запити (Опціонально)
+        st.subheader("3. Перші запити для моніторингу")
+        keywords_text = st.text_area("Введіть 3-5 запитів (по одному в рядок)", placeholder="курси валют монобанк\nяк відкрити карту моно", height=100)
 
-            brand = st.text_input("Назва бренду")
-            domain = st.text_input("Домен (офіційний сайт)")
-            industry = st.text_input("Галузь бренду / ніша")
-            products = st.text_area(
-                "Продукти / Послуги (перелічіть через кому або у стовпчик)"
-            )
+        submitted = st.form_submit_button("🚀 Створити Проект", type="primary")
 
-            if st.button("Згенерувати запити"):
-                if brand and domain and industry and products:
-                    st.session_state["temp_brand"] = brand
-                    st.session_state["temp_domain"] = domain
-                    st.session_state["temp_industry"] = industry
-                    st.session_state["temp_products"] = products
+        if submitted:
+            if not brand_name or not domain:
+                st.error("Будь ласка, вкажіть Назву бренду та Домен.")
+            else:
+                try:
+                    user = st.session_state["user"]
+                    
+                    # 1. Створюємо проект
+                    proj_res = supabase.table("projects").insert({
+                        "user_id": user.id,
+                        "brand_name": brand_name,
+                        "domain": domain,
+                        "region": region,
+                        "status": "trial" # По дефолту тріал
+                    }).execute()
+                    
+                    if proj_res.data:
+                        new_proj = proj_res.data[0]
+                        proj_id = new_proj["id"]
+                        
+                        # 2. Додаємо асети (Whitelist)
+                        assets_list = [a.strip() for a in assets_text.replace("\n", ",").split(",") if a.strip()]
+                        assets_list.append(domain) # Додаємо сам домен теж
+                        
+                        if assets_list:
+                            assets_data = [{"project_id": proj_id, "domain_or_url": a, "type": "website"} for a in assets_list]
+                            supabase.table("official_assets").insert(assets_data).execute()
 
-                    with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
-                        prompts = n8n_generate_prompts(brand, domain, industry, products)
-                        if prompts and len(prompts) > 0:
-                            st.session_state["generated_prompts"] = prompts
-                            st.session_state["onboarding_step"] = 3
-                            st.rerun()
-                        else:
-                            st.error("AI не повернув результатів. Спробуйте ще раз.")
-                else:
-                    st.warning("Будь ласка, заповніть всі 4 поля.")
+                        # 3. Додаємо ключові слова
+                        kws_list = [k.strip() for k in keywords_text.split("\n") if k.strip()]
+                        if kws_list:
+                            kws_data = [{"project_id": proj_id, "keyword_text": k, "is_active": True} for k in kws_list]
+                            supabase.table("keywords").insert(kws_data).execute()
 
-        # STEP 3 – вибір 5 запитів
-        elif step == 3:
-            st.subheader("Крок 2: Оберіть 5 пріоритетних запитів")
-            st.write(
-                f"Оберіть 5 пріоритетних запитів для **{st.session_state['temp_brand']}**:"
-            )
-
-            opts = st.session_state.get("generated_prompts", [])
-            selected = st.multiselect(
-                "Список запитів:",
-                opts,
-                default=opts[:5] if len(opts) >= 5 else opts,
-            )
-            st.caption(f"Обрано: {len(selected)} / 5")
-
-            if st.button("Запустити аналіз"):
-                if len(selected) == 5:
-                    with st.spinner("Створюємо проект та запускаємо аналіз..."):
-                        try:
-                            user_id = st.session_state["user"].id
-
-                            # 1. Створюємо проект
-                            res = (
-                                supabase.table("projects")
-                                .insert(
-                                    {
-                                        "user_id": user_id,
-                                        "brand_name": st.session_state["temp_brand"],
-                                        "domain": st.session_state["temp_domain"],
-                                        "industry": st.session_state[
-                                            "temp_industry"
-                                        ],
-                                        "products": st.session_state[
-                                            "temp_products"
-                                        ],
-                                        "status": "trial",
-                                    }
-                                )
-                                .execute()
-                            )
-
-                            if not res.data:
-                                raise Exception("Project creation failed")
-
-                            proj_data = res.data[0]
-                            proj_id = proj_data["id"]
-
-                            # 2. Записуємо ключові слова
-                            for kw in selected:
-                                supabase.table("keywords").insert(
-                                    {
-                                        "project_id": proj_id,
-                                        "keyword_text": kw,
-                                        "type": "ranking",
-                                    }
-                                ).execute()
-
-                            # 3. Запускаємо аналіз через n8n
-                            n8n_trigger_analysis(
-                                proj_id, selected, st.session_state["temp_brand"]
-                            )
-
-                            # 4. Фінал
-                            st.session_state["current_project"] = proj_data
-                            st.success(
-                                "Проект створено! Аналіз запущено у фоновому режимі."
-                            )
-                            time.sleep(2)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Системна помилка: {e}")
-                else:
-                    st.error("Будь ласка, оберіть рівно 5 запитів")
+                        # 4. Фінал
+                        st.success("Проект успішно створено!")
+                        st.session_state["current_project"] = new_proj
+                        time.sleep(1)
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"Помилка при створенні: {e}")
 
 
 # =========================
@@ -2211,36 +2174,278 @@ def sidebar_menu():
 
     return selected
 
+def show_admin_page():
+    """
+    Повноцінна CRM для Адміністратора.
+    Функціонал: Огляд всіх клієнтів, Створення, Редагування, Статистика.
+    """
+    import pandas as pd
+    import streamlit as st
+    import time
+    
+    # Перевірка доступу (на всяк випадок)
+    if st.session_state.get("role") != "admin":
+        st.error("⛔ Доступ заборонено.")
+        return
+
+    st.title("🛡️ Admin Panel (CRM)")
+    
+    # Стилізація метрик
+    st.markdown("""
+    <style>
+        .metric-box {
+            background-color: #F8F9FA;
+            border: 1px solid #E0E0E0;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+        .metric-val { font-size: 24px; font-weight: bold; color: #00C896; }
+        .metric-lbl { font-size: 14px; color: #666; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Вкладки адмінки
+    tab_list, tab_create, tab_edit = st.tabs(["📋 Список Клієнтів", "➕ Створити Клієнта", "✏️ Редагування"])
+
+    # ========================================================
+    # TAB 1: СПИСОК КЛІЄНТІВ (ОГЛЯД)
+    # ========================================================
+    with tab_list:
+        if st.button("🔄 Оновити дані"):
+            st.rerun()
+
+        try:
+            # 1. Отримуємо всі проекти
+            projects = supabase.table("projects").select("*").order("created_at", desc=True).execute().data
+            
+            if projects:
+                # Підрахунок загальних метрик
+                total_clients = len(projects)
+                active_clients = len([p for p in projects if p.get('status') == 'active'])
+                
+                # Виводимо плашки зверху
+                c1, c2, c3 = st.columns(3)
+                c1.markdown(f"<div class='metric-box'><div class='metric-val'>{total_clients}</div><div class='metric-lbl'>Всього клієнтів</div></div>", unsafe_allow_html=True)
+                c2.markdown(f"<div class='metric-box'><div class='metric-val'>{active_clients}</div><div class='metric-lbl'>Активних (Paid)</div></div>", unsafe_allow_html=True)
+                c3.markdown(f"<div class='metric-box'><div class='metric-val'>{total_clients - active_clients}</div><div class='metric-lbl'>Тріал (Trial)</div></div>", unsafe_allow_html=True)
+                
+                st.write("") # Відступ
+
+                # 2. Збираємо детальну статистику по кожному клієнту
+                # (Це цикл, тому при 100+ клієнтах краще робити SQL View, але поки так)
+                client_data = []
+                
+                with st.spinner("Завантаження статистики по клієнтах..."):
+                    for p in projects:
+                        pid = p['id']
+                        
+                        # А. Кількість ключових слів
+                        kw_res = supabase.table("keywords").select("id", count="exact").eq("project_id", pid).execute()
+                        kw_count = kw_res.count if kw_res.count is not None else 0
+                        
+                        # Б. Кількість запусків (Scan Runs)
+                        scan_res = supabase.table("scan_results").select("id", count="exact").eq("project_id", pid).execute()
+                        scan_count = scan_res.count if scan_res.count is not None else 0
+                        
+                        # В. Офіційні джерела (список)
+                        assets_res = supabase.table("official_assets").select("domain_or_url").eq("project_id", pid).execute()
+                        assets_list = [a['domain_or_url'] for a in assets_res.data]
+                        assets_str = ", ".join(assets_list) if assets_list else "-"
+
+                        client_data.append({
+                            "ID": pid,
+                            "User (Email)": p.get("user_id", "N/A"),
+                            "Бренд": p.get("brand_name"),
+                            "Домен": p.get("domain"),
+                            "Регіон": p.get("region", "UA"),
+                            "Статус": p.get("status", "trial").upper(),
+                            "Запитів": kw_count,
+                            "Аналізів": scan_count,
+                            "Джерела": assets_str,
+                            "Створено": p.get("created_at")[:10] if p.get("created_at") else "-"
+                        })
+                
+                df = pd.DataFrame(client_data)
+                
+                # 3. Відображення таблиці
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    column_config={
+                        "ID": st.column_config.TextColumn("ID", help="Скопіюйте це ID для редагування", width="small"),
+                        "Статус": st.column_config.TextColumn("Статус", help="Trial або Active"),
+                        "Запитів": st.column_config.ProgressColumn("Запитів", format="%d", min_value=0, max_value=max(df["Запитів"].max(), 10)),
+                        "Аналізів": st.column_config.NumberColumn("Запусків"),
+                        "Джерела": st.column_config.TextColumn("Whitelist", width="medium")
+                    },
+                    hide_index=True
+                )
+            else:
+                st.info("У базі поки немає проектів.")
+                
+        except Exception as e:
+            st.error(f"Помилка завантаження адмінки: {e}")
+
+    # ========================================================
+    # TAB 2: СТВОРИТИ КЛІЄНТА (ONBOARDING FOR ADMIN)
+    # ========================================================
+    with tab_create:
+        st.markdown("##### 👤 Додати нового клієнта")
+        st.caption("Ви створюєте Проект і налаштування. Користувач зможе увійти, використовуючи Email (User ID).")
+        
+        with st.form("admin_create_client_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                # Тут вводимо Email або UUID користувача з Auth
+                new_uid = st.text_input("User ID / Email", help="Вкажіть email, під яким користувач буде логінитись")
+                new_brand = st.text_input("Назва Бренду", placeholder="Напр. Nova Poshta")
+            
+            with c2:
+                new_domain = st.text_input("Домен сайту", placeholder="novaposhta.ua")
+                new_region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"])
+            
+            new_status = st.selectbox("Початковий статус", ["trial", "active"])
+            
+            st.markdown("**Налаштування:**")
+            new_assets = st.text_area("Офіційні джерела (Whitelist)", placeholder="https://instagram.com/nova...\nhttps://facebook.com/...", help="По одному в рядок або через кому")
+            new_kws = st.text_area("Початкові запити (Ключові слова)", placeholder="доставка посилок\nціна доставки", help="По одному в рядок")
+
+            submitted_create = st.form_submit_button("✅ Створити Клієнта", type="primary")
+            
+            if submitted_create:
+                if new_uid and new_brand:
+                    try:
+                        # 1. Створення запису в projects
+                        res = supabase.table("projects").insert({
+                            "user_id": new_uid, # Прив'язка до юзера
+                            "brand_name": new_brand,
+                            "domain": new_domain,
+                            "region": new_region,
+                            "status": new_status
+                        }).execute()
+                        
+                        if res.data:
+                            new_pid = res.data[0]['id']
+                            
+                            # 2. Додавання джерел
+                            if new_assets:
+                                asset_list = [a.strip() for a in new_assets.replace("\n", ",").split(",") if a.strip()]
+                                if asset_list:
+                                    asset_data = [{"project_id": new_pid, "domain_or_url": a, "type": "website"} for a in asset_list]
+                                    supabase.table("official_assets").insert(asset_data).execute()
+                            
+                            # 3. Додавання запитів
+                            if new_kws:
+                                kw_list = [k.strip() for k in new_kws.split("\n") if k.strip()]
+                                if kw_list:
+                                    kw_data = [{"project_id": new_pid, "keyword_text": k, "is_active": True} for k in kw_list]
+                                    supabase.table("keywords").insert(kw_data).execute()
+
+                            st.success(f"Клієнт {new_brand} успішно створений! ID: {new_pid}")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Помилка створення: {e}")
+                else:
+                    st.warning("Вкажіть User ID та Назву бренду.")
+
+    # ========================================================
+    # TAB 3: РЕДАГУВАННЯ (ЗМІНА СТАТУСУ, КРОН)
+    # ========================================================
+    with tab_edit:
+        st.markdown("##### ✏️ Керування існуючим проектом")
+        
+        # Завантажуємо список для вибору
+        try:
+            all_projs = supabase.table("projects").select("id, brand_name, user_id").execute().data
+            # Формат: "Brand (Email)"
+            proj_options = {f"{p['brand_name']} ({p.get('user_id')})": p['id'] for p in all_projs}
+            
+            selected_label = st.selectbox("Оберіть клієнта для редагування:", list(proj_options.keys()), index=None)
+            
+            if selected_label:
+                pid = proj_options[selected_label]
+                
+                # Завантажуємо поточні дані
+                curr_data = supabase.table("projects").select("*").eq("id", pid).single().execute().data
+                
+                st.divider()
+                with st.form("edit_client_form"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        edit_brand = st.text_input("Назва бренду", value=curr_data.get("brand_name"))
+                        edit_status = st.selectbox("Статус (План)", ["trial", "active", "expired"], index=["trial", "active", "expired"].index(curr_data.get("status", "trial")))
+                    
+                    with c2:
+                        edit_region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=["UA", "US", "EU", "Global"].index(curr_data.get("region", "UA")))
+                        # Заглушки для майбутнього функціоналу
+                        edit_models = st.multiselect("Активні моделі (Доступ)", ["Perplexity", "GPT-4o", "Gemini"], default=["Perplexity", "GPT-4o", "Gemini"])
+                        edit_cron = st.checkbox("Автоматичний аналіз (CRON)", value=False, help="Поки не активний")
+
+                    st.markdown("**Системна інформація:**")
+                    st.caption(f"Project ID: {pid}")
+                    st.caption(f"Created At: {curr_data.get('created_at')}")
+
+                    submitted_edit = st.form_submit_button("💾 Зберегти зміни", type="primary")
+                    
+                    if submitted_edit:
+                        try:
+                            supabase.table("projects").update({
+                                "brand_name": edit_brand,
+                                "status": edit_status,
+                                "region": edit_region
+                            }).eq("id", pid).execute()
+                            st.success("Дані оновлено!")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Помилка оновлення: {e}")
+
+        except Exception as e:
+            st.error(f"Помилка завантаження списку: {e}")
+
+
 def main():
-    # 1. Спробуємо відновити сесію з куки
+    # 1. Перевірка сесії
     check_session()
 
-    # 2. Перевіряємо, чи залогінений користувач
-    # Використовуємо .get(), щоб уникнути KeyError після logout
+    # 2. Якщо не залогінений -> Логін
     if not st.session_state.get("user"):
         login_page()
-        return  # Зупиняємо виконання, далі йти не треба
+        return
 
-    # 3. Логіка Онбордингу (якщо немає проекту і не адмін)
-    elif (
-        st.session_state.get("current_project") is None
-        and st.session_state.get("role") != "admin"
-    ):
-        with st.sidebar:
-            if st.button("Вийти", key="logout_onb"):
-                logout()
-        onboarding_wizard()
-
-    # 4. Основний додаток
-    else:
-        # Адмінська логіка (якщо треба)
-        if st.session_state.get("role") == "admin" and not st.session_state.get("current_project"):
+    # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ
+    # Якщо користувач залогінений, але проект ще не завантажено в сесію - пробуємо знайти
+    if not st.session_state.get("current_project"):
+        try:
+            user_id = st.session_state["user"].id
+            # Шукаємо проект користувача
+            resp = supabase.table("projects").select("*").eq("user_id", user_id).execute()
+            if resp.data:
+                # Якщо знайшли - записуємо в сесію (беремо перший)
+                st.session_state["current_project"] = resp.data[0]
+                st.rerun() # Перезавантажуємо, щоб оновити інтерфейс
+        except Exception:
             pass
 
-        # Відображаємо меню
+    # 4. ЛОГІКА ONBOARDING
+    # Якщо проекту все ще немає (і це не адмін, бо адмін може не мати свого проекту)
+    if st.session_state.get("current_project") is None and st.session_state.get("role") != "admin":
+        # Показуємо кнопку виходу в сайдбарі (щоб не застряг)
+        with st.sidebar:
+            st.image("logo.png", width=150) # Або текст
+            if st.button("Вийти"):
+                logout()
+        
+        # Запускаємо Майстер створення
+        onboarding_wizard()
+    
+    # 5. ОСНОВНИЙ ДОДАТОК
+    else:
+        # Меню
         page = sidebar_menu()
 
-        # Роутинг сторінок
         if page == "Дашборд":
             show_dashboard()
         elif page == "Перелік запитів":
@@ -2254,17 +2459,10 @@ def main():
         elif page == "GPT-Visibility":
             show_chat_page()
         elif page == "Адмін":
-            # Проста адмінка
-            st.title("🛡️ Admin Panel")
-            try:
-                # Перевіряємо, чи є підключення, перед запитом
-                if 'supabase' in globals():
-                    df = pd.DataFrame(
-                        supabase.table("projects").select("*").execute().data
-                    )
-                    st.dataframe(df, use_container_width=True)
-            except Exception as e:
-                st.error(f"Помилка доступу до БД: {e}")
+            if st.session_state.get("role") == "admin":
+                show_admin_page()
+            else:
+                st.error("Доступ заборонено.")
 
 if __name__ == "__main__":
     main()
