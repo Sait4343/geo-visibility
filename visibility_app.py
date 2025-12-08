@@ -200,8 +200,8 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
-    1. Отримує список офіційних джерел з бази.
-    2. Відправляє запит на n8n разом з цим списком.
+    Відправляє запит на n8n.
+    Автоматично конвертує назви (OpenAI GPT -> gpt-4o).
     """
     try:
         user_email = st.session_state["user"].email if st.session_state.get("user") else None
@@ -209,41 +209,47 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         if isinstance(keywords, str):
             keywords = [keywords]
 
+        # Якщо моделі не обрані або пусті, беремо Perplexity
         if not models:
-            models = ["perplexity"]
+            models = ["Perplexity"]
 
-        # --- НОВЕ: Отримуємо офіційні джерела (Whitelist) ---
+        success_count = 0
+
+        # Отримуємо офіційні джерела
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
                 .eq("project_id", project_id)\
                 .execute()
-            
-            # Перетворюємо на простий список рядків: ["monobank.ua", "instagram.com/mono"]
             official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
         except Exception as e:
             print(f"Error fetching assets: {e}")
             official_assets = []
-        # ----------------------------------------------------
 
-        # Формуємо Payload з новим полем official_assets
-        payload = {
-            "project_id": project_id,
-            "keywords": keywords, 
-            "brand_name": brand_name,
-            "user_email": user_email,
-            "models": models,
-            "official_assets": official_assets  # <--- ДОДАЛИ СЮДИ
-        }
-        
-        # Відправляємо на n8n
-        response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=5)
-        
-        if response.status_code == 200:
-            return True
-        else:
-            st.error(f"N8N Error: {response.text}")
-            return False
+        # 🔄 ЦИКЛ по моделях
+        for ui_model_name in models:
+            # Конвертуємо красиву назву в технічний ID для n8n
+            # Якщо назви немає в словнику, використовуємо як є
+            tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
+
+            payload = {
+                "project_id": project_id,
+                "keywords": keywords, 
+                "brand_name": brand_name,
+                "user_email": user_email,
+                "provider": tech_model_id, # <--- Відправляємо технічний ID (gpt-4o)
+                "models": [tech_model_id],
+                "official_assets": official_assets
+            }
+            
+            try:
+                response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=5)
+                if response.status_code == 200:
+                    success_count += 1
+            except Exception as inner_e:
+                st.error(f"Не вдалося запустити {ui_model_name}: {inner_e}")
+
+        return success_count > 0
             
     except Exception as e:
         st.error(f"Помилка з'єднання з n8n: {e}")
@@ -743,13 +749,11 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Відображає детальну аналітику по конкретному запиту.
-    ВЕРСІЯ: З Вкладками, Історією та Вибором моделей для тесту.
+    Відображає детальну аналітику.
     """
     import pandas as pd
     import streamlit as st
     
-    # --- 0. ПІДКЛЮЧЕННЯ (Safety Check) ---
     if 'supabase' not in globals():
         if 'supabase' in st.session_state:
             supabase = st.session_state['supabase']
@@ -759,7 +763,6 @@ def show_keyword_details(kw_id):
     else:
         supabase = globals()['supabase']
 
-    # --- 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ ---
     try:
         kw_resp = supabase.table("keywords").select("*").eq("id", kw_id).execute()
         if not kw_resp.data:
@@ -776,7 +779,6 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка БД: {e}")
         return
 
-    # --- 2. HEADER ТА НАВІГАЦІЯ ---
     col_back, col_title = st.columns([1, 6])
     with col_back:
         if st.button("⬅ Назад", key="back_main"):
@@ -786,11 +788,10 @@ def show_keyword_details(kw_id):
     with col_title:
         st.title(f"🔍 {keyword_text}")
 
-    # --- 3. БЛОК УПРАВЛІННЯ (РЕДАГУВАННЯ ТА СКАНУВАННЯ) ---
+    # --- БЛОК УПРАВЛІННЯ ---
     with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
         c1, c2 = st.columns(2)
         
-        # А: Редагування тексту
         with c1:
             st.subheader("✏️ Редагувати запит")
             new_text = st.text_input("Текст запиту", value=keyword_text, key="edit_kw_input")
@@ -800,40 +801,39 @@ def show_keyword_details(kw_id):
                     st.success("Збережено!")
                     st.rerun()
 
-        # Б: Запуск сканування (ВИБІР МОДЕЛЕЙ)
         with c2:
             st.subheader("🚀 Запустити тест")
-            available_models = ["perplexity", "gpt-4o", "gemini-1.5-pro"]
+            # Використовуємо красиві назви
+            model_choices = list(MODEL_MAPPING.keys())
             
-            # Мультиселект для вибору моделей
-            selected_models = st.multiselect(
-                "Оберіть моделі для тесту:", 
-                available_models, 
-                default=["perplexity"], # За замовчуванням тільки perplexity
+            selected_models_ui = st.multiselect(
+                "Оберіть ЛЛМ для тесту:", 
+                model_choices, 
+                default=["Perplexity"], 
                 key="rescan_models_select"
             )
             
             if st.button("▶️ Сканувати зараз", key="rescan_btn"):
-                if selected_models:
+                if selected_models_ui:
                     proj = st.session_state.get("current_project", {})
                     brand_name = proj.get("brand_name", "MyBrand")
                     
-                    with st.spinner(f"Запускаємо {', '.join(selected_models)}..."):
-                        # Передаємо список обраних моделей у функцію
+                    with st.spinner(f"Запускаємо {', '.join(selected_models_ui)}..."):
+                        # Функція n8n_trigger_analysis сама сконвертує назви в ID
                         success = n8n_trigger_analysis(
                             project_id, 
                             [new_text], 
                             brand_name, 
-                            models=selected_models 
+                            models=selected_models_ui 
                         )
                         if success:
                             st.success("Задачу відправлено! Оновіть сторінку за хвилину.")
                 else:
-                    st.warning("Будь ласка, оберіть хоча б одну модель.")
+                    st.warning("Будь ласка, оберіть хоча б одну ЛЛМ.")
 
     st.divider()
 
-    # --- 4. ЗАВАНТАЖЕННЯ ІСТОРІЇ СКАНУВАНЬ ---
+    # --- ЗАВАНТАЖЕННЯ ІСТОРІЇ ---
     try:
         scans_data = (
             supabase.table("scan_results")
@@ -848,43 +848,38 @@ def show_keyword_details(kw_id):
         scans_data = []
 
     if not scans_data:
-        st.info("📭 Для цього запиту ще немає результатів. Скористайтеся формою вище, щоб запустити сканування.")
+        st.info("📭 Для цього запиту ще немає результатів.")
         return
 
-    # --- 5. ВКЛАДКИ (TABS) ДЛЯ КОЖНОЇ МОДЕЛІ ---
-    model_tabs_names = ["perplexity", "gpt-4o", "gemini-1.5-pro"]
-    tabs = st.tabs([m.upper() for m in model_tabs_names])
+    # --- ВКЛАДКИ ПО МОДЕЛЯХ (Використовуємо красиві назви) ---
+    # models_tabs_ui = ["Perplexity", "OpenAI GPT", "Google Gemini"]
+    tabs = st.tabs(list(MODEL_MAPPING.keys()))
 
-    for tab, model_key in zip(tabs, model_tabs_names):
+    for tab, ui_model_name in zip(tabs, MODEL_MAPPING.keys()):
         with tab:
-            # 5.1. Фільтруємо скани тільки для цієї моделі
-            model_scans = [s for s in scans_data if model_key in (s.get("provider") or "").lower()]
+            tech_model_id = MODEL_MAPPING[ui_model_name]
+            
+            # Фільтруємо по технічному ID (бо в базі записано "perplexity", "gpt-4o"...)
+            model_scans = [s for s in scans_data if tech_model_id in (s.get("provider") or "").lower()]
             
             if not model_scans:
-                st.write(f"📉 Даних від **{model_key}** ще немає. Запустіть сканування вище.")
+                st.write(f"📉 Даних від **{ui_model_name}** ще немає.")
                 continue
 
-            # 5.2. Випадаючий список історії (ДАТИ)
-            # Створюємо словник: "2023-12-08 14:30" -> scan_object
             history_options = {s["created_at"][:16].replace("T", " "): s for s in model_scans}
             
             selected_time = st.selectbox(
-                f"📅 Оберіть дату сканування ({model_key}):", 
+                f"📅 Дата аналізу ({ui_model_name}):", 
                 list(history_options.keys()),
-                key=f"hist_sel_{model_key}"
+                key=f"hist_sel_{tech_model_id}"
             )
             
-            # Отримуємо ID конкретного обраного сканування
             current_scan = history_options[selected_time]
             scan_id = current_scan["id"]
 
-            # =======================================================
-            # ВІДОБРАЖЕННЯ ДАНИХ САМЕ ДЛЯ ЦЬОГО scan_id
-            # =======================================================
-            
-            # А. Текст відповіді
+            # 1. Текст
             raw_text = current_scan.get("raw_response", "")
-            st.markdown("##### 📝 Відповідь ШІ")
+            st.markdown("##### 📝 Відповідь ЛЛМ")
             with st.expander("Читати повний текст", expanded=False):
                 if raw_text:
                     my_brand = st.session_state.get("current_project", {}).get("brand_name", "")
@@ -895,13 +890,13 @@ def show_keyword_details(kw_id):
                 else:
                     st.caption("Текст відсутній.")
 
-            # Б. Таблиця Брендів (Фільтруємо по scan_id!)
+            # 2. Бренди
             st.markdown("##### 📊 Знайдені бренди")
             try:
                 mentions = (
                     supabase.table("brand_mentions")
                     .select("*")
-                    .eq("scan_result_id", scan_id)  # <--- Ключовий момент: тільки для цього скану
+                    .eq("scan_result_id", scan_id)
                     .order("rank_position", nullsfirst=False)
                     .execute()
                     .data
@@ -922,17 +917,17 @@ def show_keyword_details(kw_id):
                     
                     st.dataframe(show_df, use_container_width=True, hide_index=True)
                 else:
-                    st.info(f"У цьому скануванні ({model_key}) брендів не знайдено.")
+                    st.info("Брендів не знайдено.")
             except Exception as e:
                 st.error(f"Помилка брендів: {e}")
 
-            # В. Таблиця Джерел (Фільтруємо по scan_id!)
+            # 3. Джерела
             st.markdown("##### 🔗 Джерела")
             try:
                 sources = (
                     supabase.table("extracted_sources")
                     .select("*")
-                    .eq("scan_result_id", scan_id) # <--- Ключовий момент
+                    .eq("scan_result_id", scan_id)
                     .execute()
                     .data
                 )
@@ -953,32 +948,32 @@ def show_keyword_details(kw_id):
                         column_config={"URL": st.column_config.LinkColumn("URL")}
                     )
                 else:
-                    st.info(f"У цьому скануванні ({model_key}) джерел не знайдено.")
+                    st.info("Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка джерел: {e}")
 
 def show_keywords_page():
     """
-    Головна функція сторінки запитів. Маршрутизує між списком та деталями.
+    Сторінка списку запитів з масовими діями та датами.
     """
     proj = st.session_state.get("current_project")
     if not proj:
         st.info("Спочатку створіть проект в онбордингу.")
         return
 
-    # Якщо вибрано ID - показуємо деталі
     if st.session_state.get("focus_keyword_id"):
         show_keyword_details(st.session_state["focus_keyword_id"])
         return
 
     st.title("📋 Перелік запитів")
 
-    # Форма додавання
+    # --- 1. ФОРМА ДОДАВАННЯ ---
     with st.expander("➕ Додати новий запит", expanded=False):
         with st.form("add_keyword_form"):
             new_kw = st.text_input("Введіть запит")
-            model_choices = ["perplexity", "gpt-4o", "gemini-1.5-pro"]
-            selected_models = st.multiselect("Оберіть моделі:", model_choices, default=["perplexity"])
+            # Використовуємо красиві назви зі словника
+            model_choices = list(MODEL_MAPPING.keys())
+            selected_models = st.multiselect("Оберіть ЛЛМ:", model_choices, default=["Perplexity"])
             
             if st.form_submit_button("Додати та Просканувати"):
                 if new_kw:
@@ -987,7 +982,6 @@ def show_keywords_page():
                             "project_id": proj["id"], "keyword_text": new_kw, "is_active": True
                         }).execute()
                         if res.data:
-                            # Запуск сканування
                             n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models)
                             st.success(f"Запит '{new_kw}' додано.")
                             time.sleep(1)
@@ -995,33 +989,98 @@ def show_keywords_page():
                     except Exception as e:
                         st.error(f"Помилка: {e}")
 
-    st.markdown("---")
+    st.divider()
     
-    # Список запитів
+    # --- 2. ОТРИМАННЯ ДАНИХ (ЗАПИТИ + ДАТИ) ---
     try:
+        # Отримуємо всі запити
         keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).execute().data
-    except:
+        
+        # Оптимізація: Отримуємо останні дати сканувань для цього проекту одним запитом
+        # (Це швидше, ніж робити запит у циклі)
+        last_scans_resp = supabase.table("scan_results")\
+            .select("keyword_id, created_at")\
+            .eq("project_id", proj["id"])\
+            .order("created_at", desc=True)\
+            .execute()
+            
+        # Створюємо словник {keyword_id: "2023-12-08 14:00"}
+        last_scan_map = {}
+        if last_scans_resp.data:
+            for s in last_scans_resp.data:
+                kw_id = s['keyword_id']
+                if kw_id not in last_scan_map: # Беремо тільки першу (найновішу) дату
+                    last_scan_map[kw_id] = s['created_at']
+                    
+    except Exception as e:
+        st.error(f"Помилка завантаження: {e}")
         keywords = []
+        last_scan_map = {}
 
     if not keywords:
         st.info("Запити відсутні.")
         return
 
-    col_h1, col_h2, col_h3 = st.columns([3, 1, 1])
-    col_h1.markdown("**Запит**")
-    col_h2.markdown("**Статус**")
-    col_h3.markdown("**Дії**")
+    # --- 3. ПАНЕЛЬ МАСОВИХ ДІЙ ---
+    c_bulk_1, c_bulk_2, c_bulk_3 = st.columns([2, 1, 1])
+    with c_bulk_1:
+        st.caption("Оберіть запити нижче та запустіть аналіз пакетом.")
+    with c_bulk_2:
+        bulk_models = st.multiselect("ЛЛМ для аналізу:", list(MODEL_MAPPING.keys()), default=["Perplexity"], label_visibility="collapsed", key="bulk_models_sel")
+    with c_bulk_3:
+        if st.button("🚀 Аналізувати обрані"):
+            # Збираємо ID, які були відмічені
+            selected_kws = []
+            for k in keywords:
+                if st.session_state.get(f"chk_{k['id']}", False):
+                    selected_kws.append(k['keyword_text'])
+            
+            if selected_kws:
+                with st.spinner(f"Відправляємо {len(selected_kws)} запитів на {', '.join(bulk_models)}..."):
+                    n8n_trigger_analysis(proj["id"], selected_kws, proj.get("brand_name"), models=bulk_models)
+                    st.success("Запущено! Оновіть сторінку за хвилину.")
+            else:
+                st.warning("Не обрано жодного запиту.")
 
+    # Заголовки таблиці
+    h1, h2, h3, h4 = st.columns([0.5, 3, 1.5, 1])
+    h1.markdown("✅")
+    h2.markdown("**Запит**")
+    h3.markdown("**Останній аналіз**")
+    h4.markdown("**Дії**")
+
+    # --- 4. СПИСОК ЗАПИТІВ ---
     for k in keywords:
         with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 1, 1])
-            c1.markdown(f"**{k['keyword_text']}**")
-            c2.markdown("✅ Active")
+            c1, c2, c3, c4 = st.columns([0.5, 3, 1.5, 1])
+            
+            # Чекбокс
+            with c1:
+                st.checkbox("", key=f"chk_{k['id']}")
+            
+            # Текст запиту
+            with c2:
+                st.markdown(f"**{k['keyword_text']}**")
+            
+            # Дата
             with c3:
-                if st.button("🔍 Деталі", key=f"det_{k['id']}"):
+                date_iso = last_scan_map.get(k['id'])
+                if date_iso:
+                    # Форматуємо дату (YYYY-MM-DD HH:MM)
+                    dt_obj = datetime.fromisoformat(date_iso.replace('Z', '+00:00'))
+                    # Конвертуємо в локальний час (+2 години для Києва приблизно, або просто показуємо UTC)
+                    formatted_date = dt_obj.strftime("%d.%m.%Y %H:%M")
+                    st.caption(f"🕒 {formatted_date}")
+                else:
+                    st.caption("—")
+            
+            # Кнопки
+            with c4:
+                b1, b2 = st.columns(2)
+                if b1.button("🔍", key=f"det_{k['id']}", help="Детальний аналіз"):
                     st.session_state["focus_keyword_id"] = k["id"]
                     st.rerun()
-                if st.button("🗑", key=f"del_{k['id']}"):
+                if b2.button("🗑", key=f"del_{k['id']}", help="Видалити"):
                     supabase.table("keywords").delete().eq("id", k["id"]).execute()
                     st.rerun()
 
