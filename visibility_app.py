@@ -1211,6 +1211,88 @@ def show_competitors_page():
                 )
             }
         )
+
+def show_chat_page():
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Спочатку створіть проект.")
+        return
+
+    st.title(f"🤖 Virshi AI: Асистент для {proj.get('brand_name')}")
+    st.caption("Задайте питання про ваші позиції, конкурентів або попросіть пораду.")
+
+    # 1. Завантажуємо історію повідомлень
+    try:
+        messages = (
+            supabase.table("chat_messages")
+            .select("*")
+            .eq("project_id", proj["id"])
+            .order("created_at", desc=False) # Старі зверху
+            .execute()
+            .data
+        )
+    except:
+        messages = []
+
+    # 2. Відображаємо історію
+    if not messages:
+        # Привітання, якщо чат пустий
+        with st.chat_message("assistant"):
+            st.write(f"Привіт! Я проаналізував дані по **{proj.get('brand_name')}**. Що вас цікавить?")
+            st.write("Наприклад: _'Хто мій головний конкурент?'_ або _'Напиши пост для LinkedIn про наш рейтинг'_.")
+
+    for msg in messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # 3. Поле вводу
+    if prompt := st.chat_input("Напишіть ваше питання..."):
+        # А. Показуємо питання користувача одразу
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Б. Зберігаємо питання в базу
+        try:
+            supabase.table("chat_messages").insert({
+                "project_id": proj["id"],
+                "user_id": st.session_state["user"].id,
+                "role": "user",
+                "content": prompt
+            }).execute()
+        except Exception as e:
+            st.error(f"Помилка збереження: {e}")
+
+        # В. Генеруємо відповідь (Тут буде підключення до n8n)
+        with st.chat_message("assistant"):
+            with st.spinner("Аналізую дані..."):
+                # --- ТУТ МАЄ БУТИ ВИКЛИК N8N ---
+                # response = n8n_chat_webhook(prompt, proj_id)
+                
+                # ПОКИ ЩО: Симуляція розумної відповіді
+                time.sleep(1.5) 
+                
+                # Проста логіка заглушки для демо
+                if "конкурент" in prompt.lower():
+                    response_text = f"Вашим головним конкурентом виглядає **PrivatBank** (за кількістю згадок). Вам варто звернути увагу на їх активність у статтях на Minfin."
+                elif "пост" in prompt.lower():
+                    response_text = f"Ось чернетка посут:\n\n🚀 **{proj.get('brand_name')} вривається в топи!**\n\nШІ відзначають нас як лідера... (тут текст)"
+                else:
+                    response_text = f"Це цікаве питання про **{proj.get('brand_name')}**. Для точної відповіді мені треба зібрати більше даних сканування. Спробуйте запустити новий скан у вкладці 'Перелік запитів'."
+                
+                st.markdown(response_text)
+
+        # Г. Зберігаємо відповідь асистента в базу
+        try:
+            supabase.table("chat_messages").insert({
+                "project_id": proj["id"],
+                "user_id": st.session_state["user"].id,
+                "role": "assistant",
+                "content": response_text
+            }).execute()
+        except:
+            pass
+
+
 def sidebar_menu():
     with st.sidebar:
         st.markdown(
@@ -1347,8 +1429,7 @@ def main():
         elif page == "Рекомендації":
             show_recommendations_page()
         elif page == "GPT-Visibility":
-            st.title("🤖 GPT-Visibility")
-            st.info("У розробці...")
+            show_chat_page()
         elif page == "Адмін":
             st.title("🛡️ Admin Panel")
             try:
