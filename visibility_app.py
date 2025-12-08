@@ -715,18 +715,78 @@ def show_dashboard():
     official_sources = len(df_sources[df_sources['is_official'] == True])
     official_pct = (official_sources / total_sources * 100) if total_sources > 0 else 0.0
 
-    # 3. Sentiment
-    my_brand_rows = df_mentions[df_mentions['is_my_brand'] == True].copy() if not df_mentions.empty else pd.DataFrame()
-    
-    def calc_sent_score(s):
-        if s == 'Позитивний': return 100
-        if s == 'Негативний': return 0
-        return 50 
-    
-    avg_sentiment = 0
-    if not my_brand_rows.empty:
-        my_brand_rows['score'] = my_brand_rows['sentiment_score'].apply(calc_sent_score)
-        avg_sentiment = my_brand_rows['score'].mean()
+    # Card 3: Sentiment (Breakdown)
+    with r1_c3:
+        with st.container(border=True):
+            st.markdown("<div class='dash-title'>ЗАГАЛЬНИЙ НАСТРІЙ</div>", unsafe_allow_html=True)
+            
+            # 1. Рахуємо кількість кожної тональності для нашого бренду
+            if not my_brand_rows.empty:
+                sent_counts = my_brand_rows['sentiment_score'].value_counts()
+                pos_count = sent_counts.get('Позитивний', 0)
+                neu_count = sent_counts.get('Нейтральний', 0)
+                neg_count = sent_counts.get('Негативний', 0)
+                total_sent = pos_count + neu_count + neg_count
+            else:
+                pos_count = neu_count = neg_count = total_sent = 0
+
+            # 2. Рахуємо відсотки
+            pos_pct = (pos_count / total_sent * 100) if total_sent > 0 else 0
+            neu_pct = (neu_count / total_sent * 100) if total_sent > 0 else 0
+            neg_pct = (neg_count / total_sent * 100) if total_sent > 0 else 0
+
+            # 3. Малюємо Stacked Bar Chart
+            fig_sent = go.Figure()
+            
+            # Позитив (Зелений)
+            fig_sent.add_trace(go.Bar(
+                y=[''], x=[pos_pct], name='Позитив', orientation='h',
+                marker=dict(color='#00C896', line=dict(width=0)),
+                hovertemplate='%{x:.1f}%<extra></extra>'
+            ))
+            # Нейтрал (Сірий)
+            fig_sent.add_trace(go.Bar(
+                y=[''], x=[neu_pct], name='Нейтрал', orientation='h',
+                marker=dict(color='#E0E0E0', line=dict(width=0)),
+                hovertemplate='%{x:.1f}%<extra></extra>'
+            ))
+            # Негатив (Червоний)
+            fig_sent.add_trace(go.Bar(
+                y=[''], x=[neg_pct], name='Негатив', orientation='h',
+                marker=dict(color='#FF4B4B', line=dict(width=0)),
+                hovertemplate='%{x:.1f}%<extra></extra>'
+            ))
+
+            fig_sent.update_layout(
+                barmode='stack',
+                showlegend=False,
+                margin=dict(t=0, b=0, l=0, r=0),
+                height=60,
+                xaxis=dict(showgrid=False, showticklabels=False, zeroline=False, range=[0, 100]),
+                yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
+            
+            st.plotly_chart(fig_sent, use_container_width=True, config={'displayModeBar': False}, key="bar_sent")
+
+            # 4. Легенда з цифрами
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 10px;">
+                <div style="text-align: center;"><span style="color:#00C896;">●</span> {pos_pct:.0f}%</div>
+                <div style="text-align: center;"><span style="color:#999;">●</span> {neu_pct:.0f}%</div>
+                <div style="text-align: center;"><span style="color:#FF4B4B;">●</span> {neg_pct:.0f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Загальний висновок
+            main_mood = "Даних немає"
+            if total_sent > 0:
+                if pos_pct >= max(neu_pct, neg_pct): main_mood = "Переважно Позитивний"
+                elif neg_pct >= max(pos_pct, neu_pct): main_mood = "Переважно Негативний"
+                else: main_mood = "Переважно Нейтральний"
+            
+            st.markdown(f"<div style='text-align:center; font-weight:bold; margin-top:5px; font-size:14px;'>{main_mood}</div>", unsafe_allow_html=True)
 
     # 4. Позиція
     found_rows = my_brand_rows[my_brand_rows['rank_position'].notnull()] if not my_brand_rows.empty else pd.DataFrame()
