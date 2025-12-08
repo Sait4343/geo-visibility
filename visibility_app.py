@@ -200,42 +200,36 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
-    Відправляє запит на n8n.
-    FIX: Розбиває масив моделей на окремі запити, щоб n8n не плутався.
+    Відправляє ОДИН запит на n8n зі списком моделей.
+    n8n сам розбереться і запустить гілки.
     """
     try:
         user_email = st.session_state["user"].email if st.session_state.get("user") else None
         
-        # Якщо keywords це один рядок, робимо з нього список
         if isinstance(keywords, str):
             keywords = [keywords]
 
-        # Якщо моделі не обрані, беремо дефолтну
         if not models:
             models = ["perplexity"]
 
-        success_count = 0
-
-        # 🔄 ЦИКЛ: Для кожної моделі відправляємо окремий запит
-        for model in models:
-            payload = {
-                "project_id": project_id,
-                "keywords": keywords, 
-                "brand_name": brand_name,
-                "user_email": user_email,
-                "provider": model, # <--- ТУТ ТЕПЕР ОДНЕ СЛОВО (String)
-                "models": [model]  # Залишаємо для сумісності
-            }
-            
-            try:
-                # Відправка запиту
-                response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=10)
-                if response.status_code == 200:
-                    success_count += 1
-            except Exception as inner_e:
-                print(f"Error sending to {model}: {inner_e}")
-
-        return success_count > 0
+        # ВАЖЛИВО: Ми надсилаємо models як масив!
+        # n8n отримає: "models": ["perplexity", "gpt-4o"]
+        payload = {
+            "project_id": project_id,
+            "keywords": keywords, 
+            "brand_name": brand_name,
+            "user_email": user_email,
+            "models": models  
+        }
+        
+        # Відправляємо один раз
+        response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=5)
+        
+        if response.status_code == 200:
+            return True
+        else:
+            st.error(f"N8N Error: {response.text}")
+            return False
             
     except Exception as e:
         st.error(f"Помилка з'єднання з n8n: {e}")
