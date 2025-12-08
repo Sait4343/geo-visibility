@@ -2100,7 +2100,7 @@ def sidebar_menu():
         # 1. ЛОГОТИП (Повернуто!)
         # Якщо у вас є файл logo.png або посилання, вставте його сюди
         st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150) 
-        st.markdown("## 🚀 VIRSHI") # Заглушка, якщо картинки немає
+        # st.markdown("## 🚀 VIRSHI") # Заглушка, якщо картинки немає
 
         # Профіль
         user_name = "Користувач"
