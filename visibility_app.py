@@ -200,8 +200,8 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
-    Відправляє ОДИН запит на n8n зі списком моделей.
-    n8n сам розбереться і запустить гілки.
+    1. Отримує список офіційних джерел з бази.
+    2. Відправляє запит на n8n разом з цим списком.
     """
     try:
         user_email = st.session_state["user"].email if st.session_state.get("user") else None
@@ -212,17 +212,31 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         if not models:
             models = ["perplexity"]
 
-        # ВАЖЛИВО: Ми надсилаємо models як масив!
-        # n8n отримає: "models": ["perplexity", "gpt-4o"]
+        # --- НОВЕ: Отримуємо офіційні джерела (Whitelist) ---
+        try:
+            assets_resp = supabase.table("official_assets")\
+                .select("domain_or_url")\
+                .eq("project_id", project_id)\
+                .execute()
+            
+            # Перетворюємо на простий список рядків: ["monobank.ua", "instagram.com/mono"]
+            official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
+        except Exception as e:
+            print(f"Error fetching assets: {e}")
+            official_assets = []
+        # ----------------------------------------------------
+
+        # Формуємо Payload з новим полем official_assets
         payload = {
             "project_id": project_id,
             "keywords": keywords, 
             "brand_name": brand_name,
             "user_email": user_email,
-            "models": models  
+            "models": models,
+            "official_assets": official_assets  # <--- ДОДАЛИ СЮДИ
         }
         
-        # Відправляємо один раз
+        # Відправляємо на n8n
         response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=5)
         
         if response.status_code == 200:
@@ -234,7 +248,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     except Exception as e:
         st.error(f"Помилка з'єднання з n8n: {e}")
         return False
-
 
 def n8n_request_recommendations(project, topic: str, brief: str):
     """
