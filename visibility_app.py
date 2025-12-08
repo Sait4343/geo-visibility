@@ -974,7 +974,128 @@ def show_recommendations_page():
 # =========================
 # 9. SIDEBAR
 # =========================
+def show_sources_page():
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Спочатку створіть проект.")
+        return
 
+    st.title("📡 Джерела та Репутація")
+    
+    # Використовуємо вкладки для розділення логіки
+    tab1, tab2 = st.tabs(["🛡️ Мої Активи (Whitelist)", "🌐 Аналіз Ринку"])
+
+    # --- TAB 1: МОЇ ОФІЦІЙНІ ДЖЕРЕЛА ---
+    with tab1:
+        st.markdown("Додайте сюди ваші офіційні сайти та соцмережі. Система буде відстежувати, чи посилається на них ШІ.")
+        
+        # 1. Форма додавання
+        with st.form("add_asset_form"):
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                new_asset = st.text_input("URL або Домен (напр. instagram.com/monobank)")
+            with c2:
+                asset_type = st.selectbox("Тип", ["website", "social", "article", "other"])
+            
+            if st.form_submit_button("➕ Додати джерело"):
+                if new_asset:
+                    try:
+                        # Чистимо URL від http/https для краси (опціонально)
+                        clean_domain = new_asset.replace("https://", "").replace("http://", "").split("/")[0]
+                        
+                        supabase.table("official_assets").insert({
+                            "project_id": proj["id"],
+                            "domain_or_url": new_asset, # Зберігаємо як ввів юзер
+                            "type": asset_type
+                        }).execute()
+                        st.success(f"Джерело {new_asset} додано.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Помилка: {e}")
+                else:
+                    st.warning("Введіть URL.")
+
+        st.divider()
+
+        # 2. Таблиця існуючих активів
+        try:
+            assets = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).execute().data
+        except:
+            assets = []
+
+        if assets:
+            st.markdown("##### Ваші офіційні ресурси:")
+            for asset in assets:
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    c1.markdown(f"**{asset['domain_or_url']}**")
+                    c2.caption(asset['type'].upper())
+                    if c3.button("🗑", key=f"del_as_{asset['id']}"):
+                        supabase.table("official_assets").delete().eq("id", asset['id']).execute()
+                        st.rerun()
+        else:
+            st.info("Список порожній. Додайте ваш сайт, щоб бачити статистику 'Official Sources'.")
+
+    # --- TAB 2: АНАЛІЗ РИНКУ (Всі знайдені посилання) ---
+    with tab2:
+        st.markdown("Які сайти найчастіше цитують ШІ у вашій ніші?")
+        
+        # Складний запит: беремо extracted_sources, приєднуємо scan_results, фільтруємо по проекту
+        # Оскільки Supabase JS клієнт має обмеження на JOIN, зробимо це у два кроки або через view.
+        # Для MVP зробимо простіше: витягнемо всі scans проекту, потім всі sources цих сканів.
+        
+        try:
+            # 1. Отримуємо ID всіх сканувань проекту
+            scans_resp = supabase.table("scan_results").select("id").eq("project_id", proj["id"]).execute()
+            scan_ids = [s['id'] for s in scans_resp.data]
+            
+            if not scan_ids:
+                st.info("Немає даних сканування.")
+                st.stop()
+
+            # 2. Отримуємо всі джерела для цих сканувань
+            # Використовуємо .in_() фільтр
+            sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
+            all_sources = sources_resp.data
+            
+            if all_sources:
+                df = pd.DataFrame(all_sources)
+                
+                # Групуємо по доменах (рахуємо частотність)
+                domain_stats = df['domain'].value_counts().reset_index()
+                domain_stats.columns = ['Domain', 'Mentions']
+                
+                # Перевіряємо, чи є цей домен у "Official Assets"
+                my_domains = [a['domain_or_url'] for a in assets] # Проста перевірка
+                # (Для точного матчингу треба кращу логіку, але для MVP вистачить contains)
+                
+                def is_mine(dom):
+                    for my_d in my_domains:
+                        if dom in my_d or my_d in dom:
+                            return "✅ Official"
+                    return "External"
+
+                domain_stats['Type'] = domain_stats['Domain'].apply(is_mine)
+                
+                # Відображення
+                st.dataframe(
+                    domain_stats, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "Mentions": st.column_config.ProgressColumn(
+                            "Frequency",
+                            format="%d",
+                            min_value=0,
+                            max_value=int(domain_stats['Mentions'].max()),
+                        )
+                    }
+                )
+            else:
+                st.info("Джерел у скануваннях ще не знайдено.")
+                
+        except Exception as e:
+            st.error(f"Помилка завантаження аналітики ринку: {e}")
 
 def sidebar_menu():
     with st.sidebar:
@@ -1106,8 +1227,7 @@ def main():
         elif page == "Перелік запитів":
             show_keywords_page()
         elif page == "Джерела":
-            st.title("📡 Джерела")
-            st.info("У розробці...")
+            show_sources_page()
         elif page == "Конкуренти":
             st.title("⚔️ Конкуренти")
             st.info("У розробці...")
