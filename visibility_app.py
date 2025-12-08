@@ -20,9 +20,42 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# =========================
+# 2. DB CONNECTION & STATE
+# =========================
+
+cookie_manager = stx.CookieManager()
+
+try:
+    SUPABASE_URL: str = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY: str = st.secrets["SUPABASE_KEY"]
+
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    DB_CONNECTED = True
+except Exception as e:
+    st.error(f"CRITICAL ERROR: Database Connection Failed. {e}")
+    st.stop()
+
+# Session State
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+if "user_details" not in st.session_state:
+    st.session_state["user_details"] = {}
+if "role" not in st.session_state:
+    st.session_state["role"] = "user"
+if "current_project" not in st.session_state:
+    st.session_state["current_project"] = None
+if "generated_prompts" not in st.session_state:
+    st.session_state["generated_prompts"] = []
+if "onboarding_step" not in st.session_state:
+    st.session_state["onboarding_step"] = 2  # стартуємо одразу з кроку про бренд
+if "focus_keyword_id" not in st.session_state:
+    st.session_state["focus_keyword_id"] = None
+
+
 # 🔴 ПРОДАКШН N8N ВЕБХУКИ
 N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
-N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook-test/webhook/run-analysis"
+N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook/webhook/run-analysis"
 N8N_RECO_URL = "https://virshi.app.n8n.cloud/webhook/recommendations"  # за потреби заміниш
 
 # Custom CSS
@@ -90,37 +123,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# =========================
-# 2. DB CONNECTION & STATE
-# =========================
-
-cookie_manager = stx.CookieManager()
-
-try:
-    SUPABASE_URL: str = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY: str = st.secrets["SUPABASE_KEY"]
-
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    DB_CONNECTED = True
-except Exception as e:
-    st.error(f"CRITICAL ERROR: Database Connection Failed. {e}")
-    st.stop()
-
-# Session State
-if "user" not in st.session_state:
-    st.session_state["user"] = None
-if "user_details" not in st.session_state:
-    st.session_state["user_details"] = {}
-if "role" not in st.session_state:
-    st.session_state["role"] = "user"
-if "current_project" not in st.session_state:
-    st.session_state["current_project"] = None
-if "generated_prompts" not in st.session_state:
-    st.session_state["generated_prompts"] = []
-if "onboarding_step" not in st.session_state:
-    st.session_state["onboarding_step"] = 2  # стартуємо одразу з кроку про бренд
-if "focus_keyword_id" not in st.session_state:
-    st.session_state["focus_keyword_id"] = None
 
 # =========================
 # 3. HELPERS
