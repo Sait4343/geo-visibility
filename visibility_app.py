@@ -1520,227 +1520,228 @@ def show_recommendations_page():
 # 9. SIDEBAR
 # =========================
 def show_sources_page():
+    """
+    Сторінка управління джерелами та аналізу репутації доменів.
+    """
+    import pandas as pd
+    import streamlit as st
+    
+    # Перевірка підключення
+    if 'supabase' not in globals():
+        if 'supabase' in st.session_state:
+            supabase = st.session_state['supabase']
+        else:
+            st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
+            return
+    else:
+        supabase = globals()['supabase']
+
     proj = st.session_state.get("current_project")
     if not proj:
         st.info("Спочатку створіть проект.")
         return
 
+    # Мапінг моделей (для фільтру)
+    MODEL_MAPPING = {
+        "Perplexity": "perplexity",
+        "OpenAI GPT": "gpt-4o",
+        "Google Gemini": "gemini-1.5-pro"
+    }
+
     st.title("📡 Джерела та Репутація")
     
-    tab1, tab2 = st.tabs(["🛡️ Мої Активи (Whitelist)", "🌐 Аналіз Ринку"])
+    # Вкладки
+    tab1, tab2 = st.tabs(["🛡️ Мої Активи (Whitelist)", "🌐 Джерела / Репутація"])
 
-    # --- TAB 1: МОЇ ОФІЦІЙНІ ДЖЕРЕЛА ---
+    # ======================================================
+    # TAB 1: МОЇ ОФІЦІЙНІ ДЖЕРЕЛА (Whitelist)
+    # ======================================================
     with tab1:
-        st.markdown("Додайте сюди ваші офіційні сайти та соцмережі.")
+        st.markdown("##### 🟢 Додайте сюди ваші офіційні сайти та соцмережі")
+        st.caption("Ці домени будуть підсвічуватися зеленим у звітах, і ШІ буде знати, що це першоджерела.")
         
         # Форма додавання
         with st.expander("➕ Додати нове джерело", expanded=False):
             with st.form("add_asset_form"):
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    new_asset = st.text_input("URL або Домен")
+                    new_asset = st.text_input("URL або Домен (напр. instagram.com/brand)")
                 with c2:
                     asset_type = st.selectbox("Тип", ["website", "social", "article", "other"])
                 
                 if st.form_submit_button("Зберегти"):
                     if new_asset:
                         try:
+                            # Чистимо URL від http/https для краси
+                            clean_asset = new_asset.replace("https://", "").replace("http://", "").strip()
+                            if clean_asset.endswith("/"): clean_asset = clean_asset[:-1]
+
                             supabase.table("official_assets").insert({
                                 "project_id": proj["id"],
-                                "domain_or_url": new_asset,
+                                "domain_or_url": clean_asset,
                                 "type": asset_type
                             }).execute()
-                            st.success(f"Джерело додано.")
-                            time.sleep(0.5)
+                            st.success(f"Джерело '{clean_asset}' додано.")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Помилка: {e}")
 
-        st.divider()
-
-        # --- ТАБЛИЦЯ З РЕДАГУВАННЯМ ---
+        # Таблиця активів
         try:
             assets = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute().data
         except:
             assets = []
 
         if assets:
+            st.markdown("<br>", unsafe_allow_html=True)
             for asset in assets:
-                # Використовуємо контейнер для кожного рядка
                 with st.container(border=True):
-                    # Якщо натиснуто "Редагувати", показуємо форму
-                    if st.session_state.get(f"edit_mode_{asset['id']}", False):
-                        c_edit, c_btn = st.columns([4, 1])
-                        with c_edit:
-                            new_val = st.text_input("URL", value=asset['domain_or_url'], key=f"in_{asset['id']}")
-                            new_type = st.selectbox("Тип", ["website", "social", "article", "other"], index=["website", "social", "article", "other"].index(asset['type']), key=f"sel_{asset['id']}")
-                        
-                        col_save, col_cancel = st.columns(2)
-                        if col_save.button("💾 Зберегти", key=f"save_{asset['id']}"):
-                            supabase.table("official_assets").update({
-                                "domain_or_url": new_val,
-                                "type": new_type
-                            }).eq("id", asset['id']).execute()
-                            st.session_state[f"edit_mode_{asset['id']}"] = False
+                    c1, c2, c3 = st.columns([4, 1, 0.5])
+                    with c1:
+                        st.markdown(f"**{asset['domain_or_url']}**")
+                    with c2:
+                        st.caption(asset['type'].upper())
+                    with c3:
+                        if st.button("🗑", key=f"del_as_{asset['id']}"):
+                            supabase.table("official_assets").delete().eq("id", asset['id']).execute()
                             st.rerun()
-                            
-                        if col_cancel.button("Скасувати", key=f"cancel_{asset['id']}"):
-                            st.session_state[f"edit_mode_{asset['id']}"] = False
-                            st.rerun()
-                            
-                    else:
-                        # Режим перегляду
-                        c1, c2, c3, c4 = st.columns([3, 1, 0.5, 0.5])
-                        with c1:
-                            st.markdown(f"**{asset['domain_or_url']}**")
-                        with c2:
-                            st.caption(asset['type'].upper())
-                        with c3:
-                            if st.button("✏️", key=f"edit_btn_{asset['id']}"):
-                                st.session_state[f"edit_mode_{asset['id']}"] = True
-                                st.rerun()
-                        with c4:
-                            if st.button("🗑", key=f"del_as_{asset['id']}"):
-                                supabase.table("official_assets").delete().eq("id", asset['id']).execute()
-                                st.rerun()
         else:
-            st.info("Список порожній.")
+            st.info("Список порожній. Додайте ваш сайт.")
 
-    # --- TAB 2: АНАЛІЗ РИНКУ ---
+    # ======================================================
+    # TAB 2: АНАЛІЗ ДЖЕРЕЛ (Джерела / Репутація)
+    # ======================================================
     with tab2:
-        # (Код для аналізу ринку залишається без змін з попереднього разу)
-        # Просто додайте try/except блок, як було раніше
-        pass 
-        # ... (код з попередньої відповіді)
-def show_competitors_page():
-    proj = st.session_state.get("current_project")
-    if not proj:
-        st.info("Спочатку створіть проект.")
-        return
-
-    st.title("⚔️ Аналіз Конкурентів")
-    st.caption("Кого ШІ рекомендує поруч із вами? Порівняння видимості та репутації.")
-
-    # 1. Завантаження даних з SQL View
-    try:
-        data = (
-            supabase.table("competitor_stats")
-            .select("*")
-            .eq("project_id", proj["id"])
-            .execute()
-            .data
-        )
-    except Exception as e:
-        st.error(f"Помилка завантаження даних: {e}")
-        data = []
-
-    if not data:
-        st.info("Даних ще недостатньо. Запустіть кілька сканувань у 'Перелік запитів', щоб ШІ знайшов конкурентів.")
-        return
-
-    # Перетворюємо в DataFrame для зручної роботи
-    df = pd.DataFrame(data)
-
-    # 2. Метрики лідера (Хто головний конкурент?)
-    # Виключаємо наш бренд, щоб знайти реального ворога
-    competitors_only = df[df['is_my_brand'] == False]
-    
-    if not competitors_only.empty:
-        # Сортуємо за кількістю згадок
-        top_rival = competitors_only.sort_values(by="total_mentions", ascending=False).iloc[0]
+        st.markdown("##### 📊 Які сайти цитують ШІ у відповідях про вас?")
         
-        # Знаходимо нас
-        my_brand = df[df['is_my_brand'] == True]
-        my_mentions = my_brand.iloc[0]['total_mentions'] if not my_brand.empty else 0
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Головний конкурент", top_rival['brand_name'])
-        c2.metric("Його згадок", top_rival['total_mentions'], delta=int(top_rival['total_mentions'] - my_mentions), delta_color="inverse")
-        c3.metric("Його тональність", f"{int(top_rival['avg_sentiment'])}/100")
-    
-    st.divider()
+        # 1. Завантаження даних
+        try:
+            # Отримуємо ID всіх сканів проекту
+            scans_query = supabase.table("scan_results").select("id, provider, created_at").eq("project_id", proj["id"]).execute()
+            all_scans = scans_query.data
+            scan_map = {s['id']: s['provider'] for s in all_scans}
+            
+            # Отримуємо всі знайдені джерела
+            if all_scans:
+                scan_ids = [s['id'] for s in all_scans]
+                sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
+                df_sources = pd.DataFrame(sources_resp.data)
+            else:
+                df_sources = pd.DataFrame()
 
-    # 3. Графік 1: КАРТА РЕПУТАЦІЇ (Scatter Plot)
-    # Це найкрутіший графік для GEO.
-    st.subheader("🗺️ Карта Репутації (Magic Quadrant)")
-    st.caption("Чим вище — тим краще відгукуються. Чим правіше — тим частіше згадують.")
+            # Отримуємо whitelist для порівняння
+            whitelist_domains = [a['domain_or_url'] for a in assets]
 
-    if not df.empty:
-        # Додаємо колонку кольору: Мій бренд = Фіолетовий, Інші = Сірий
-        df['Color'] = df['is_my_brand'].apply(lambda x: 'Мій Бренд' if x else 'Конкурент')
-        df['Size'] = df['total_mentions'] * 2 # Розмір бульбашки
+        except Exception as e:
+            st.error(f"Помилка завантаження: {e}")
+            return
 
-        fig = px.scatter(
-            df,
-            x="total_mentions",
-            y="avg_sentiment",
-            size="Size",
-            color="Color",
-            text="brand_name",
-            color_discrete_map={'Мій Бренд': '#8041F6', 'Конкурент': '#9EA0A5'},
-            hover_data=["avg_rank"],
-            height=500
-        )
-        # Налаштування вигляду
-        fig.update_traces(textposition='top center')
-        fig.update_layout(
-            xaxis_title="Кількість згадок (Видимість)",
-            yaxis_title="Середня тональність (Якість)",
-            yaxis_range=[0, 105], # Щоб графік завжди був від 0 до 100
-            showlegend=True
-        )
-        # Малюємо лінії середини
-        fig.add_hline(y=50, line_dash="dot", line_color="lightgray")
-        
-        st.plotly_chart(fig, use_container_width=True)
+        if df_sources.empty:
+            st.info("Ще немає даних про джерела. Запустіть аналіз у вкладці 'Перелік запитів'.")
+            return
 
-    # 4. Графік 2: Рейтинг за часткою голосу (Bar Chart)
-    st.subheader("📊 Рейтинг за часткою голосу (Share of Voice)")
-    
-    if not df.empty:
-        # Сортуємо для краси
-        df_sorted = df.sort_values(by="total_mentions", ascending=True) # Ascending для горизонтального бару
-        
-        fig_bar = px.bar(
-            df_sorted,
-            x="total_mentions",
-            y="brand_name",
-            orientation='h',
-            text="total_mentions",
-            color="is_my_brand",
-            color_discrete_map={True: '#8041F6', False: '#D1D1D6'}
-        )
-        fig_bar.update_layout(showlegend=False, xaxis_title="Кількість згадок", yaxis_title="")
-        st.plotly_chart(fig_bar, use_container_width=True)
+        # 2. Додаємо колонку Provider (Model) до джерел
+        df_sources['provider'] = df_sources['scan_result_id'].map(scan_map)
 
-    # 5. Детальна таблиця
-    with st.expander("📋 Дивитися детальні дані таблицею"):
-        # Готуємо красиву таблицю
-        display_df = df[['brand_name', 'total_mentions', 'avg_sentiment', 'avg_rank', 'is_my_brand']].copy()
-        display_df.columns = ['Бренд', 'Згадок', 'Тональність', 'Сер. Позиція', 'Це ми?']
+        # 3. Фільтр
+        col_filter, _ = st.columns([2, 2])
+        with col_filter:
+            selected_models = st.multiselect(
+                "Фільтр по ЛЛМ:", 
+                options=list(MODEL_MAPPING.keys()),
+                default=list(MODEL_MAPPING.keys())
+            )
         
-        # Форматуємо числа
-        display_df['Тональність'] = display_df['Тональність'].astype(int)
-        display_df['Сер. Позиція'] = display_df['Сер. Позиція'].apply(lambda x: f"#{x:.1f}" if x else "-")
-        display_df['Це ми?'] = display_df['Це ми?'].apply(lambda x: "✅" if x else "")
+        # Конвертуємо назви з UI в технічні ID
+        selected_tech_ids = [MODEL_MAPPING[m] for m in selected_models]
         
-        # Сортуємо
-        display_df = display_df.sort_values(by="Згадок", ascending=False)
-        
-        st.dataframe(
-            display_df, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Згадок": st.column_config.ProgressColumn(
-                    "Частка",
-                    format="%d",
-                    min_value=0,
-                    max_value=int(df['total_mentions'].max())
-                )
-            }
-        )
+        # Фільтруємо датафрейм (шукаємо входження рядка, наприклад 'gpt-4o' в 'gpt-4o')
+        if selected_tech_ids:
+            # Складна фільтрація, бо provider може бути масивом або рядком в базі, але ми нормалізували в n8n
+            # Спростимо: перевіряємо чи provider входить в список
+            mask = df_sources['provider'].apply(lambda x: any(tech in str(x) for tech in selected_tech_ids))
+            df_filtered = df_sources[mask]
+        else:
+            df_filtered = df_sources
 
+        st.markdown("---")
+
+        # === БЛОК 1: РЕЙТИНГ ДОМЕНІВ ===
+        st.subheader("🏆 Топ Доменів")
+        
+        if not df_filtered.empty:
+            # Агрегація по доменах
+            domain_stats = df_filtered.groupby('domain').agg(
+                Mentions=('id', 'count'), # Кількість цитувань
+                Queries=('scan_result_id', 'nunique') # У скількох унікальних відповідях зустрічався
+            ).reset_index()
+
+            # Визначаємо, чи це офіційний домен
+            # Логіка: якщо домен містить будь-який рядок з whitelist
+            def check_official(domain):
+                for w in whitelist_domains:
+                    if w in domain or domain in w:
+                        return True
+                return False
+
+            domain_stats['is_official'] = domain_stats['domain'].apply(check_official)
+            
+            # Сортування
+            domain_stats = domain_stats.sort_values(by='Mentions', ascending=False)
+
+            # Підготовка до відображення
+            show_domains = domain_stats.copy()
+            show_domains['Status'] = show_domains['is_official'].apply(lambda x: "✅ Офіційний" if x else "🔗 Зовнішній")
+            
+            # Перейменування колонок
+            show_domains = show_domains[['domain', 'Status', 'Mentions', 'Queries']]
+            show_domains.columns = ['Домен', 'Тип', 'К-сть цитувань', 'Охоплення запитів']
+
+            st.dataframe(
+                show_domains,
+                use_container_width=True,
+                column_config={
+                    "К-сть цитувань": st.column_config.ProgressColumn(
+                        "Цитувань", 
+                        format="%d", 
+                        min_value=0, 
+                        max_value=int(show_domains['К-сть цитувань'].max()),
+                        help="Скільки разів посилання на цей домен з'являлося у тексті"
+                    ),
+                    "Охоплення запитів": st.column_config.NumberColumn(
+                        "У запитах",
+                        help="Кількість унікальних відповідей ШІ, де фігурував цей сайт"
+                    )
+                },
+                hide_index=True
+            )
+        else:
+            st.warning("За обраними фільтрами джерел не знайдено.")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # === БЛОК 2: РЕЙТИНГ КОНКРЕТНИХ СТОРІНОК (URL) ===
+        st.subheader("📄 Топ Сторінок (URL)")
+        st.caption("Які саме статті чи сторінки ШІ використовує як доказ.")
+
+        if not df_filtered.empty:
+            url_stats = df_filtered.groupby('url').agg(
+                Mentions=('id', 'count'),
+                Domain=('domain', 'first') # Беремо домен просто для інфо
+            ).reset_index()
+
+            url_stats = url_stats.sort_values(by='Mentions', ascending=False).head(50) # Топ 50
+
+            st.dataframe(
+                url_stats[['url', 'Mentions']],
+                use_container_width=True,
+                column_config={
+                    "url": st.column_config.LinkColumn("Посилання"),
+                    "Mentions": st.column_config.NumberColumn("К-сть цитувань")
+                },
+                hide_index=True
+            )
+            
 def show_chat_page():
     proj = st.session_state.get("current_project")
     if not proj:
