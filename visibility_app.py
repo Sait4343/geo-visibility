@@ -199,10 +199,14 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 
 
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
-    """
-    Відправляє запит на n8n.
-    Автоматично конвертує назви (OpenAI GPT -> gpt-4o).
-    """
+    # 👇 ДОДАЙТЕ ЦЕЙ БЛОК 👇
+    MODEL_MAPPING = {
+        "Perplexity": "perplexity",
+        "OpenAI GPT": "gpt-4o",
+        "Google Gemini": "gemini-1.5-pro"
+    }
+    # ----------------------
+    
     try:
         user_email = st.session_state["user"].email if st.session_state.get("user") else None
         
@@ -753,6 +757,14 @@ def show_keyword_details(kw_id):
     """
     import pandas as pd
     import streamlit as st
+    
+    # 👇 ДОДАЙТЕ ЦЕЙ БЛОК ТУТ 👇
+    MODEL_MAPPING = {
+        "Perplexity": "perplexity",
+        "OpenAI GPT": "gpt-4o",
+        "Google Gemini": "gemini-1.5-pro"
+    }
+    # --------------------------
     
     if 'supabase' not in globals():
         if 'supabase' in st.session_state:
