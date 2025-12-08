@@ -2113,8 +2113,8 @@ def sidebar_menu():
 
     with st.sidebar:
         # 1. ЛОГОТИП
-        # st.image("logo.png", width=150) 
-        st.markdown("## 🚀 VIRSHI") 
+        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150) 
+        # st.markdown("## 🚀 VIRSHI") 
 
         # Профіль
         user_name = "Користувач"
