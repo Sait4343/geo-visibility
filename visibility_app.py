@@ -557,136 +557,135 @@ def onboarding_wizard():
 # =========================
 
 
+# Додай це вгорі файлу, якщо ще немає:
+import plotly.express as px 
+
 def show_dashboard():
     proj = st.session_state.get("current_project", {})
-
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.title(f"Дашборд: {proj.get('brand_name', 'Brand')}")
-    with c2:
-        st.selectbox("Період:", ["Останні 7 днів", "Останні 30 днів"], index=0)
-    st.markdown("---")
-
-    sov, off, pos, pres, dom = 0, 0, 0, 0, 0
-    try:
-        stats = (
-            supabase.table("dashboard_stats")
-            .select("*")
-            .eq("project_id", proj["id"])
-            .execute()
-            .data
-        )
-        if stats:
-            s = stats[0]
-            sov = s.get("sov", 0)
-            off = s.get("official_source_pct", 0)
-            pos = s.get("avg_position", 0)
-            pres = s.get("brand_presence_pct", 0)
-            dom = s.get("domain_mentions_pct", 0)
-    except Exception:
-        pass
-
-    k1, k2, k3 = st.columns(3)
-    with k1:
-        with st.container(border=True):
-            st.markdown("**ЧАСТКА ГОЛОСУ (SOV)**", help=METRIC_TOOLTIPS["sov"])
-            c, ch = st.columns([1, 1])
-            c.markdown(f"## {sov}%")
-            ch.plotly_chart(
-                get_donut_chart(sov), use_container_width=True, key="kpi_sov"
-            )
-    with k2:
-        with st.container(border=True):
-            st.markdown(
-                "**% ОФІЦІЙНИХ ДЖЕРЕЛ**", help=METRIC_TOOLTIPS["official"]
-            )
-            c, ch = st.columns([1, 1])
-            c.markdown(f"## {off}%")
-            ch.plotly_chart(
-                get_donut_chart(off), use_container_width=True, key="kpi_off"
-            )
-    with k3:
-        with st.container(border=True):
-            st.markdown(
-                "**ЗАГАЛЬНИЙ НАСТРІЙ**", help=METRIC_TOOLTIPS["sentiment"]
-            )
-            fig = go.Figure(
-                data=[
-                    go.Pie(
-                        labels=["Pos", "Neu", "Neg"],
-                        values=[60, 30, 10],
-                        hole=0,
-                        marker_colors=["#00C896", "#9EA0A5", "#FF4B4B"],
-                    )
-                ]
-            )
-            fig.update_layout(
-                height=80,
-                margin=dict(t=0, b=0, l=0, r=0),
-                showlegend=False,
-            )
-            st.plotly_chart(fig, use_container_width=True, key="kpi_sent")
-
-    k4, k5, k6 = st.columns(3)
-    with k4:
-        with st.container(border=True):
-            st.markdown(
-                "**ПОЗИЦІЯ БРЕНДУ**", help=METRIC_TOOLTIPS["position"]
-            )
-            st.markdown(
-                f"<h1 style='text-align: center; color: #8041F6;'>{pos}</h1>",
-                unsafe_allow_html=True,
-            )
-            st.progress(int(100 - (pos * 10)) if pos else 0)
-    with k5:
-        with st.container(border=True):
-            st.markdown(
-                "**ПРИСУТНІСТЬ БРЕНДУ**", help=METRIC_TOOLTIPS["presence"]
-            )
-            c, ch = st.columns([1, 1])
-            c.markdown(f"## {pres}%")
-            ch.plotly_chart(
-                get_donut_chart(pres), use_container_width=True, key="kpi_pres"
-            )
-    with k6:
-        with st.container(border=True):
-            st.markdown(
-                "**ЗГАДКИ ДОМЕНУ**", help=METRIC_TOOLTIPS["domain"]
-            )
-            c, ch = st.columns([1, 1])
-            c.markdown(f"## {dom}%")
-            ch.plotly_chart(
-                get_donut_chart(dom), use_container_width=True, key="kpi_dom"
-            )
-
-    st.markdown("### 📋 Моніторинг запитів")
-    try:
-        kws = (
-            supabase.table("keywords")
-            .select("id, keyword_text, type")
-            .eq("project_id", proj["id"])
-            .execute()
-            .data
-        )
-    except Exception:
-        kws = []
-
-    if not kws:
-        st.info("Дані ще збираються. Оновіть сторінку за хвилину.")
+    if not proj:
+        st.info("Оберіть або створіть проект.")
         return
 
-    # короткий список + кнопка переходу до детального екрану
-    for k in kws:
-        col1, col2 = st.columns([4, 1])
-        with col1:
-            st.write(f"- {k.get('keyword_text')}")
-        with col2:
-            if st.button("➡ Детально", key=f"goto_kw_{k['id']}"):
-                st.session_state["focus_keyword_id"] = k["id"]
-                # переключаємо сторінку на "Перелік запитів"
-                st.session_state["force_page"] = "Перелік запитів"
-                st.rerun()
+    # Заголовок і фільтр
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.title(f"📊 Дашборд: {proj.get('brand_name')}")
+        st.caption("Зведена аналітика видимості у LLM")
+    with c2:
+        st.selectbox("Період:", ["Останні 30 днів", "Все"], index=0)
+    
+    st.markdown("---")
 
+    # 1. Завантаження KPI з бази (SQL View 1)
+    try:
+        stats_resp = supabase.table("project_dashboard_stats").select("*").eq("project_id", proj["id"]).execute()
+        if stats_resp.data:
+            stats = stats_resp.data[0]
+        else:
+            stats = {}
+    except Exception as e:
+        st.error(f"Помилка завантаження KPI: {e}")
+        stats = {}
+
+    # Розпаковка даних (з захистом від нулів)
+    sov = stats.get("sov", 0)
+    off_src = stats.get("official_source_pct", 0)
+    avg_sent = stats.get("avg_sentiment", 0)
+    avg_pos = stats.get("avg_position", 0)
+    presence = stats.get("brand_presence_pct", 0)
+
+    # 2. Відображення карток KPI
+    k1, k2, k3, k4 = st.columns(4)
+    
+    with k1:
+        with st.container(border=True):
+            st.metric(
+                "📢 Share of Voice", 
+                f"{sov:.1f}%", 
+                help="Частка згадок вашого бренду серед усіх брендів"
+            )
+            # Міні-чарт
+            st.plotly_chart(get_donut_chart(sov, "#8041F6"), use_container_width=True, key="d_sov")
+
+    with k2:
+        with st.container(border=True):
+            st.metric(
+                "🛡️ Official Sources", 
+                f"{off_src:.1f}%",
+                help="% посилань, які ведуть на ваші ресурси (з WhiteList)"
+            )
+            st.plotly_chart(get_donut_chart(off_src, "#00C896"), use_container_width=True, key="d_off")
+
+    with k3:
+        with st.container(border=True):
+            # Колір тональності
+            sent_color = "normal"
+            if avg_sent > 75: sent_color = "normal" # Streamlit сам зробить зеленим якщо delta
+            
+            st.metric(
+                "❤️ Sentiment", 
+                f"{avg_sent:.0f}/100",
+                help="Середня тональність (0 - негатив, 100 - позитив)"
+            )
+            st.progress(int(avg_sent))
+
+    with k4:
+        with st.container(border=True):
+            pos_display = f"#{avg_pos:.1f}" if avg_pos > 0 else "-"
+            st.metric(
+                "🏆 Avg Position", 
+                pos_display,
+                help="Середня позиція у списках рекомендацій (де бренд знайдено)"
+            )
+            if avg_pos > 0:
+                # Чим менше число, тим краще, тому інвертуємо прогресбар
+                st.progress(max(0, 100 - int(avg_pos * 10)))
+            else:
+                st.write("_Немає даних_")
+
+    # 3. Графік Динаміки (SQL View 2)
+    st.markdown("### 📈 Динаміка Тональності")
+    
+    try:
+        trends_resp = supabase.table("daily_sentiment_trends").select("*").eq("project_id", proj["id"]).execute()
+        trends_data = trends_resp.data
+    except:
+        trends_data = []
+
+    if trends_data:
+        df_trends = pd.DataFrame(trends_data)
+        
+        fig = px.line(
+            df_trends, 
+            x="scan_date", 
+            y="avg_sentiment",
+            markers=True,
+            title="Зміна настрою ШІ по днях",
+            labels={"scan_date": "Дата", "avg_sentiment": "Тональність (0-100)"}
+        )
+        fig.update_traces(line_color='#8041F6', line_width=3)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Недостатньо даних для побудови графіка. Запустіть більше сканувань.")
+
+    # 4. Швидкий доступ до запитів
+    st.markdown("### 🔥 Останні активні запити")
+    try:
+        # Беремо останні 5 запитів
+        recent_kws = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("id", desc=True).limit(5).execute().data
+    except:
+        recent_kws = []
+
+    if recent_kws:
+        for k in recent_kws:
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                c1.markdown(f"**{k['keyword_text']}**")
+                if c2.button("Аналіз", key=f"dash_go_{k['id']}"):
+                    st.session_state["focus_keyword_id"] = k["id"]
+                    st.rerun()
+    else:
+        st.caption("Запитів ще немає.")
 
 # =========================
 # 7. КЕРУВАННЯ ЗАПИТАМИ
