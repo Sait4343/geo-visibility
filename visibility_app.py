@@ -200,24 +200,34 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
-    Відправляє вибрані запити на n8n для глибокого аналізу.
-    n8n сам пише результати в Supabase.
+    Відправляє запит на n8n.
     """
     try:
         user_email = st.session_state["user"].email if st.session_state.get("user") else None
+        
+        # Якщо keywords це один рядок, робимо з нього список
+        if isinstance(keywords, str):
+            keywords = [keywords]
+
         payload = {
             "project_id": project_id,
-            "keywords": keywords,
+            "keywords": keywords, # Передаємо масив
             "brand_name": brand_name,
             "user_email": user_email,
-            "models": models or [],
+            "models": models or ["perplexity"], # За замовчуванням perplexity
         }
-        requests.post(N8N_ANALYZE_URL, json=payload, timeout=2)
-        return True
-    except requests.exceptions.ReadTimeout:
-        return True
+        
+        # Збільшуємо таймаут, бо n8n може думати пару секунд
+        response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=5)
+        
+        if response.status_code == 200:
+            return True
+        else:
+            st.error(f"N8N Error: {response.text}")
+            return False
+            
     except Exception as e:
-        st.error(f"Помилка запуску аналізу: {e}")
+        st.error(f"Помилка з'єднання з n8n: {e}")
         return False
 
 
