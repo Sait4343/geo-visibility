@@ -1240,161 +1240,177 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Детальна сторінка одного запиту.
-    Показує історію сканувань та порівняння відповідей різних моделей.
+    Сторінка детального аналізу конкретного запиту.
+    FIX: Виправлено TypeError при порівнянні val_position.
     """
+    import plotly.express as px
     import pandas as pd
     import streamlit as st
-    import plotly.graph_objects as go
-    from datetime import datetime
-
+    
     # Кнопка "Назад"
     if st.button("← Назад до списку"):
         del st.session_state["focus_keyword_id"]
         st.rerun()
 
-    # 1. Отримуємо дані про запит
-    try:
-        kw_data = supabase.table("keywords").select("*").eq("id", kw_id).single().execute().data
-        keyword_text = kw_data["keyword_text"]
-    except:
+    # Отримуємо дані про саме слово
+    kw_data = supabase.table("keywords").select("*").eq("id", kw_id).single().execute().data
+    if not kw_data:
         st.error("Запит не знайдено.")
         return
 
-    st.title(f"🔍 {keyword_text}")
-
-    # 2. Отримуємо історію сканувань для цього слова
+    st.title(f"🔍 Аналіз запиту: {kw_data['keyword_text']}")
+    
+    # 1. ОТРИМАННЯ ДАНИХ (Історія сканувань)
+    proj = st.session_state["current_project"]
+    
     try:
-        scans_resp = supabase.table("scan_results")\
+        # Беремо останні 30 сканувань для цього слова
+        scans = supabase.table("scan_results")\
             .select("id, created_at, provider")\
             .eq("keyword_id", kw_id)\
             .order("created_at", desc=True)\
-            .execute()
-        
-        if not scans_resp.data:
-            st.info("Цей запит ще не аналізувався.")
+            .limit(30)\
+            .execute().data
+            
+        if not scans:
+            st.info("Даних ще немає. Запустіть сканування.")
             return
 
-        df_scans = pd.DataFrame(scans_resp.data)
+        scan_ids = [s['id'] for s in scans]
         
-        # Беремо найсвіжіший скан для кожної моделі
-        # (Або можна показувати селект для вибору дати, тут зробимо огляд останніх)
-        latest_scans = df_scans.drop_duplicates(subset=['provider'], keep='first')
+        # Отримуємо згадки нашого бренду в цих сканах
+        mentions = supabase.table("brand_mentions")\
+            .select("*")\
+            .in_("scan_result_id", scan_ids)\
+            .eq("is_my_brand", True)\
+            .execute().data
+            
+        df_scans = pd.DataFrame(scans)
+        df_mentions = pd.DataFrame(mentions)
         
-        scan_ids = latest_scans['id'].tolist()
-        
-        # Завантажуємо згадки для цих сканів
-        mentions_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
-        df_mentions = pd.DataFrame(mentions_resp.data)
+        # Об'єднуємо
+        if not df_mentions.empty:
+            full_df = pd.merge(df_scans, df_mentions, left_on='id', right_on='scan_result_id', how='left')
+        else:
+            full_df = df_scans.copy()
+            full_df['rank_position'] = None
+            full_df['sentiment_score'] = None
+
+        # Сортуємо по часу (для графіка)
+        full_df['created_at'] = pd.to_datetime(full_df['created_at'])
+        full_df = full_df.sort_values('created_at')
 
     except Exception as e:
-        st.error(f"Помилка даних: {e}")
+        st.error(f"Помилка завантаження історії: {e}")
         return
 
-    st.divider()
+    # 2. ПОТОЧНІ ПОКАЗНИКИ (Останній скан)
+    latest_scan = full_df.iloc[-1]
+    
+    # 🔥 FIX: Безпечна ініціалізація значень (числами, а не None)
+    val_position = 0 
+    val_sentiment = "Н/Д"
+    
+    # Перевіряємо, чи є позиція і чи вона не NaN
+    if pd.notna(latest_scan.get('rank_position')):
+        try:
+            val_position = int(latest_scan['rank_position'])
+        except:
+            val_position = 0
+            
+    if pd.notna(latest_scan.get('sentiment_score')):
+        val_sentiment = latest_scan['sentiment_score']
 
-    # 3. ВІДОБРАЖЕННЯ КАРТОК ПО МОДЕЛЯХ
-    # Стилі для карток
+    # Стилі карток
     st.markdown("""
     <style>
-        .model-card {
-            border: 1px solid #E0E0E0;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            background-color: white;
+        .virshi-card {
+            background-color: white; border: 1px solid #E0E0E0; 
+            border-radius: 10px; padding: 20px; text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.03);
         }
         .virshi-label { font-size: 12px; color: #888; text-transform: uppercase; font-weight: 600; }
-        .virshi-value { font-size: 24px; font-weight: bold; color: #333; }
-        .virshi-pos { color: #00C896; } /* Зелений */
-        .virshi-neg { color: #FF4B4B; } /* Червоний */
+        .virshi-value { font-size: 32px; font-weight: bold; color: #00C896; margin-top: 10px; }
+        .virshi-sub { font-size: 14px; color: #555; margin-top: 5px; font-weight: 500;}
     </style>
     """, unsafe_allow_html=True)
 
-    # Проходимо по унікальних провайдерах (Perplexity, GPT-4o, Gemini)
-    if not latest_scans.empty:
-        cols = st.columns(len(latest_scans))
-        
-        for idx, (_, row) in enumerate(latest_scans.iterrows()):
-            provider_name = row['provider']
-            scan_date = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00')).strftime("%d.%m %H:%M")
-            
-            # Шукаємо дані бренду в цьому скані
-            if not df_mentions.empty:
-                my_brand_row = df_mentions[
-                    (df_mentions['scan_result_id'] == row['id']) & 
-                    (df_mentions['is_my_brand'] == True)
-                ]
-            else:
-                my_brand_row = pd.DataFrame()
-
-            # 🔥 FIX: Безпечне отримання значень (Convert to int/str correctly)
-            val_position = 0
-            val_sentiment = "Не знайдено"
-            
-            if not my_brand_row.empty:
-                try:
-                    # Примусово конвертуємо в int, обробляючи помилки
-                    raw_pos = my_brand_row.iloc[0]['rank_position']
-                    val_position = int(raw_pos) if raw_pos is not None else 0
-                except:
-                    val_position = 0
-                
-                val_sentiment = my_brand_row.iloc[0]['sentiment_score']
-
-            # Визначаємо колір позиції
-            pos_color = "#00C896" if val_position > 0 and val_position <= 3 else "#333"
-            
-            # Рендер картки
-            with cols[idx]:
-                with st.container(border=True):
-                    st.markdown(f"#### 🤖 {provider_name}")
-                    st.caption(f"Дата: {scan_date}")
-                    
-                    st.markdown("---")
-                    
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown('<div class="virshi-label">Позиція</div>', unsafe_allow_html=True)
-                        # 🔥 FIX: Тут тепер безпечне порівняння, бо val_position це точно int
-                        display_pos = str(val_position) if val_position > 0 else "-"
-                        st.markdown(f'<div class="virshi-value" style="color:{pos_color}">{display_pos}</div>', unsafe_allow_html=True)
-                    
-                    with c2:
-                        st.markdown('<div class="virshi-label">Настрій</div>', unsafe_allow_html=True)
-                        st.markdown(f'<div class="virshi-value" style="font-size:18px;">{val_sentiment}</div>', unsafe_allow_html=True)
-
-    else:
-        st.warning("Даних сканувань немає.")
-
-    # 4. ТАБЛИЦЯ КОНКУРЕНТІВ (Для цього запиту)
-    st.subheader("👥 Хто ще в топі за цим запитом?")
+    c1, c2, c3 = st.columns(3)
     
-    if not df_mentions.empty:
-        # Беремо конкурентів з останніх сканів
-        competitors = df_mentions[
-            (df_mentions['is_my_brand'] == False)
-        ].copy()
+    with c1:
+        # Тепер ця умова безпечна, бо val_position точно число (0 або більше)
+        display_pos = str(val_position) if val_position > 0 else "-"
+        st.markdown(f"""
+        <div class="virshi-card">
+            <div class="virshi-label">Поточна Позиція</div>
+            <div class="virshi-value">{display_pos}</div>
+            <div class="virshi-sub">у видачі ШІ</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c2:
+        # Колір для тональності
+        sent_color = "#00C896"
+        if val_sentiment == "Негативний": sent_color = "#FF4B4B"
+        elif val_sentiment == "Нейтральний": sent_color = "#FFA500"
+        elif val_sentiment == "Н/Д": sent_color = "#999"
+
+        st.markdown(f"""
+        <div class="virshi-card">
+            <div class="virshi-label">Тональність</div>
+            <div class="virshi-value" style="color: {sent_color}">{val_sentiment}</div>
+            <div class="virshi-sub">останній відгук</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c3:
+        presence_rate = (full_df['rank_position'].notna().sum() / len(full_df) * 100) if len(full_df) > 0 else 0
+        st.markdown(f"""
+        <div class="virshi-card">
+            <div class="virshi-label">Частота появи</div>
+            <div class="virshi-value">{presence_rate:.0f}%</div>
+            <div class="virshi-sub">за весь час</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # 3. ГРАФІК ДИНАМІКИ
+    st.subheader("📈 Динаміка позицій")
+    
+    if not full_df.empty:
+        # Фільтруємо тільки успішні знаходження для графіка ліній
+        plot_df = full_df.copy()
+        # Замінюємо None на NaN для Plotly (щоб були розриви ліній, а не нулі)
         
-        if not competitors.empty:
-            # Групуємо, щоб побачити середню позицію конкурентів
-            comp_stats = competitors.groupby('brand_name').agg(
-                Avg_Pos=('rank_position', 'mean'),
-                Mentions=('id', 'count')
-            ).reset_index().sort_values('Avg_Pos', ascending=True) # Хто вище (менше число), той краще
-            
-            st.dataframe(
-                comp_stats,
-                use_container_width=True,
-                column_config={
-                    "brand_name": "Конкурент",
-                    "Avg_Pos": st.column_config.NumberColumn("Сер. Позиція", format="%.1f"),
-                    "Mentions": st.column_config.ProgressColumn("Частота появи", format="%d", min_value=0, max_value=int(comp_stats['Mentions'].max()))
-                },
-                hide_index=True
-            )
-        else:
-            st.info("Конкурентів у цьому запиті не знайдено.")
+        fig = px.line(
+            plot_df, 
+            x="created_at", 
+            y="rank_position",
+            markers=True,
+            title="Зміна позиції бренду в часі",
+            labels={"rank_position": "Позиція (менше = краще)", "created_at": "Дата"}
+        )
+        # Інвертуємо вісь Y, бо 1 місце краще за 10
+        fig.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # 4. ТАБЛИЦЯ ОСТАННІХ ВІДПОВІДЕЙ
+    st.markdown("---")
+    st.subheader("📝 Останні згадки")
+    
+    # Отримуємо тексти відповідей (потрібен ще один запит до extracted_sources або text_content, якщо ви його зберігаєте)
+    # Поки виведемо просто таблицю статусів
+    
+    display_table = full_df[['created_at', 'provider', 'rank_position', 'sentiment_score']].copy()
+    display_table.columns = ['Дата', 'Модель', 'Позиція', 'Тональність']
+    
+    # Форматування дати
+    display_table['Дата'] = display_table['Дата'].dt.strftime("%d.%m.%Y %H:%M")
+    display_table['Позиція'] = display_table['Позиція'].fillna("-")
+    
+    st.dataframe(display_table, use_container_width=True, hide_index=True)
+
 
 def show_keywords_page():
     """
