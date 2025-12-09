@@ -2368,16 +2368,15 @@ def show_admin_page():
     # ========================================================
     # TAB 1: СПИСОК КЛІЄНТІВ (ОГЛЯД)
     # ========================================================
-    with tab_list:
+    with tab_overview:
         if st.button("🔄 Оновити дані"):
             st.rerun()
 
         try:
-            # 1. Отримуємо всі проекти
+            # 1. Завантажуємо проекти
             projects = supabase.table("projects").select("*").order("created_at", desc=True).execute().data
             
             if projects:
-                # Підрахунок загальних метрик
                 total_clients = len(projects)
                 active_clients = len([p for p in projects if p.get('status') == 'active'])
                 
@@ -2387,42 +2386,33 @@ def show_admin_page():
                 c2.markdown(f"<div class='metric-box'><div class='metric-val'>{active_clients}</div><div class='metric-lbl'>Активних (Paid)</div></div>", unsafe_allow_html=True)
                 c3.markdown(f"<div class='metric-box'><div class='metric-val'>{total_clients - active_clients}</div><div class='metric-lbl'>Тріал (Trial)</div></div>", unsafe_allow_html=True)
                 
-                st.write("") # Відступ
+                st.write("") 
 
-                # 2. Збираємо детальну статистику по кожному клієнту
                 client_data = []
                 
                 with st.spinner("Завантаження статистики по клієнтах..."):
                     for p in projects:
                         pid = p['id']
                         
-                        # А. Кількість ключових слів
+                        # А. Кількість ключових слів (FIX: Явно int() для JSON-серіалізації)
                         kw_res = supabase.table("keywords").select("id", count="exact").eq("project_id", pid).execute()
-                        kw_count = kw_res.count if kw_res.count is not None else 0
+                        kw_count = int(kw_res.count) if kw_res.count is not None else 0
                         
-                        # Б. Кількість запусків (Scan Runs)
+                        # Б. Кількість запусків (FIX: Явно int())
                         scan_res = supabase.table("scan_results").select("id", count="exact").eq("project_id", pid).execute()
-                        scan_count = scan_res.count if scan_res.count is not None else 0
+                        scan_count = int(scan_res.count) if scan_res.count is not None else 0
                         
-                        # В. Офіційні джерела (список)
-                        assets_res = supabase.table("official_assets").select("domain_or_url").eq("project_id", pid).execute()
-                        assets_list = [a['domain_or_url'] for a in assets_res.data]
-                        assets_str = ", ".join(assets_list) if assets_list else "-"
-
-                        # Г. CRON Статус (НОВЕ)
-                        is_cron = p.get("cron_enabled", False)
-                        cron_status = "✅ ON" if is_cron else "⏸️ OFF"
-                        cron_freq = p.get("cron_frequency", "-") if is_cron else "-"
+                        # В. Офіційні джерела
+                        assets_res = supabase.table("official_assets").select("domain_or_orl").eq("project_id", pid).execute()
+                        assets_str = ", ".join([a['domain_or_url'] for a in assets_res.data]) if assets_res.data else "-"
 
                         client_data.append({
                             "ID": pid,
-                            "User (Email)": p.get("user_id", "N/A"),
+                            "Email": p.get("user_id", "N/A"), # Виводимо вміст user_id як email/ідентифікатор
                             "Бренд": p.get("brand_name"),
                             "Домен": p.get("domain"),
                             "Регіон": p.get("region", "UA"),
                             "Статус": p.get("status", "trial").upper(),
-                            "CRON": cron_status,    # <--- Додано
-                            "Частота": cron_freq,   # <--- Додано
                             "Запитів": kw_count,
                             "Аналізів": scan_count,
                             "Джерела": assets_str,
@@ -2437,8 +2427,8 @@ def show_admin_page():
                     use_container_width=True,
                     column_config={
                         "ID": st.column_config.TextColumn("ID", help="Скопіюйте це ID для редагування", width="small"),
-                        "Статус": st.column_config.TextColumn("Статус", help="Trial або Active", width="small"),
-                        "CRON": st.column_config.TextColumn("Авто-Скан", width="small"), # <--- Додано
+                        "Email": st.column_config.TextColumn("Email / User ID"), # Оновлений заголовок
+                        "Статус": st.column_config.TextColumn("Статус", help="Trial або Active"),
                         "Запитів": st.column_config.ProgressColumn("Запитів", format="%d", min_value=0, max_value=max(df["Запитів"].max(), 10)),
                         "Аналізів": st.column_config.NumberColumn("Запусків"),
                         "Джерела": st.column_config.TextColumn("Whitelist", width="medium")
@@ -2449,7 +2439,8 @@ def show_admin_page():
                 st.info("У базі поки немає проектів.")
                 
         except Exception as e:
-            st.error(f"Помилка завантаження адмінки: {e}")
+            # Обробка помилки для випадку, якщо колонка відсутня або Supabase повернув некоректний формат
+            st.error(f"Помилка завантаження адмінки. Зверніться до логів. Деталі: {e}")
 
     # ========================================================
     # TAB 2: СТВОРИТИ КЛІЄНТА (ONBOARDING FOR ADMIN)
