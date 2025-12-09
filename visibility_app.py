@@ -2532,7 +2532,7 @@ def main():
     if st.session_state.get("current_project") is None and st.session_state.get("role") != "admin":
         # Показуємо кнопку виходу в сайдбарі (щоб не застряг)
         with st.sidebar:
-            st.image("logo.png", width=150) # Або текст
+            st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150) # Або текст
             if st.button("Вийти"):
                 logout()
         
