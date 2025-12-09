@@ -1487,39 +1487,78 @@ def show_keyword_details(kw_id):
             # ТАБЛИЦІ
             # =========================================================
             
-            # 1. БРЕНДИ
-            st.markdown("#### 📊 Конкурентний аналіз")
+            # =========================================================
+            # 1. БРЕНДИ (Діаграма замість таблиці)
+            # =========================================================
+            st.markdown("#### 📊 Конкурентний аналіз (Share of Voice)")
+            
             if mentions_kpi:
+                import plotly.express as px # Імпортуємо тут, щоб не було помилок
+                
                 df_brands = pd.DataFrame(mentions_kpi)
-                df_brands = df_brands.sort_values(by="rank_position", ascending=True)
                 
-                cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
-                avail_cols = [c for c in cols if c in df_brands.columns]
-                show_df = df_brands[avail_cols].copy()
+                # Сортуємо: свій бренд, потім лідери
+                df_brands = df_brands.sort_values(by="mention_count", ascending=False)
                 
-                rename_map = {
-                    "rank_position": "Позиція", 
-                    "brand_name": "Бренд", 
-                    "sentiment_score": "Настрій", 
-                    "mention_count": "Згадок", 
-                    "is_my_brand": "Це ми?"
-                }
-                show_df.rename(columns=rename_map, inplace=True)
-                
-                if "Це ми?" in show_df.columns:
-                    show_df["Це ми?"] = show_df["Це ми?"].apply(lambda x: "✅" if x else "")
+                # Логіка кольорів: Наш = Зелений, Інші = Сірий
+                # Створюємо словник кольорів {BrandName: Color}
+                color_map = {}
+                for index, row in df_brands.iterrows():
+                    b_name = row['brand_name']
+                    # Якщо це наш бренд - Зелений, інакше - різні відтінки сірого/нейтрального
+                    if row.get('is_my_brand'):
+                        color_map[b_name] = '#00C896' # Virshi Green
+                    else:
+                        color_map[b_name] = '#9EA0A5' # Neutral Grey
 
-                st.dataframe(
-                    show_df, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={
-                        "Позиція": st.column_config.NumberColumn("Позиція", format="%d"),
-                        "Згадок": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(show_df["Згадок"].max())),
-                    }
+                # Будуємо "Бублик" (Donut Chart)
+                fig_brands = px.pie(
+                    df_brands,
+                    names='brand_name',
+                    values='mention_count',
+                    hole=0.6, # Робить "дірку" всередині (бублик)
+                    color='brand_name',
+                    color_discrete_map=color_map, # Застосовуємо наші кольори
+                    hover_data=['rank_position']
                 )
+
+                # Налаштування вигляду
+                fig_brands.update_traces(
+                    textposition='inside', 
+                    textinfo='percent+label',
+                    hovertemplate = "<b>%{label}</b><br>Згадок: %{value}<br>Частка: %{percent}"
+                )
+                
+                fig_brands.update_layout(
+                    showlegend=False, # Ховаємо легенду, щоб не забивати місце (підписи всередині)
+                    margin=dict(t=0, b=0, l=0, r=0),
+                    height=300
+                )
+
+                # Відображаємо
+                c_chart, c_table = st.columns([1.5, 1])
+                
+                with c_chart:
+                    st.plotly_chart(fig_brands, use_container_width=True)
+                
+                # Додатково маленька легенда/таблиця справа для точності
+                with c_table:
+                    st.markdown("**Топ лідерів:**")
+                    # Проста табличка топ-5
+                    top_df = df_brands[['brand_name', 'mention_count', 'rank_position']].head(5)
+                    st.dataframe(
+                        top_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config={
+                            "brand_name": "Бренд",
+                            "mention_count": st.column_config.NumberColumn("Згадок"),
+                            "rank_position": st.column_config.NumberColumn("Ранг")
+                        }
+                    )
+
             else:
-                st.info("Брендів не знайдено.")
+                st.info("Брендів у відповіді не знайдено.")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
