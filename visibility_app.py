@@ -1241,11 +1241,9 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Відображає детальну аналітику по запиту з KPI картками у стилі Virshi (Green/White).
-    FIX: Безпечна обробка None значень для rank_position та інших метрик.
     """
     import pandas as pd
     import streamlit as st
-    from datetime import datetime
     
     # --- 0. ПІДКЛЮЧЕННЯ ---
     if 'supabase' not in globals():
@@ -1263,25 +1261,6 @@ def show_keyword_details(kw_id):
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
-    
-    # Допоміжні функції для безпечної обробки значень
-    def safe_int(value, default=0):
-        """Безпечно конвертує значення в int, обробляючи None та пусті рядки"""
-        if value is None or value == "":
-            return default
-        try:
-            return int(value)
-        except (ValueError, TypeError):
-            return default
-    
-    def safe_float(value, default=0.0):
-        """Безпечно конвертує значення в float, обробляючи None та пусті рядки"""
-        if value is None or value == "":
-            return default
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return default
 
     # --- 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ ---
     try:
@@ -1310,7 +1289,7 @@ def show_keyword_details(kw_id):
     with col_title:
         st.markdown(f"<h2 style='margin-top: -10px;'>🔍 {keyword_text}</h2>", unsafe_allow_html=True)
 
-    # --- 3. БЛОК УПРАВЛІННЯ ---
+    # --- 3. БЛОК УПРАВЛІННЯ (Прихований в експандер для чистоти) ---
     with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
@@ -1323,24 +1302,14 @@ def show_keyword_details(kw_id):
 
         with c2:
             model_choices = list(MODEL_MAPPING.keys())
-            selected_models_ui = st.multiselect(
-                "Запустити пересканування:", 
-                model_choices, 
-                default=["Perplexity"], 
-                key="rescan_models_select"
-            )
+            selected_models_ui = st.multiselect("Запустити пересканування:", model_choices, default=["Perplexity"], key="rescan_models_select")
             
             if st.button("🚀 Сканувати", key="rescan_btn"):
                 if selected_models_ui:
                     proj = st.session_state.get("current_project", {})
                     brand_name = proj.get("brand_name", "MyBrand")
                     with st.spinner(f"Запускаємо {', '.join(selected_models_ui)}..."):
-                        success = n8n_trigger_analysis(
-                            project_id, 
-                            [new_text], 
-                            brand_name, 
-                            models=selected_models_ui
-                        )
+                        success = n8n_trigger_analysis(project_id, [new_text], brand_name, models=selected_models_ui)
                         if success:
                             st.success("Задачу відправлено! Оновіть сторінку за хвилину.")
                 else:
@@ -1372,20 +1341,14 @@ def show_keyword_details(kw_id):
     for tab, ui_model_name in zip(tabs, MODEL_MAPPING.keys()):
         with tab:
             tech_model_id = MODEL_MAPPING[ui_model_name]
-            model_scans = [
-                s for s in scans_data 
-                if tech_model_id in (s.get("provider") or "").lower()
-            ]
+            model_scans = [s for s in scans_data if tech_model_id in (s.get("provider") or "").lower()]
             
             if not model_scans:
                 st.write(f"📉 Даних від **{ui_model_name}** ще немає.")
                 continue
 
             # Вибір дати
-            history_options = {
-                s["created_at"][:16].replace("T", " "): s 
-                for s in model_scans
-            }
+            history_options = {s["created_at"][:16].replace("T", " "): s for s in model_scans}
             col_date, _ = st.columns([2, 4])
             with col_date:
                 selected_time = st.selectbox(
@@ -1398,51 +1361,37 @@ def show_keyword_details(kw_id):
             scan_id = current_scan["id"]
 
             # =========================================================
-            # КАРТКИ KPI
+            # 👇 НОВИЙ UI: КАРТКИ KPI (Як на макеті)
             # =========================================================
             
-            # Завантажуємо згадки
+            # 1. Завантажуємо згадки
             try:
-                mentions_kpi = supabase.table("brand_mentions")\
-                    .select("*")\
-                    .eq("scan_result_id", scan_id)\
-                    .execute()\
-                    .data
+                mentions_kpi = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
             except:
                 mentions_kpi = []
 
-            # Розрахунок метрик з безпечною обробкою
-            total_market_mentions = sum(
-                safe_int(item.get("mention_count")) 
-                for item in mentions_kpi
-            ) if mentions_kpi else 0
-            
-            my_brand_data = next(
-                (item for item in mentions_kpi if item.get("is_my_brand") is True), 
-                None
-            )
+            # 2. Розрахунок метрик
+            total_market_mentions = sum(item.get("mention_count", 0) for item in mentions_kpi) if mentions_kpi else 0
+            my_brand_data = next((item for item in mentions_kpi if item.get("is_my_brand") is True), None)
 
             if my_brand_data:
-                val_count = safe_int(my_brand_data.get("mention_count"), 0)
-                val_sentiment = my_brand_data.get("sentiment_score") or "Нейтральний"
-                val_position = safe_int(my_brand_data.get("rank_position"), 0)
-                val_sov = (val_count / total_market_mentions * 100) if total_market_mentions > 0 else 0.0
+                val_count = my_brand_data.get("mention_count", 0)
+                val_sentiment = my_brand_data.get("sentiment_score", "Нейтральний")
+                val_position = my_brand_data.get("rank_position", 0)
+                val_sov = (val_count / total_market_mentions * 100) if total_market_mentions > 0 else 0
             else:
                 val_count = 0
                 val_sentiment = "Не згадано"
-                val_position = 0
-                val_sov = 0.0
+                val_position = 0 # Якщо не знайдено
+                val_sov = 0
 
             # Колір для сентименту
             sent_color = "#333"
-            if val_sentiment == "Позитивний": 
-                sent_color = "#00C896"
-            elif val_sentiment == "Негативний": 
-                sent_color = "#FF4B4B"
-            elif val_sentiment == "Не згадано": 
-                sent_color = "#999"
+            if val_sentiment == "Позитивний": sent_color = "#00C896"
+            elif val_sentiment == "Негативний": sent_color = "#FF4B4B"
+            elif val_sentiment == "Не згадано": sent_color = "#999"
 
-            # HTML картки
+            # 3. HTML/CSS Стилізація (Зелений контур, Тіні, Шрифт)
             st.markdown(f"""
             <style>
                 .virshi-kpi-container {{
@@ -1455,7 +1404,7 @@ def show_keyword_details(kw_id):
                 .virshi-card {{
                     background-color: white;
                     border: 1px solid #E0E0E0;
-                    border-top: 4px solid #00C896;
+                    border-top: 4px solid #00C896; /* Зелений верхній бордюр */
                     border-radius: 8px;
                     padding: 20px 15px;
                     text-align: center;
@@ -1485,6 +1434,7 @@ def show_keyword_details(kw_id):
                     color: {sent_color};
                     font-weight: 600;
                 }}
+                /* Мобільна адаптація */
                 @media (max-width: 768px) {{
                     .virshi-kpi-container {{ grid-template-columns: repeat(2, 1fr); }}
                 }}
@@ -1505,13 +1455,13 @@ def show_keyword_details(kw_id):
                 </div>
                 <div class="virshi-card">
                     <div class="virshi-label">Позиція у списку</div>
-                    <div class="virshi-value">{"#" + str(val_position) if val_position > 0 else "-"}</div>
+                    <div class="virshi-value">{val_position if val_position > 0 else "-"}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
             # =========================================================
-            # ВІДПОВІДЬ ШІ
+            # ВІДПОВІДЬ ШІ (Зелений заголовок)
             # =========================================================
             raw_text = current_scan.get("raw_response", "")
             
@@ -1519,10 +1469,9 @@ def show_keyword_details(kw_id):
             with st.container(border=True):
                 if raw_text:
                     my_brand = st.session_state.get("current_project", {}).get("brand_name", "")
-                    highlighted_text = raw_text.replace(
-                        my_brand, 
-                        f"<span style='color:#00C896; font-weight:bold;'>{my_brand}</span>"
-                    )
+                    # Підсвітка бренду зеленим жирним
+                    highlighted_text = raw_text.replace(my_brand, f"<span style='color:#00C896; font-weight:bold;'>{my_brand}</span>")
+                    # Заміна markdown bold на зелений bold, якщо треба, або просто рендер
                     st.markdown(highlighted_text, unsafe_allow_html=True)
                 else:
                     st.caption("Текст відповіді не збережено.")
@@ -1530,19 +1479,14 @@ def show_keyword_details(kw_id):
             st.markdown("<br>", unsafe_allow_html=True)
 
             # =========================================================
-            # ТАБЛИЦІ
+            # ТАБЛИЦІ (Clean Table Style)
             # =========================================================
             
             # 1. БРЕНДИ
             st.markdown("#### 📊 Конкурентний аналіз")
             if mentions_kpi:
                 df_brands = pd.DataFrame(mentions_kpi)
-                
-                # Безпечна обробка None перед сортуванням
-                df_brands['rank_position_sort'] = df_brands['rank_position'].apply(
-                    lambda x: float('inf') if x is None or x == "" else safe_float(x)
-                )
-                df_brands = df_brands.sort_values(by="rank_position_sort", ascending=True)
+                df_brands = df_brands.sort_values(by="rank_position", ascending=True)
                 
                 cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
                 avail_cols = [c for c in cols if c in df_brands.columns]
@@ -1557,31 +1501,17 @@ def show_keyword_details(kw_id):
                 }
                 show_df.rename(columns=rename_map, inplace=True)
                 
-                # Форматуємо позицію
-                if "Позиція" in show_df.columns:
-                    show_df["Позиція"] = df_brands['rank_position'].apply(
-                        lambda x: f"#{int(x)}" if x is not None and x != "" and x != float('inf') else "-"
-                    )
-                
-                # Галочка для "Це ми?"
+                # Додаємо галочку
                 if "Це ми?" in show_df.columns:
                     show_df["Це ми?"] = show_df["Це ми?"].apply(lambda x: "✅" if x else "")
-
-                # Безпечний максимум для прогрес-бару
-                max_mentions = int(show_df["Згадок"].max()) if len(show_df) > 0 and show_df["Згадок"].max() > 0 else 10
 
                 st.dataframe(
                     show_df, 
                     use_container_width=True, 
                     hide_index=True,
                     column_config={
-                        "Позиція": st.column_config.TextColumn("Позиція"),
-                        "Згадок": st.column_config.ProgressColumn(
-                            "Згадок", 
-                            format="%d", 
-                            min_value=0, 
-                            max_value=max_mentions
-                        ),
+                        "Позиція": st.column_config.NumberColumn("Позиція", format="%d"),
+                        "Згадок": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(show_df["Згадок"].max())),
                     }
                 )
             else:
@@ -1605,19 +1535,10 @@ def show_keyword_details(kw_id):
                     s_avail = [c for c in s_cols if c in df_src.columns]
                     show_src = df_src[s_avail].copy()
                     
-                    show_src.rename(
-                        columns={
-                            "domain": "Домен", 
-                            "url": "Посилання", 
-                            "is_official": "Офіційне?"
-                        }, 
-                        inplace=True
-                    )
+                    show_src.rename(columns={"domain": "Домен", "url": "Посилання", "is_official": "Офіційне?"}, inplace=True)
                     
                     if "Офіційне?" in show_src.columns:
-                        show_src["Офіційне?"] = show_src["Офіційне?"].apply(
-                            lambda x: "✅" if x else ""
-                        )
+                        show_src["Офіційне?"] = show_src["Офіційне?"].apply(lambda x: "✅" if x else "")
 
                     st.dataframe(
                         show_src, 
@@ -1631,7 +1552,6 @@ def show_keyword_details(kw_id):
                     st.caption("Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка джерел: {e}")
-
 
 def show_keywords_page():
     """
