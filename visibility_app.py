@@ -84,21 +84,6 @@ st.markdown(
         font-size: 12px;
         color: #666;
     }
-    /* Приховуємо іконку якоря (ланцюжок/безкінечність) біля заголовків */
-[data-testid="stMarkdownContainer"] h1 > a,
-[data-testid="stMarkdownContainer"] h2 > a,
-[data-testid="stMarkdownContainer"] h3 > a,
-[data-testid="stMarkdownContainer"] h4 > a,
-[data-testid="stMarkdownContainer"] h5 > a,
-[data-testid="stMarkdownContainer"] h6 > a {
-    display: none !important;
-}
-
-/* Додатковий селектор для певності */
-a.anchor-link {
-    display: none !important;
-}
-
     
 </style>
 """,
