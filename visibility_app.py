@@ -544,30 +544,37 @@ def login_page():
 def onboarding_wizard():
     """
     Майстер створення першого проекту для нового користувача.
+    Версія: Анкетний ввід (4 поля) -> Генерація запитів.
     """
-    st.markdown("## 🚀 Налаштування вашого Проекту")
-    st.info("Вітаємо! Створіть свій перший проект, щоб почати аналіз.")
+    import time
+
+    st.markdown("## 🚀 Налаштування Проекту")
+    st.info("Вітаємо! Введіть дані про ваш бізнес, щоб ми могли сформувати первинні запити.")
 
     with st.form("onboarding_form"):
-        # Крок 1: Основні дані
         st.subheader("1. Дані про бренд")
         c1, c2 = st.columns(2)
+        
+        # 1. Назва бренду
         with c1:
             brand_name = st.text_input("Назва бренду", placeholder="Наприклад: Monobank")
+            
+            # 3. Галузь (Нове/Повернено)
+            industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг...") 
+        
+        # 2. Офіційний домен
         with c2:
             domain = st.text_input("Офіційний сайт (Домен)", placeholder="monobank.ua")
-        
+            
+            # 4. Продукти/Послуги (Нове/Повернено)
+            products = st.text_area(
+                "Продукти / Послуги (через кому)", 
+                placeholder="кредитні картки, депозити, розстрочка",
+                help="На основі цього створимо перші пошукові запити."
+            ) 
+
         region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=0)
         
-        # Крок 2: Офіційні ресурси
-        st.subheader("2. Офіційні джерела (Whitelist)")
-        st.caption("Вкажіть ваші соцмережі та сайти через кому. Ми будемо позначати їх як 'Офіційні'.")
-        assets_text = st.text_area("Список URL", placeholder="https://instagram.com/mono, https://t.me/monobankua", help="Розділяйте комою або новим рядком")
-
-        # Крок 3: Перші запити (Опціонально)
-        st.subheader("3. Перші запити для моніторингу")
-        keywords_text = st.text_area("Введіть 3-5 запитів (по одному в рядок)", placeholder="курси валют монобанк\nяк відкрити карту моно", height=100)
-
         submitted = st.form_submit_button("🚀 Створити Проект", type="primary")
 
         if submitted:
@@ -583,31 +590,47 @@ def onboarding_wizard():
                         "brand_name": brand_name,
                         "domain": domain,
                         "region": region,
-                        "status": "trial" # По дефолту тріал
+                        "status": "trial"
                     }).execute()
                     
                     if proj_res.data:
                         new_proj = proj_res.data[0]
                         proj_id = new_proj["id"]
                         
-                        # 2. Додаємо асети (Whitelist)
-                        assets_list = [a.strip() for a in assets_text.replace("\n", ",").split(",") if a.strip()]
-                        assets_list.append(domain) # Додаємо сам домен теж
-                        
-                        if assets_list:
-                            assets_data = [{"project_id": proj_id, "domain_or_url": a, "type": "website"} for a in assets_list]
-                            supabase.table("official_assets").insert(assets_data).execute()
+                        # 2. Додаємо Домен як єдиний Asset (Whitelist)
+                        clean_domain = domain.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                        supabase.table("official_assets").insert({
+                            "project_id": proj_id, 
+                            "domain_or_url": clean_domain, 
+                            "type": "website"
+                        }).execute()
 
-                        # 3. Додаємо ключові слова
-                        kws_list = [k.strip() for k in keywords_text.split("\n") if k.strip()]
-                        if kws_list:
-                            kws_data = [{"project_id": proj_id, "keyword_text": k, "is_active": True} for k in kws_list]
+                        # 3. АВТО-ГЕНЕРАЦІЯ ЗАПИТІВ (Нова логіка)
+                        generated_keywords = []
+                        generated_keywords.append(f"{brand_name} відгуки")
+                        generated_keywords.append(f"{brand_name} ціна")
+                        
+                        if products:
+                            prod_list = [p.strip() for p in products.split(",") if p.strip()]
+                            for p in prod_list[:5]:
+                                generated_keywords.append(f"купити {p} {brand_name}")
+                        
+                        if generated_keywords:
+                            kws_data = [
+                                {
+                                    "project_id": proj_id, 
+                                    "keyword_text": k, 
+                                    "is_active": True, 
+                                    "is_cron_active": False
+                                } for k in generated_keywords
+                            ]
                             supabase.table("keywords").insert(kws_data).execute()
 
                         # 4. Фінал
-                        st.success("Проект успішно створено!")
+                        st.success(f"Проект '{brand_name}' успішно створено! Згенеровано {len(generated_keywords)} запитів.")
+                        
                         st.session_state["current_project"] = new_proj
-                        time.sleep(1)
+                        time.sleep(1.5)
                         st.rerun()
                         
                 except Exception as e:
