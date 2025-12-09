@@ -544,16 +544,16 @@ def login_page():
 def onboarding_wizard():
     """
     Майстер створення першого проекту (2 етапи).
-    FIX: Безпечний доступ до st.session_state (уникнення NoneType error).
+    FIX: Видалено поле "Регіон" з вводу (зафіксовано UA).
     """
     import requests
     import time
     
     # 🚨 Ініціалізація стейту
     if "onboarding_stage" not in st.session_state:
-        st.session_state["onboarding_stage"] = 2  # Починаємо з кроку 2 (Ввід даних)
+        st.session_state["onboarding_stage"] = 2
         st.session_state["generated_prompts"] = []
-        
+    
     st.markdown("## 🚀 Налаштування Проекту")
 
     # Використовуємо .get для безпеки
@@ -567,11 +567,15 @@ def onboarding_wizard():
         if step == 2:
             st.subheader("Крок 1: Введіть дані про ваш бренд")
 
-            # Зчитуємо з Тимчасового стейту для відновлення форми
-            brand = st.text_input("Назва бренду", placeholder="Monobank", value=st.session_state.get("temp_brand", ""))
-            industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг", value=st.session_state.get("temp_industry", ""))
-            domain = st.text_input("Домен (офіційний сайт)", placeholder="monobank.ua", value=st.session_state.get("temp_domain", ""))
-            region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=0, key="onboarding_region")
+            c1, c2 = st.columns(2)
+            with c1:
+                brand = st.text_input("Назва бренду", placeholder="Monobank", value=st.session_state.get("temp_brand", ""))
+                industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг", value=st.session_state.get("temp_industry", ""))
+                
+            with c2:
+                domain = st.text_input("Домен (офіційний сайт)", placeholder="monobank.ua", value=st.session_state.get("temp_domain", ""))
+                # ❌ ВИДАЛЕНО: st.selectbox("Регіон", ...) 
+                st.markdown("<p style='color: #6c5ce7; margin-top: 10px;'>📍 **Регіон:** UA (Фіксовано)</p>", unsafe_allow_html=True)
             
             products = st.text_area(
                 "Продукти / Послуги (перелічіть через кому або у стовпчик)", 
@@ -586,8 +590,8 @@ def onboarding_wizard():
                     st.session_state["temp_domain"] = domain
                     st.session_state["temp_industry"] = industry
                     st.session_state["temp_products"] = products
-                    st.session_state["temp_region"] = region # Зберігаємо регіон
-                    
+                    st.session_state["temp_region"] = "UA" # <-- ФІКСАЦІЯ
+
                     with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
                         prompts = n8n_generate_prompts(brand, domain, industry, products)
                         
@@ -607,7 +611,6 @@ def onboarding_wizard():
             st.subheader("Крок 2: Оберіть запити для першого аналізу")
             st.info("Перевірте згенерований список. Відредагуйте або зніміть галочки із запитів, які вам не підходять.")
 
-            # 📌 Блок з чекбоксами та нумерацією
             prompts_list = st.session_state.get("generated_prompts", [])
             st.markdown("---")
             
@@ -633,16 +636,15 @@ def onboarding_wizard():
                 if len(selected_kws) > 0:
                     with st.spinner("Створюємо проект та запускаємо аналіз..."):
                         try:
-                            # 🚨 БЕЗПЕЧНИЙ ДОСТУП ДО СЕСІЇ
                             user_id = st.session_state["user"].id
                             
-                            # Використовуємо .get() з фолбеком, щоб уникнути NoneType
+                            # 🚨 БЕЗПЕЧНИЙ ДОСТУП ДО СЕСІЇ (для створення)
                             brand_name = st.session_state.get("temp_brand")
                             domain_name = st.session_state.get("temp_domain")
-                            region_name = st.session_state.get("temp_region", "UA")
+                            region_name = st.session_state.get("temp_region", "UA") # <-- ВИКОРИСТАННЯ ФІКСОВАНОГО РЕГІОНУ
                             
                             if not brand_name or not domain_name:
-                                raise Exception("Відсутні дані бренду (temp_brand/temp_domain). Спробуйте Крок 1 знову.")
+                                raise Exception("Відсутні дані бренду. Потрібен Brand Name та Domain.")
                             
                             # 1. Створення проекту
                             res = (
@@ -675,27 +677,26 @@ def onboarding_wizard():
                                 {"project_id": proj_id, "domain_or_url": clean_domain, "type": "website"}
                             ).execute()
 
-                            # 4. ФІНАЛЬНИЙ ЗАПУСК АНАЛІЗУ (Тільки Gemini)
+                            # 4. ФІНАЛЬНИЙ ЗАПУСК АНАЛІЗУ (КОНСТРЕЙНТ: ТІЛЬКИ GEMINI)
                             n8n_trigger_analysis(
                                 proj_id, 
                                 selected_kws, 
                                 brand_name,
-                                models=["Google Gemini"]
+                                models=["gemini-1.5-pro"]
                             )
 
                             # 5. Фінал
                             st.session_state["current_project"] = proj_data
                             st.session_state["onboarding_step"] = 2 # Скидаємо стейт
                             st.success("Проект створено! Аналіз запущено у фоновому режимі.")
-                            time.sleep(2)
+                            time.sleep(5)
                             st.rerun()
                             
                         except Exception as e:
-                            # Ловимо і виводимо точний текст помилки
                             st.error(f"Системна помилка при запуску: {e}")
                 else:
                     st.error("Будь ласка, оберіть хоча б один запит для аналізу.")
-
+                    
 # =========================
 # 6. DASHBOARD
 # =========================
