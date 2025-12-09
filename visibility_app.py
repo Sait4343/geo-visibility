@@ -22,7 +22,7 @@ st.set_page_config(
 
 # 🔴 ПРОДАКШН N8N ВЕБХУКИ
 N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
-N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook-test/webhook/run-analysis"
+N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook/webhook/run-analysis_prod"
 N8N_RECO_URL = "https://virshi.app.n8n.cloud/webhook/recommendations"  # за потреби заміниш
 
 # Custom CSS
