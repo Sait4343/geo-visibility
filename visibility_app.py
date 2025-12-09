@@ -29,34 +29,72 @@ N8N_RECO_URL = "https://virshi.app.n8n.cloud/webhook/recommendations"  # за п
 st.markdown(
     """
 <style>
+    /* 1. ЗАГАЛЬНІ НАЛАШТУВАННЯ */
     .stApp { background-color: #F4F6F9; }
-    section[data-testid="stSidebar"] { background-color: #FFFFFF; border-right: 1px solid #E0E0E0; }
+    
+    /* Приховування якірних посилань (ланцюжків) біля заголовків */
+    [data-testid="stMarkdownContainer"] h1 > a,
+    [data-testid="stMarkdownContainer"] h2 > a,
+    [data-testid="stMarkdownContainer"] h3 > a,
+    [data-testid="stMarkdownContainer"] h4 > a,
+    [data-testid="stMarkdownContainer"] h5 > a,
+    [data-testid="stMarkdownContainer"] h6 > a {
+        display: none !important;
+    }
+    a.anchor-link { display: none !important; }
+
+    /* 2. САЙДБАР */
+    section[data-testid="stSidebar"] { 
+        background-color: #FFFFFF; 
+        border-right: 1px solid #E0E0E0; 
+    }
     .sidebar-logo-container { display: flex; justify-content: center; margin-bottom: 10px; }
     .sidebar-logo-container img { width: 140px; }
+    .sidebar-name { font-size: 14px; font-weight: 600; color: #333; margin-top: 5px;}
+    .sidebar-label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 15px;}
 
+    /* 3. КОНТЕЙНЕРИ І ФОРМИ */
     .css-1r6slb0, .css-12oz5g7, div[data-testid="stForm"] {
         background-color: white; padding: 20px; border-radius: 10px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #EAEAEA;
     }
+
+    /* 4. МЕТРИКИ */
     div[data-testid="stMetric"] {
         background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px;
         border-radius: 10px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
+    .metric-card-small {
+        background-color: #F0F2F6;
+        border-radius: 6px;
+        padding: 10px;
+        text-align: center;
+    }
+    .metric-value {
+        font-size: 18px; font-weight: bold; color: #8041F6;
+    }
+    .metric-label {
+        font-size: 12px; color: #666;
+    }
 
-    .stButton>button { background-color: #8041F6; color: white; border-radius: 8px; border: none; font-weight: 600; }
+    /* 5. КНОПКИ */
+    .stButton>button { 
+        background-color: #8041F6; color: white; border-radius: 8px; border: none; font-weight: 600; 
+        transition: background-color 0.3s;
+    }
     .stButton>button:hover { background-color: #6a35cc; }
+    
     .upgrade-btn {
         display: block; width: 100%; background-color: #FFC107; color: #000000;
         text-align: center; padding: 8px; border-radius: 8px;
         text-decoration: none; font-weight: bold; margin-top: 10px; border: 1px solid #e0a800;
     }
+
+    /* 6. БЕЙДЖІ ТА СТАТУСИ */
     .badge-trial { background-color: #FFECB3; color: #856404; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.7em; }
     .badge-active { background-color: #D4EDDA; color: #155724; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.7em; }
 
-    .sidebar-name { font-size: 14px; font-weight: 600; color: #333; margin-top: 5px;}
-    .sidebar-label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 15px;}
-
-    /* Додати до існуючих стилів */
+    /* 7. ВІДПОВІДЬ ШІ */
     .ai-response-box {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -69,22 +107,6 @@ st.markdown(
         max-height: 600px;
         overflow-y: auto;
     }
-    .metric-card-small {
-        background-color: #F0F2F6;
-        border-radius: 6px;
-        padding: 10px;
-        text-align: center;
-    }
-    .metric-value {
-        font-size: 18px;
-        font-weight: bold;
-        color: #8041F6;
-    }
-    .metric-label {
-        font-size: 12px;
-        color: #666;
-    }
-    
 </style>
 """,
     unsafe_allow_html=True,
