@@ -543,99 +543,149 @@ def login_page():
 
 def onboarding_wizard():
     """
-    Майстер створення першого проекту для нового користувача.
-    Версія: Анкетний ввід (4 поля) -> Генерація запитів.
+    Майстер створення першого проекту (2 етапи).
+    Етап 1: Збір даних та Генерація запитів через n8n.
+    Етап 2: Підтвердження запитів та Запуск аналізу (Тільки Gemini).
     """
+    import requests
     import time
-
+    
+    # 🚨 ПЕРЕВІРКА ІНІЦІАЛІЗАЦІЇ СЕСІЇ
+    if "onboarding_stage" not in st.session_state:
+        st.session_state["onboarding_stage"] = 1
+        st.session_state["generated_keywords"] = []
+        st.session_state["onboarding_data"] = {}
+        
     st.markdown("## 🚀 Налаштування Проекту")
-    st.info("Вітаємо! Введіть дані про ваш бізнес, щоб ми могли сформувати первинні запити.")
 
-    with st.form("onboarding_form"):
-        st.subheader("1. Дані про бренд")
-        c1, c2 = st.columns(2)
+    # ========================================================
+    # ЕТАП 1: ВВІД ДАНИХ ТА ГЕНЕРАЦІЯ
+    # ========================================================
+    if st.session_state["onboarding_stage"] == 1:
+        st.subheader("1. Введіть дані для генерації запитів")
         
-        # 1. Назва бренду
-        with c1:
-            brand_name = st.text_input("Назва бренду", placeholder="Наприклад: Monobank")
+        with st.form("onboarding_form_step1"):
+            # 📌 4 ВИХІДНІ ПОЛЯ
+            c1, c2 = st.columns(2)
+            with c1:
+                brand_name = st.text_input("Назва бренду", placeholder="Наприклад: Monobank")
+                industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг")
+            with c2:
+                domain = st.text_input("Офіційний сайт (Домен)", placeholder="monobank.ua")
+                region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=0)
             
-            # 3. Галузь (Нове/Повернено)
-            industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг...") 
-        
-        # 2. Офіційний домен
-        with c2:
-            domain = st.text_input("Офіційний сайт (Домен)", placeholder="monobank.ua")
-            
-            # 4. Продукти/Послуги (Нове/Повернено)
+            # Поле для продуктів/послуг
             products = st.text_area(
-                "Продукти / Послуги (через кому)", 
+                "Продукти / Послуги", 
                 placeholder="кредитні картки, депозити, розстрочка",
-                help="На основі цього створимо перші пошукові запити."
-            ) 
+                help="Перелічіть через кому. На основі цього буде сформовано запити."
+            )
+            
+            submitted = st.form_submit_button("✨ Згенерувати запити", type="primary")
 
-        region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=0)
+            if submitted:
+                if not brand_name or not domain:
+                    st.error("Назва та Домен обов'язкові.")
+                else:
+                    try:
+                        # 1. Відправка на зовнішній генератор n8n
+                        payload = {
+                            "brand_name": brand_name,
+                            "domain": domain,
+                            "industry": industry,
+                            "products": products,
+                            "email": st.session_state["user"].email
+                        }
+                        
+                        with st.spinner("Генеруємо запити... Це може зайняти до 15 секунд."):
+                            # 🚨 ВИКЛИК ЗОВНІШНЬОГО ВЕБХУКА ГЕНЕРАЦІЇ
+                            response = requests.post(N8N_GENERATE_PROMPTS_URL, json=payload, timeout=20)
+                        
+                        if response.status_code == 200 and response.json().get("status") == "success":
+                            # Зберігаємо дані та переходимо до Етапу 2
+                            st.session_state["onboarding_data"] = payload
+                            st.session_state["generated_keywords"] = response.json().get("keywords", [])
+                            st.session_state["onboarding_stage"] = 2
+                            st.rerun()
+                        else:
+                            st.error(f"Помилка генерації (Код: {response.status_code}). Спробуйте знову.")
+                            print(f"Generator Error: {response.text}")
+                            
+                    except Exception as e:
+                        st.error(f"Критична помилка з'єднання: {e}")
+
+
+    # ========================================================
+    # ЕТАП 2: ПІДТВЕРДЖЕННЯ ТА ЗАПУСК АНАЛІЗУ
+    # ========================================================
+    elif st.session_state["onboarding_stage"] == 2:
+        st.subheader("2. Підтвердження запитів та Запуск")
+        st.info("Перевірте та відредагуйте згенерований список. Після підтвердження розпочнеться перше сканування.")
         
-        submitted = st.form_submit_button("🚀 Створити Проект", type="primary")
+        # Відображення та редагування згенерованих слів
+        kws_text = "\n".join(st.session_state["generated_keywords"])
+        final_keywords_input = st.text_area(
+            "Ваші запити (Один рядок = Один запит):", 
+            value=kws_text, 
+            height=200
+        )
+        
+        # 📌 ФІНАЛЬНА КНОПКА (Створення проекту + Запуск)
+        if st.button("🚀 Підтвердити та Запустити Аналіз", type="primary"):
+            final_kws_list = [k.strip() for k in final_keywords_input.split("\n") if k.strip()]
+            
+            if not final_kws_list:
+                st.warning("Список запитів порожній.")
+                return
 
-        if submitted:
-            if not brand_name or not domain:
-                st.error("Будь ласка, вкажіть Назву бренду та Домен.")
-            else:
-                try:
-                    user = st.session_state["user"]
+            try:
+                user = st.session_state["user"]
+                data = st.session_state["onboarding_data"]
+                
+                # 1. СТВОРЕННЯ ПРОЕКТУ
+                proj_res = supabase.table("projects").insert({
+                    "user_id": user.id,
+                    "brand_name": data["brand_name"],
+                    "domain": data["domain"],
+                    "region": data["region"],
+                    "status": "trial" 
+                }).execute()
+                
+                if proj_res.data:
+                    new_proj = proj_res.data[0]
+                    proj_id = new_proj["id"]
                     
-                    # 1. Створюємо проект
-                    proj_res = supabase.table("projects").insert({
-                        "user_id": user.id,
-                        "brand_name": brand_name,
-                        "domain": domain,
-                        "region": region,
-                        "status": "trial"
+                    # 2. ДОДАВАННЯ ASSETS
+                    clean_domain = data["domain"].replace("https://", "").replace("http://", "").strip().rstrip("/")
+                    supabase.table("official_assets").insert({
+                        "project_id": proj_id, 
+                        "domain_or_url": clean_domain, 
+                        "type": "website"
                     }).execute()
+
+                    # 3. ДОДАВАННЯ КЛЮЧОВИХ СЛІВ (Фінальний список)
+                    kws_data = [{"project_id": proj_id, "keyword_text": k, "is_active": True, "is_cron_active": False} for k in final_kws_list]
+                    supabase.table("keywords").insert(kws_data).execute()
+
+                    # 4. ФІНАЛЬНИЙ ЗАПУСК АНАЛІЗУ (Тільки Gemini)
+                    with st.spinner(f"Проект створено. Запускаємо {len(final_kws_list)} запитів через Gemini..."):
+                        # 🚨 КОНСТРЕЙНТ: Тільки Gemini
+                        n8n_trigger_analysis(
+                            project_id=proj_id,
+                            keywords=final_kws_list, 
+                            brand_name=data["brand_name"],
+                            models=["Google Gemini"] # 👈 ОБМЕЖЕННЯ
+                        )
+
+                    # 5. Фінал
+                    st.success(f"Проект '{data['brand_name']}' успішно налаштовано! Розпочато сканування.")
+                    st.session_state["current_project"] = new_proj
+                    st.session_state["onboarding_stage"] = 1 # Скидаємо стейт
+                    time.sleep(2)
+                    st.rerun()
                     
-                    if proj_res.data:
-                        new_proj = proj_res.data[0]
-                        proj_id = new_proj["id"]
-                        
-                        # 2. Додаємо Домен як єдиний Asset (Whitelist)
-                        clean_domain = domain.replace("https://", "").replace("http://", "").strip().rstrip("/")
-                        supabase.table("official_assets").insert({
-                            "project_id": proj_id, 
-                            "domain_or_url": clean_domain, 
-                            "type": "website"
-                        }).execute()
-
-                        # 3. АВТО-ГЕНЕРАЦІЯ ЗАПИТІВ (Нова логіка)
-                        generated_keywords = []
-                        generated_keywords.append(f"{brand_name} відгуки")
-                        generated_keywords.append(f"{brand_name} ціна")
-                        
-                        if products:
-                            prod_list = [p.strip() for p in products.split(",") if p.strip()]
-                            for p in prod_list[:5]:
-                                generated_keywords.append(f"купити {p} {brand_name}")
-                        
-                        if generated_keywords:
-                            kws_data = [
-                                {
-                                    "project_id": proj_id, 
-                                    "keyword_text": k, 
-                                    "is_active": True, 
-                                    "is_cron_active": False
-                                } for k in generated_keywords
-                            ]
-                            supabase.table("keywords").insert(kws_data).execute()
-
-                        # 4. Фінал
-                        st.success(f"Проект '{brand_name}' успішно створено! Згенеровано {len(generated_keywords)} запитів.")
-                        
-                        st.session_state["current_project"] = new_proj
-                        time.sleep(1.5)
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Помилка при створенні: {e}")
-
+            except Exception as e:
+                st.error(f"Помилка при збереженні проекту: {e}")
 
 # =========================
 # 6. DASHBOARD
