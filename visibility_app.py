@@ -973,8 +973,9 @@ def show_dashboard():
         start_date = min_date
         end_date = today
 
-    # --- 2. ЗАВАНТАЖЕННЯ ДАНИХ ---
+# --- 2. ЗАВАНТАЖЕННЯ ДАНИХ ---
     try:
+        # Перетворюємо дати в ISO формат
         iso_start = datetime.combine(start_date, dt_time.min).isoformat()
         iso_end = datetime.combine(end_date, dt_time.max).isoformat()
 
@@ -988,9 +989,12 @@ def show_dashboard():
         
         scan_ids = [s['id'] for s in scans_query.data]
         
+        # --- ПЕРЕВІРКА НА ПУСТОТУ ---
         if not scan_ids:
-            st.warning(f"🔍 За період з {start_date.strftime('%d.%m.%Y')} по {end_date.strftime('%d.%m.%Y')} даних не знайдено.")
-            return 
+            # Тут ми виходимо, якщо немає сканувань взагалі
+            st.warning(f"🔍 За період з {start_date.strftime('%d.%m')} по {end_date.strftime('%d.%m')} даних не знайдено.")
+            st.info("👉 Запустіть нове сканування.")
+            return
 
         # B. Згадки та Джерела
         mentions_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
@@ -1000,9 +1004,19 @@ def show_dashboard():
         df_mentions = pd.DataFrame(mentions_resp.data)
         df_sources = pd.DataFrame(sources_resp.data)
         kw_map = {k['id']: k['keyword_text'] for k in keywords_resp.data}
+        
+        # 🔥 FIX: ЗАХИСТ ВІД KEYERROR - Гарантуємо наявність колонок, навіть якщо відповідь Supabase порожня
+        
+        # Якщо дані прийшли пустими, створюємо DF з необхідними колонками
+        if df_mentions.empty:
+            df_mentions = pd.DataFrame(columns=['mention_count', 'is_my_brand', 'sentiment_score', 'rank_position', 'scan_result_id'])
+        
+        if df_sources.empty:
+            df_sources = pd.DataFrame(columns=['is_official', 'domain', 'scan_result_id'])
+
 
     except Exception as e:
-        st.error(f"Помилка завантаження: {e}")
+        st.error(f"Помилка обробки даних: {e}")
         return
 
     # --- 3. РОЗРАХУНОК МЕТРИК ---
