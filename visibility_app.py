@@ -1971,10 +1971,12 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    Версія: 3 вкладки, окремі фільтри, безпечна обробка колонок.
+    Оновлено: Редагування офіційних ресурсів, перейменована вкладка.
     """
     import pandas as pd
     import streamlit as st
+    from urllib.parse import urlparse
+    import time
     
     # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
@@ -2002,7 +2004,7 @@ def show_sources_page():
     
     # === 1. ЗАВАНТАЖЕННЯ ДАНИХ ===
     try:
-        # Whitelist
+        # Whitelist (Офіційні сайти)
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
         assets = assets_resp.data if assets_resp.data else []
         whitelist = [a['domain_or_url'] for a in assets]
@@ -2024,53 +2026,95 @@ def show_sources_page():
 
     # === 2. ПОПЕРЕДНЯ ОБРОБКА ===
     if not df_sources.empty:
-        # Додаємо провайдера до кожного джерела
         df_sources['provider'] = df_sources['scan_result_id'].map(scan_map)
-        
-        # Гарантуємо наявність колонок, щоб не було помилок
         if 'domain' not in df_sources.columns: df_sources['domain'] = None
         if 'url' not in df_sources.columns: df_sources['url'] = None
     
     # === 3. ВКЛАДКИ ===
-    tab1, tab2, tab3 = st.tabs(["🛡️ Мої Активи", "🌐 Ренкінг доменів", "📄 Топ Сторінок (URL)"])
+    # 👇 Перейменована перша вкладка
+    tab1, tab2, tab3 = st.tabs(["🛡️ Офіційні ресурси бренду", "🌐 Ренкінг доменів", "📄 Топ Сторінок (URL)"])
 
     # -------------------------------------------------------
-    # TAB 1: МОЇ АКТИВИ (Без фільтрів)
+    # TAB 1: ОФІЦІЙНІ РЕСУРСИ (З Редагуванням)
     # -------------------------------------------------------
     with tab1:
         st.markdown("##### 🟢 Ваші офіційні ресурси")
         st.caption("Домени, які система позначатиме як 'Офіційні' (✅).")
         
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            new_asset = st.text_input("URL/Домен", placeholder="example.com")
-        with c2:
-            asset_type = st.selectbox("Тип", ["website", "social", "article"], label_visibility="visible")
-        with c3:
-            st.write("") 
-            st.write("") 
-            if st.button("➕ Додати", use_container_width=True):
-                if new_asset:
-                    try:
-                        clean = new_asset.replace("https://", "").replace("http://", "").strip().rstrip("/")
-                        supabase.table("official_assets").insert({
-                            "project_id": proj["id"], "domain_or_url": clean, "type": asset_type
-                        }).execute()
-                        st.success("Додано!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Помилка: {e}")
+        # Блок додавання
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([3, 1, 1])
+            with c1:
+                new_asset = st.text_input("URL або Домен", placeholder="example.com", key="add_new_asset_input")
+            with c2:
+                asset_type = st.selectbox("Тип", ["website", "social", "article"], label_visibility="visible", key="add_new_asset_type")
+            with c3:
+                st.write("") 
+                st.write("") 
+                if st.button("➕ Додати", use_container_width=True):
+                    if new_asset:
+                        try:
+                            clean = new_asset.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                            supabase.table("official_assets").insert({
+                                "project_id": proj["id"], "domain_or_url": clean, "type": asset_type
+                            }).execute()
+                            st.success("Додано!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Помилка: {e}")
 
         if assets:
             st.markdown("---")
+            st.caption("Список активів (можна редагувати):")
+            
             for asset in assets:
+                # Унікальний ключ для стейту редагування
+                edit_key = f"edit_mode_{asset['id']}"
+                
                 with st.container(border=True):
-                    c_txt, c_type, c_del = st.columns([4, 1, 0.5])
-                    c_txt.markdown(f"**{asset['domain_or_url']}**")
-                    c_type.caption(asset['type'].upper())
-                    if c_del.button("🗑", key=f"del_{asset['id']}"):
-                        supabase.table("official_assets").delete().eq("id", asset['id']).execute()
-                        st.rerun()
+                    # Перевіряємо, чи увімкнено режим редагування для цього рядка
+                    if st.session_state.get(edit_key, False):
+                        # === РЕЖИМ РЕДАГУВАННЯ ===
+                        ec1, ec2 = st.columns([4, 1])
+                        with ec1:
+                            new_val = st.text_input("Редагування", value=asset['domain_or_url'], key=f"input_{asset['id']}", label_visibility="collapsed")
+                        with ec2:
+                            b_save, b_cancel = st.columns(2)
+                            if b_save.button("💾", key=f"save_{asset['id']}", help="Зберегти"):
+                                try:
+                                    clean_val = new_val.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                                    supabase.table("official_assets").update({"domain_or_url": clean_val}).eq("id", asset['id']).execute()
+                                    st.session_state[edit_key] = False # Вимикаємо редагування
+                                    st.success("Збережено!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Помилка: {e}")
+                            
+                            if b_cancel.button("❌", key=f"cancel_{asset['id']}", help="Скасувати"):
+                                st.session_state[edit_key] = False
+                                st.rerun()
+                    else:
+                        # === РЕЖИМ ПЕРЕГЛЯДУ ===
+                        c_txt, c_type, c_acts = st.columns([3.5, 1, 1.5])
+                        
+                        with c_txt:
+                            st.markdown(f"**{asset['domain_or_url']}**")
+                        
+                        with c_type:
+                            st.caption(asset['type'].upper())
+                        
+                        with c_acts:
+                            b_edit, b_del = st.columns(2)
+                            # Кнопка Редагувати
+                            if b_edit.button("✏️", key=f"edit_btn_{asset['id']}", help="Редагувати"):
+                                st.session_state[edit_key] = True
+                                st.rerun()
+                            
+                            # Кнопка Видалити
+                            if b_del.button("🗑", key=f"del_{asset['id']}", help="Видалити"):
+                                supabase.table("official_assets").delete().eq("id", asset['id']).execute()
+                                st.rerun()
         else:
             st.info("Список пустий. Додайте ваш сайт.")
 
@@ -2078,7 +2122,6 @@ def show_sources_page():
     # TAB 2: РЕНКІНГ ДОМЕНІВ (Фільтр + Таблиця)
     # -------------------------------------------------------
     with tab2:
-        # 1. Фільтр
         c_filter, _ = st.columns([2, 2])
         with c_filter:
             sel_models_tab2 = st.multiselect(
@@ -2088,7 +2131,6 @@ def show_sources_page():
                 key="filter_domains"
             )
         
-        # 2. Фільтрація
         if not df_sources.empty and sel_models_tab2:
             sel_tech = [MODEL_MAPPING[m] for m in sel_models_tab2]
             mask = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech))
@@ -2098,9 +2140,10 @@ def show_sources_page():
 
         st.markdown(f"##### 🏆 Топ Доменів")
         
-        # 3. Перевірка та відображення
         if not df_tab2.empty and df_tab2['domain'].notna().any():
-            # Групуємо по домену
+            # Захист від змішаних типів (None/String) перед групуванням
+            df_tab2['domain'] = df_tab2['domain'].astype(str)
+            
             domain_stats = df_tab2.groupby('domain').agg(
                 Mentions=('id', 'count'),
                 Queries=('scan_result_id', 'nunique')
@@ -2127,7 +2170,6 @@ def show_sources_page():
     # TAB 3: ТОП СТОРІНОК (Фільтр + Таблиця)
     # -------------------------------------------------------
     with tab3:
-        # 1. Фільтр
         c_filter_url, _ = st.columns([2, 2])
         with c_filter_url:
             sel_models_tab3 = st.multiselect(
@@ -2137,7 +2179,6 @@ def show_sources_page():
                 key="filter_urls"
             )
 
-        # 2. Фільтрація
         if not df_sources.empty and sel_models_tab3:
             sel_tech_url = [MODEL_MAPPING[m] for m in sel_models_tab3]
             mask_url = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech_url))
@@ -2147,12 +2188,13 @@ def show_sources_page():
 
         st.markdown("##### 📄 Топ Конкретних Сторінок (URL)")
         
-        # 3. Перевірка та відображення
         if not df_tab3.empty and df_tab3['url'].notna().any():
-            # Беремо тільки не пусті URL
             df_urls = df_tab3[df_tab3['url'].notna() & (df_tab3['url'] != "")]
             
             if not df_urls.empty:
+                # Приведення до рядка перед групуванням
+                df_urls['url'] = df_urls['url'].astype(str)
+                
                 url_stats = df_urls.groupby('url').agg(
                     Mentions=('id', 'count')
                 ).reset_index().sort_values('Mentions', ascending=False).head(100)
@@ -2169,7 +2211,7 @@ def show_sources_page():
             else:
                 st.info("URL-адреси відсутні.")
         else:
-            st.info("Немає даних URL. (Переконайтеся, що n8n записує поле 'url').")
+            st.info("Немає даних URL.")
             
 def show_chat_page():
     proj = st.session_state.get("current_project")
