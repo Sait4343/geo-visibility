@@ -2334,7 +2334,7 @@ def sidebar_menu():
 def show_admin_page():
     """
     Повноцінна CRM для Адміністратора.
-    Виправлено: int64 serialization error, tab ordering, email label.
+    Виправлено: помилка int64 (JSON serialization), відображення Email, порядок вкладок.
     """
     import pandas as pd
     import streamlit as st
@@ -2347,7 +2347,7 @@ def show_admin_page():
 
     st.title("🛡️ Admin Panel (CRM)")
     
-    # Стилізація
+    # Стилізація метрик
     st.markdown("""
     <style>
         .metric-box {
@@ -2362,7 +2362,7 @@ def show_admin_page():
     </style>
     """, unsafe_allow_html=True)
 
-    # 🔥 FIX 1: Ініціалізація вкладок ПЕРЕД використанням
+    # 🔥 FIX: Ініціалізація вкладок ПЕРЕД використанням
     tab_list, tab_create, tab_edit = st.tabs(["📋 Список Клієнтів", "➕ Створити Клієнта", "✏️ Редагування"])
 
     # ========================================================
@@ -2373,14 +2373,14 @@ def show_admin_page():
             st.rerun()
 
         try:
-            # 1. Отримуємо всі проекти
+            # 1. Завантажуємо всі проекти
             projects = supabase.table("projects").select("*").order("created_at", desc=True).execute().data
             
             if projects:
                 total_clients = len(projects)
                 active_clients = len([p for p in projects if p.get('status') == 'active'])
                 
-                # Метрики
+                # Виводимо плашки з метриками
                 c1, c2, c3 = st.columns(3)
                 c1.markdown(f"<div class='metric-box'><div class='metric-val'>{total_clients}</div><div class='metric-lbl'>Всього клієнтів</div></div>", unsafe_allow_html=True)
                 c2.markdown(f"<div class='metric-box'><div class='metric-val'>{active_clients}</div><div class='metric-lbl'>Активних (Paid)</div></div>", unsafe_allow_html=True)
@@ -2394,29 +2394,34 @@ def show_admin_page():
                     for p in projects:
                         pid = p['id']
                         
-                        # 🔥 FIX 2: Явне перетворення в int() для уникнення помилки JSON serializable
+                        # 🔥 FIX: Перетворення результатів count() у звичайний int(),
+                        # щоб уникнути помилки "int64 is not JSON serializable"
                         
-                        # А. Кількість слів
+                        # А. Кількість ключових слів
                         kw_res = supabase.table("keywords").select("id", count="exact").eq("project_id", pid).execute()
+                        # Використовуємо int(), щоб перетворити numpy.int64 або інші типи
                         kw_count = int(kw_res.count) if kw_res.count is not None else 0
                         
-                        # Б. Кількість запусків
+                        # Б. Кількість запусків (Scan Runs)
                         scan_res = supabase.table("scan_results").select("id", count="exact").eq("project_id", pid).execute()
                         scan_count = int(scan_res.count) if scan_res.count is not None else 0
                         
-                        # В. Джерела
-                        assets_res = supabase.table("official_assets").select("domain_or_url").eq("project_id", pid).execute()
-                        assets_list = [a['domain_or_url'] for a in assets_res.data]
-                        assets_str = ", ".join(assets_list) if assets_list else "-"
+                        # В. Офіційні джерела (список)
+                        try:
+                            assets_res = supabase.table("official_assets").select("domain_or_url").eq("project_id", pid).execute()
+                            assets_list = [a['domain_or_url'] for a in assets_res.data]
+                            assets_str = ", ".join(assets_list) if assets_list else "-"
+                        except:
+                            assets_str = "-"
 
-                        # Г. CRON
+                        # Г. CRON Статус
                         is_cron = p.get("cron_enabled", False)
                         cron_status = "✅ ON" if is_cron else "⏸️ OFF"
                         cron_freq = p.get("cron_frequency", "-") if is_cron else "-"
 
                         client_data.append({
                             "ID": pid,
-                            "Email / User ID": p.get("user_id", "N/A"), # Виводимо ID користувача
+                            "Email / User ID": p.get("user_id", "N/A"), # Виводимо ID користувача (Email)
                             "Бренд": p.get("brand_name"),
                             "Домен": p.get("domain"),
                             "Регіон": p.get("region", "UA"),
@@ -2431,17 +2436,17 @@ def show_admin_page():
                 
                 df = pd.DataFrame(client_data)
                 
-                # Відображення таблиці
+                # 3. Відображення таблиці
                 st.dataframe(
                     df,
                     use_container_width=True,
                     column_config={
-                        "ID": st.column_config.TextColumn("ID", help="Скопіюйте ID", width="small"),
+                        "ID": st.column_config.TextColumn("ID", help="Скопіюйте це ID для редагування", width="small"),
                         "Email / User ID": st.column_config.TextColumn("Email / User ID", width="medium"),
-                        "Статус": st.column_config.TextColumn("Статус", width="small"),
+                        "Статус": st.column_config.TextColumn("Статус", help="Trial або Active", width="small"),
                         "CRON": st.column_config.TextColumn("Auto", width="small"),
                         "Запитів": st.column_config.ProgressColumn("Запитів", format="%d", min_value=0, max_value=max(df["Запитів"].max(), 10)),
-                        "Аналізів": st.column_config.NumberColumn("Runs"),
+                        "Аналізів": st.column_config.NumberColumn("Запусків"),
                         "Джерела": st.column_config.TextColumn("Whitelist", width="medium")
                     },
                     hide_index=True
@@ -2450,10 +2455,10 @@ def show_admin_page():
                 st.info("У базі поки немає проектів.")
                 
         except Exception as e:
-            st.error(f"Помилка завантаження адмінки: {e}")
+            st.error(f"Помилка завантаження списку клієнтів: {e}")
 
     # ========================================================
-    # TAB 2: СТВОРИТИ КЛІЄНТА
+    # TAB 2: СТВОРИТИ КЛІЄНТА (ONBOARDING FOR ADMIN)
     # ========================================================
     with tab_create:
         st.markdown("##### 👤 Додати нового клієнта")
@@ -2472,8 +2477,8 @@ def show_admin_page():
             new_status = st.selectbox("Початковий статус", ["trial", "active"])
             
             st.markdown("**Налаштування:**")
-            new_assets = st.text_area("Офіційні джерела", placeholder="https://instagram.com/...", help="Через кому")
-            new_kws = st.text_area("Початкові запити", placeholder="доставка, ціна...", help="По одному в рядок")
+            new_assets = st.text_area("Офіційні джерела (Whitelist)", placeholder="https://instagram.com/...", help="Через кому")
+            new_kws = st.text_area("Початкові запити (Ключові слова)", placeholder="доставка, ціна...", help="По одному в рядок")
 
             submitted_create = st.form_submit_button("✅ Створити Клієнта", type="primary")
             
@@ -2505,7 +2510,7 @@ def show_admin_page():
                                     kw_data = [{"project_id": new_pid, "keyword_text": k, "is_active": True, "is_cron_active": False} for k in kw_list]
                                     supabase.table("keywords").insert(kw_data).execute()
 
-                            st.success(f"Клієнт {new_brand} успішно створений!")
+                            st.success(f"Клієнт {new_brand} успішно створений! ID: {new_pid}")
                             time.sleep(1)
                             st.rerun()
                     except Exception as e:
@@ -2514,19 +2519,22 @@ def show_admin_page():
                     st.warning("Вкажіть User ID та Назву бренду.")
 
     # ========================================================
-    # TAB 3: РЕДАГУВАННЯ
+    # TAB 3: РЕДАГУВАННЯ (ЗМІНА СТАТУСУ, КРОН)
     # ========================================================
     with tab_edit:
         st.markdown("##### ✏️ Керування існуючим проектом")
         
         try:
             all_projs = supabase.table("projects").select("id, brand_name, user_id").execute().data
+            # Формат: "Brand (Email)"
             proj_options = {f"{p['brand_name']} ({p.get('user_id')})": p['id'] for p in all_projs}
             
-            selected_label = st.selectbox("Оберіть клієнта:", list(proj_options.keys()), index=None)
+            selected_label = st.selectbox("Оберіть клієнта для редагування:", list(proj_options.keys()), index=None)
             
             if selected_label:
                 pid = proj_options[selected_label]
+                
+                # Завантажуємо дані
                 curr_data = supabase.table("projects").select("*").eq("id", pid).single().execute().data
                 
                 st.divider()
@@ -2537,19 +2545,23 @@ def show_admin_page():
                     with c1:
                         edit_brand = st.text_input("Назва бренду", value=curr_data.get("brand_name"))
                         
+                        # Статус (включаючи blocked)
                         status_opts = ["trial", "active", "expired", "blocked"]
                         curr_status = curr_data.get("status", "trial")
                         st_idx = status_opts.index(curr_status) if curr_status in status_opts else 0
+                        
                         edit_status = st.selectbox("Статус (План)", status_opts, index=st_idx)
                     
                     with c2:
                         region_opts = ["UA", "US", "EU", "Global"]
                         curr_reg = curr_data.get("region", "UA")
                         reg_idx = region_opts.index(curr_reg) if curr_reg in region_opts else 0
+                        
                         edit_region = st.selectbox("Регіон", region_opts, index=reg_idx)
                         
-                        st.multiselect("Моделі", ["Perplexity", "GPT-4o", "Gemini"], default=["Perplexity", "GPT-4o", "Gemini"], disabled=True)
+                        st.multiselect("Активні моделі (Доступ)", ["Perplexity", "GPT-4o", "Gemini"], default=["Perplexity", "GPT-4o", "Gemini"], disabled=True)
 
+                    # БЛОК CRON
                     st.divider()
                     st.subheader("2. Автоматизація (CRON)")
                     
@@ -2561,9 +2573,12 @@ def show_admin_page():
                         freq_opts = ["daily", "weekly", "monthly"]
                         curr_freq = curr_data.get("cron_frequency", "daily")
                         freq_idx = freq_opts.index(curr_freq) if curr_freq in freq_opts else 0
-                        edit_cron_freq = st.selectbox("Частота", freq_opts, index=freq_idx)
+                        
+                        edit_cron_freq = st.selectbox("Частота запуску", freq_opts, index=freq_idx)
 
                     st.markdown("---")
+                    st.caption(f"Project ID: {pid} | Created: {curr_data.get('created_at')}")
+
                     submitted_edit = st.form_submit_button("💾 Зберегти зміни", type="primary")
                     
                     if submitted_edit:
@@ -2583,7 +2598,7 @@ def show_admin_page():
                             st.error(f"Помилка оновлення: {e}")
 
         except Exception as e:
-            st.error(f"Помилка завантаження списку: {e}")
+            st.error(f"Помилка завантаження списку редагування: {e}")
 
 
 def main():
