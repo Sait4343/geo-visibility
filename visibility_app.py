@@ -1241,6 +1241,7 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Відображає детальну аналітику по запиту з KPI картками у стилі Virshi (Green/White).
+    FIX: Безпечна обробка None значень для val_position та інших метрик.
     """
     import pandas as pd
     import streamlit as st
@@ -1361,7 +1362,7 @@ def show_keyword_details(kw_id):
             scan_id = current_scan["id"]
 
             # =========================================================
-            # 👇 НОВИЙ UI: КАРТКИ KPI (Як на макеті)
+            # 👇 ВИПРАВЛЕНИЙ UI: КАРТКИ KPI (Безпечна обробка None)
             # =========================================================
             
             # 1. Завантажуємо згадки
@@ -1370,19 +1371,24 @@ def show_keyword_details(kw_id):
             except:
                 mentions_kpi = []
 
-            # 2. Розрахунок метрик
-            total_market_mentions = sum(item.get("mention_count", 0) for item in mentions_kpi) if mentions_kpi else 0
+            # 2. Розрахунок метрик з БЕЗПЕЧНОЮ обробкою None
+            total_market_mentions = sum(item.get("mention_count", 0) or 0 for item in mentions_kpi) if mentions_kpi else 0
             my_brand_data = next((item for item in mentions_kpi if item.get("is_my_brand") is True), None)
 
             if my_brand_data:
-                val_count = my_brand_data.get("mention_count", 0)
-                val_sentiment = my_brand_data.get("sentiment_score", "Нейтральний")
-                val_position = my_brand_data.get("rank_position", 0)
+                # 🔒 БЕЗПЕЧНА обробка: використовуємо `or 0` для None значень
+                val_count = my_brand_data.get("mention_count") or 0
+                val_sentiment = my_brand_data.get("sentiment_score") or "Нейтральний"
+                
+                # 🔒 КРИТИЧНЕ ВИПРАВЛЕННЯ: rank_position може бути None
+                raw_position = my_brand_data.get("rank_position")
+                val_position = raw_position if raw_position is not None else 0
+                
                 val_sov = (val_count / total_market_mentions * 100) if total_market_mentions > 0 else 0
             else:
                 val_count = 0
                 val_sentiment = "Не згадано"
-                val_position = 0 # Якщо не знайдено
+                val_position = 0
                 val_sov = 0
 
             # Колір для сентименту
@@ -1404,7 +1410,7 @@ def show_keyword_details(kw_id):
                 .virshi-card {{
                     background-color: white;
                     border: 1px solid #E0E0E0;
-                    border-top: 4px solid #00C896; /* Зелений верхній бордюр */
+                    border-top: 4px solid #00C896;
                     border-radius: 8px;
                     padding: 20px 15px;
                     text-align: center;
@@ -1434,7 +1440,6 @@ def show_keyword_details(kw_id):
                     color: {sent_color};
                     font-weight: 600;
                 }}
-                /* Мобільна адаптація */
                 @media (max-width: 768px) {{
                     .virshi-kpi-container {{ grid-template-columns: repeat(2, 1fr); }}
                 }}
@@ -1469,9 +1474,7 @@ def show_keyword_details(kw_id):
             with st.container(border=True):
                 if raw_text:
                     my_brand = st.session_state.get("current_project", {}).get("brand_name", "")
-                    # Підсвітка бренду зеленим жирним
                     highlighted_text = raw_text.replace(my_brand, f"<span style='color:#00C896; font-weight:bold;'>{my_brand}</span>")
-                    # Заміна markdown bold на зелений bold, якщо треба, або просто рендер
                     st.markdown(highlighted_text, unsafe_allow_html=True)
                 else:
                     st.caption("Текст відповіді не збережено.")
@@ -1486,7 +1489,10 @@ def show_keyword_details(kw_id):
             st.markdown("#### 📊 Конкурентний аналіз")
             if mentions_kpi:
                 df_brands = pd.DataFrame(mentions_kpi)
-                df_brands = df_brands.sort_values(by="rank_position", ascending=True)
+                
+                # 🔒 БЕЗПЕЧНЕ сортування з обробкою None
+                df_brands['rank_position_safe'] = df_brands['rank_position'].apply(lambda x: x if x is not None else 999)
+                df_brands = df_brands.sort_values(by="rank_position_safe", ascending=True)
                 
                 cols = ["rank_position", "brand_name", "sentiment_score", "mention_count", "is_my_brand"]
                 avail_cols = [c for c in cols if c in df_brands.columns]
@@ -1501,17 +1507,23 @@ def show_keyword_details(kw_id):
                 }
                 show_df.rename(columns=rename_map, inplace=True)
                 
-                # Додаємо галочку
+                # Замінюємо None на "-" для відображення
+                if "Позиція" in show_df.columns:
+                    show_df["Позиція"] = show_df["Позиція"].apply(lambda x: x if x is not None else "-")
+                
                 if "Це ми?" in show_df.columns:
                     show_df["Це ми?"] = show_df["Це ми?"].apply(lambda x: "✅" if x else "")
+
+                # Видаляємо службову колонку
+                if 'rank_position_safe' in show_df.columns:
+                    show_df = show_df.drop('rank_position_safe', axis=1)
 
                 st.dataframe(
                     show_df, 
                     use_container_width=True, 
                     hide_index=True,
                     column_config={
-                        "Позиція": st.column_config.NumberColumn("Позиція", format="%d"),
-                        "Згадок": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(show_df["Згадок"].max())),
+                        "Згадок": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(show_df["Згадок"].max()) if show_df["Згадок"].max() > 0 else 10),
                     }
                 )
             else:
@@ -1552,6 +1564,7 @@ def show_keyword_details(kw_id):
                     st.caption("Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка джерел: {e}")
+
 
 def show_keywords_page():
     """
