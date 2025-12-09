@@ -542,6 +542,12 @@ def login_page():
 
 
 def onboarding_wizard():
+    """
+    Майстер створення першого проекту (2 етапи).
+    Етап 1: Збір даних та відправка на генерацію.
+    Етап 2: Підтвердження запитів (чекбоксами) та Запуск аналізу (Тільки Gemini).
+    """
+    import requests
     import time
     
     # 🚨 Ініціалізація стейту
@@ -551,32 +557,43 @@ def onboarding_wizard():
     
     st.markdown("## 🚀 Налаштування Проекту")
 
-    with st.container(border=True):
-        # Використовуємо .get для безпеки
-        step = st.session_state.get("onboarding_step", 2) 
+    # Використовуємо .get для безпеки
+    step = st.session_state.get("onboarding_step", 2) 
 
+    with st.container(border=True):
+
+        # ========================================================
         # STEP 2 – дані про бренд (ВВІД)
+        # ========================================================
         if step == 2:
             st.subheader("Крок 1: Введіть дані про ваш бренд")
 
-            brand = st.text_input("Назва бренду", value=st.session_state.get("temp_brand", ""))
-            domain = st.text_input("Домен (офіційний сайт)", value=st.session_state.get("temp_domain", ""))
-            industry = st.text_input("Галузь бренду / ніша", value=st.session_state.get("temp_industry", ""))
+            # 📌 4 ВИХІДНІ ПОЛЯ
+            c1, c2 = st.columns(2)
+            with c1:
+                brand = st.text_input("Назва бренду", placeholder="Monobank", value=st.session_state.get("temp_brand", ""))
+                industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг", value=st.session_state.get("temp_industry", ""))
+            with c2:
+                domain = st.text_input("Домен (офіційний сайт)", placeholder="monobank.ua", value=st.session_state.get("temp_domain", ""))
+                region = st.selectbox("Регіон", ["UA", "US", "EU", "Global"], index=0, key="onboarding_region")
+            
             products = st.text_area(
-                "Продукти / Послуги (перелічіть через кому або у стовпчик)",
+                "Продукти / Послуги (перелічіть через кому або у стовпчик)", 
+                help="На основі цього буде сформовано запити.",
                 value=st.session_state.get("temp_products", "")
             )
 
             if st.button("Згенерувати запити"):
                 if brand and domain and industry and products:
-                    # Зберігаємо дані у тимчасовий стейт
+                    # 1. Зберігаємо дані у тимчасовий стейт
                     st.session_state["temp_brand"] = brand
                     st.session_state["temp_domain"] = domain
                     st.session_state["temp_industry"] = industry
                     st.session_state["temp_products"] = products
-
+                    st.session_state["temp_region"] = region
+                    
                     with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
-                        # ВИКЛИК НОВОЇ ХЕЛПЕР-ФУНКЦІЇ
+                        # ВИКЛИК ЗОВНІШНЬОГО ВЕБХУКА ГЕНЕРАЦІЇ
                         prompts = n8n_generate_prompts(brand, domain, industry, products)
                         
                         if prompts and len(prompts) > 0:
@@ -584,36 +601,47 @@ def onboarding_wizard():
                             st.session_state["onboarding_step"] = 3
                             st.rerun()
                         else:
-                            st.error("AI не повернув результатів. Спробуйте ще раз або перевірте n8n.")
+                            st.error("AI не повернув результатів. Спробуйте змінити опис продуктів.")
                 else:
                     st.warning("Будь ласка, заповніть всі 4 поля.")
 
-        # STEP 3 – вибір 5 запитів (КОНФІРМАЦІЯ ТА ЗАПУСК)
+        # ========================================================
+        # STEP 3 – вибір запитів (КОНФІРМАЦІЯ ЧЕКБОКСАМИ)
+        # ========================================================
         elif step == 3:
-            st.subheader("Крок 2: Оберіть 5 пріоритетних запитів")
-            st.info("Ви можете відредагувати список або обрати лише 5 для першого аналізу.")
-            
-            # Об'єднуємо список назад для редагування в text_area
-            opts_text = "\n".join(st.session_state.get("generated_prompts", []))
-            
-            final_list_text = st.text_area(
-                "Редагування запитів (1 запит = 1 рядок):",
-                value=opts_text,
-                height=200
-            )
+            st.subheader("Крок 2: Оберіть запити для першого аналізу")
+            st.info("Перевірте згенерований список. Відредагуйте або зніміть галочки із запитів, які вам не підходять.")
 
-            # Розбиваємо назад на список
-            raw_selected = [s.strip() for s in final_list_text.split('\n') if s.strip()]
+            # 📌 Новий блок з чекбоксами та нумерацією
+            prompts_list = st.session_state.get("generated_prompts", [])
             
-            st.caption(f"У списку готових до аналізу: {len(raw_selected)} запитів.")
+            st.markdown("---")
+            
+            selected_kws = []
+            
+            if not prompts_list:
+                st.error("Помилка: Список запитів порожній. Поверніться на Крок 1.")
+            else:
+                for i, kw in enumerate(prompts_list):
+                    # Використовуємо value=True, щоб всі були обрані по дефолту
+                    is_selected = st.checkbox(
+                        f"**{i+1}.** {kw}", 
+                        value=True, 
+                        key=f"final_kw_chk_{i}"
+                    )
+                    if is_selected:
+                        selected_kws.append(kw)
+
+            st.markdown("---")
+            st.caption(f"Обрано та готово до аналізу: **{len(selected_kws)}** запитів.")
 
             if st.button("Запустити аналіз"):
-                if len(raw_selected) > 0:
+                if len(selected_kws) > 0:
                     with st.spinner("Створюємо проект та запускаємо аналіз..."):
                         try:
                             user_id = st.session_state["user"].id
-
-                            # 1. Створюємо проект
+                            
+                            # 1. Створення проекту
                             res = (
                                 supabase.table("projects")
                                 .insert(
@@ -621,8 +649,8 @@ def onboarding_wizard():
                                         "user_id": user_id,
                                         "brand_name": st.session_state["temp_brand"],
                                         "domain": st.session_state["temp_domain"],
-                                        "status": "trial",
                                         "region": st.session_state.get("temp_region", "UA"),
+                                        "status": "trial",
                                     }
                                 )
                                 .execute()
@@ -641,39 +669,39 @@ def onboarding_wizard():
                                     "keyword_text": kw,
                                     "is_active": True,
                                     "is_cron_active": False,
-                                } for kw in raw_selected
+                                } for kw in selected_kws
                             ]
                             supabase.table("keywords").insert(kws_data).execute()
                             
-                            # 3. Записуємо офіційний домен як актив
+                            # 3. Записуємо офіційний домен
+                            clean_domain = st.session_state["temp_domain"].replace("https://", "").replace("http://", "").strip().rstrip("/")
                             supabase.table("official_assets").insert(
                                 {
                                     "project_id": proj_id,
-                                    "domain_or_url": st.session_state["temp_domain"].replace("https://", "").replace("http://", "").strip().rstrip("/"),
+                                    "domain_or_url": clean_domain,
                                     "type": "website"
                                 }
                             ).execute()
 
-                            # 4. Запускаємо аналіз через n8n (КОНСТРЕЙНТ: ТІЛЬКИ GEMINI)
+                            # 4. ФІНАЛЬНИЙ ЗАПУСК АНАЛІЗУ (КОНСТРЕЙНТ: ТІЛЬКИ GEMINI)
                             n8n_trigger_analysis(
                                 proj_id, 
-                                raw_selected, 
+                                selected_kws, 
                                 st.session_state["temp_brand"],
-                                models=["Google Gemini"] # 👈 ОБМЕЖЕННЯ ЗАЗНАЧЕНЕ КОРИСТУВАЧЕМ
+                                models=["Google Gemini"] # 👈 ОБМЕЖЕННЯ
                             )
 
                             # 5. Фінал
                             st.session_state["current_project"] = proj_data
                             st.session_state["onboarding_step"] = 2 # Скидаємо стейт
-                            st.success(
-                                "Проект створено! Аналіз запущено у фоновому режимі."
-                            )
+                            st.success("Проект створено! Аналіз запущено у фоновому режимі.")
                             time.sleep(2)
                             st.rerun()
+                            
                         except Exception as e:
                             st.error(f"Системна помилка: {e}")
                 else:
-                    st.error("Будь ласка, додайте запити для аналізу")
+                    st.error("Будь ласка, оберіть хоча б один запит для аналізу.")
 
 # =========================
 # 6. DASHBOARD
