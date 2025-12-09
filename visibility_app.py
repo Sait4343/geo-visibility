@@ -199,27 +199,44 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 
 
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
-    # 👇 ДОДАЙТЕ ЦЕЙ БЛОК 👇
+    """
+    Відправляє запит на n8n для аналізу.
+    Включає: 
+    1. Перевірку статусу (Gatekeeper).
+    2. Мапінг назв моделей.
+    3. Отримання офіційних джерел (Whitelist).
+    """
+    
+    # 1. Мапінг назв (UI -> Technical)
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
-    # ----------------------
+
+    # 2. 🔒 ПЕРЕВІРКА СТАТУСУ (БЛОКУВАННЯ)
+    # Отримуємо поточний проект із сесії
+    current_proj = st.session_state.get("current_project", {})
+    status = current_proj.get("status", "trial")
     
+    # Якщо статус заблокований або термін дії вийшов - зупиняємо
+    if status in ["blocked", "expired"]:
+        st.error(f"⛔ Дія недоступна. Ваш статус: {status.upper()}. Будь ласка, зв'яжіться з адміністратором.")
+        return False
+
     try:
         user_email = st.session_state["user"].email if st.session_state.get("user") else None
         
         if isinstance(keywords, str):
             keywords = [keywords]
 
-        # Якщо моделі не обрані або пусті, беремо Perplexity
+        # Якщо моделі не обрані або пусті, беремо дефолтну
         if not models:
             models = ["Perplexity"]
 
         success_count = 0
 
-        # Отримуємо офіційні джерела
+        # 3. ОТРИМУЄМО ОФІЦІЙНІ ДЖЕРЕЛА (WHITELIST)
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
@@ -230,10 +247,9 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             print(f"Error fetching assets: {e}")
             official_assets = []
 
-        # 🔄 ЦИКЛ по моделях
+        # 4. ЦИКЛ ВІДПРАВКИ (По кожній моделі окремо)
         for ui_model_name in models:
-            # Конвертуємо красиву назву в технічний ID для n8n
-            # Якщо назви немає в словнику, використовуємо як є
+            # Конвертуємо красиву назву в технічний ID
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
             payload = {
@@ -241,22 +257,27 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "keywords": keywords, 
                 "brand_name": brand_name,
                 "user_email": user_email,
-                "provider": tech_model_id, # <--- Відправляємо технічний ID (gpt-4o)
-                "models": [tech_model_id],
-                "official_assets": official_assets
+                "provider": tech_model_id,     # Для Switch в n8n
+                "models": [tech_model_id],     # Для сумісності
+                "official_assets": official_assets # Передаємо Whitelist
             }
             
             try:
-                response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=5)
+                # Відправка на вебхук
+                response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=10)
+                
                 if response.status_code == 200:
                     success_count += 1
+                else:
+                    st.error(f"Помилка n8n ({ui_model_name}): {response.text}")
+                    
             except Exception as inner_e:
                 st.error(f"Не вдалося запустити {ui_model_name}: {inner_e}")
 
         return success_count > 0
             
     except Exception as e:
-        st.error(f"Помилка з'єднання з n8n: {e}")
+        st.error(f"Критична помилка запуску: {e}")
         return False
 
 def n8n_request_recommendations(project, topic: str, brief: str):
@@ -2077,7 +2098,7 @@ def sidebar_menu():
     with st.sidebar:
         # 1. ЛОГОТИП
         st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150) 
-        # st.markdown("## 🚀 VIRSHI") 
+        st.markdown("## AI Visibility by Virshi") 
 
         # Профіль
         user_name = "Користувач"
@@ -2385,7 +2406,7 @@ def show_admin_page():
                     with c1:
                         edit_brand = st.text_input("Назва бренду", value=curr_data.get("brand_name"))
                         # Знаходимо індекс поточного статусу
-                        status_opts = ["trial", "active", "expired"]
+                        status_opts = ["trial", "active", "expired", "blocked"]
                         curr_status = curr_data.get("status", "trial")
                         st_idx = status_opts.index(curr_status) if curr_status in status_opts else 0
                         
