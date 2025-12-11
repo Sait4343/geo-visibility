@@ -1563,42 +1563,65 @@ def show_keyword_details(kw_id):
             st.markdown("<br>", unsafe_allow_html=True)
 
            # =========================================================
-            # 2. ДЖЕРЕЛА (Повний список без фільтрів)
+            # 2. ДЖЕРЕЛА (Безпечний вивід)
             # =========================================================
-           # ... (всередині show_keyword_details)
             st.markdown("#### 🔗 Цитовані джерела")
+            
             try:
-                sources = (
+                # Отримуємо дані з бази
+                sources_resp = (
                     supabase.table("extracted_sources")
                     .select("*")
                     .eq("scan_result_id", scan_id)
                     .execute()
-                    .data
                 )
-                if sources:
-                    df_src = pd.DataFrame(sources)
+                sources_data = sources_resp.data
+
+                if sources_data:
+                    df_src = pd.DataFrame(sources_data)
                     
-                    # Заповнюємо пропуски, якщо є
-                    if 'is_official' not in df_src.columns: df_src['is_official'] = False
+                    # 🔥 FIX: Перевіряємо наявність колонок і створюємо їх, якщо немає
+                    # Це рятує від помилки "['url'] not in index"
+                    if 'url' not in df_src.columns:
+                        df_src['url'] = "-"
+                    if 'domain' not in df_src.columns:
+                        df_src['domain'] = "-"
+                    if 'is_official' not in df_src.columns:
+                        df_src['is_official'] = False
+
+                    # Заповнюємо пусті значення (на всяк випадок)
+                    df_src['url'] = df_src['url'].fillna("#")
+                    df_src['domain'] = df_src['domain'].fillna("-")
+                    df_src['is_official'] = df_src['is_official'].fillna(False)
+
+                    # Формуємо красивий статус
+                    df_src['Тип'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
                     
-                    # Маркуємо
-                    df_src['Тип'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x else "🔗 Зовнішнє")
-                    
-                    # Показуємо ВСЕ
+                    # Вибираємо колонки для відображення
+                    # Тепер це безпечно, бо ми гарантували їх існування вище
+                    display_df = df_src[['url', 'domain', 'Тип']].copy()
+
                     st.dataframe(
-                        df_src[['url', 'domain', 'Тип']], 
+                        display_df, 
                         use_container_width=True, 
                         hide_index=True,
                         column_config={
-                            "url": st.column_config.LinkColumn("Посилання"),
-                            "domain": "Домен",
-                            "Тип": "Статус"
+                            "url": st.column_config.LinkColumn(
+                                "Посилання", 
+                                display_text="Перейти ↗️",
+                                width="medium"
+                            ),
+                            "domain": st.column_config.TextColumn("Домен", width="small"),
+                            "Тип": st.column_config.TextColumn("Статус", width="small")
                         }
                     )
                 else:
-                    st.info("Джерел у цьому звіті не знайдено (спробуйте нове сканування).")
+                    st.info("ℹ️ Джерел не знайдено.")
+                    st.caption("Це може статися, якщо попередній аналіз в n8n завершився з помилкою. Спробуйте запустити сканування заново.")
+                    
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"⚠️ Помилка відображення таблиці джерел: {e}")
+
 
 def show_keywords_page():
     """
