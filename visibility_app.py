@@ -1562,39 +1562,58 @@ def show_keyword_details(kw_id):
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # 2. ДЖЕРЕЛА
-            st.markdown("#### 🔗 Цитовані джерела")
+           # =========================================================
+            # 2. ДЖЕРЕЛА (Повний список без фільтрів)
+            # =========================================================
+            st.markdown("#### 🔗 Цитовані джерела (Всі знайдені)")
+            
             try:
-                sources = (
+                # Запит до бази
+                sources_resp = (
                     supabase.table("extracted_sources")
                     .select("*")
                     .eq("scan_result_id", scan_id)
                     .execute()
-                    .data
                 )
-                if sources:
-                    df_src = pd.DataFrame(sources)
-                    s_cols = ["domain", "url", "is_official"]
-                    s_avail = [c for c in s_cols if c in df_src.columns]
-                    show_src = df_src[s_avail].copy()
-                    
-                    show_src.rename(columns={"domain": "Домен", "url": "Посилання", "is_official": "Офіційне?"}, inplace=True)
-                    
-                    if "Офіційне?" in show_src.columns:
-                        show_src["Офіційне?"] = show_src["Офіційне?"].apply(lambda x: "✅" if x else "")
+                
+                sources_data = sources_resp.data
 
+                if sources_data:
+                    df_src = pd.DataFrame(sources_data)
+                    
+                    # Переконаємося, що потрібні колонки існують
+                    if 'is_official' not in df_src.columns: df_src['is_official'] = False
+                    if 'url' not in df_src.columns: df_src['url'] = ""
+                    if 'domain' not in df_src.columns: df_src['domain'] = "-"
+
+                    # Додаємо візуальний статус
+                    df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x else "🔗 Зовнішнє")
+                    
+                    # Формуємо фінальну таблицю
+                    # Беремо URL, Домен і Статус
+                    display_df = df_src[['url', 'domain', 'Статус']].copy()
+                    
+                    # Відображаємо
                     st.dataframe(
-                        show_src, 
+                        display_df, 
                         use_container_width=True, 
                         hide_index=True,
                         column_config={
-                            "Посилання": st.column_config.LinkColumn("Посилання")
+                            "url": st.column_config.LinkColumn(
+                                "Посилання (Клікніть)", 
+                                display_text="Відкрити сторінку ↗️", # Або можна прибрати display_text, щоб бачити повний URL
+                                width="medium"
+                            ),
+                            "domain": st.column_config.TextColumn("Домен", width="small"),
+                            "Статус": st.column_config.TextColumn("Тип", width="small")
                         }
                     )
                 else:
-                    st.caption("Джерел не знайдено.")
+                    st.warning("⚠️ У цьому аналізі джерел не знайдено.")
+                    st.caption("Примітка: Якщо ви щойно виправили помилку в n8n, спробуйте запустити сканування заново.")
+                    
             except Exception as e:
-                st.error(f"Помилка джерел: {e}")
+                st.error(f"Помилка завантаження джерел: {e}")
 
 
 def show_keywords_page():
