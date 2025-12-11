@@ -546,7 +546,7 @@ def login_page():
 def onboarding_wizard():
     """
     Майстер створення першого проекту (2 етапи).
-    Оновлено: Дизайн карток для запитів + Виправлення помилки NoneType.
+    Оновлено: Стиль карток, редагування, виправлення помилки втрати сесії.
     """
     import requests
     import time
@@ -556,11 +556,18 @@ def onboarding_wizard():
         st.session_state["onboarding_stage"] = 2
         st.session_state["generated_prompts"] = []
     
-    # CSS для вертикального центрування елементів у картках запитів
+    # CSS для стилізації карток та вирівнювання
     st.markdown("""
     <style>
         div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"] {
             align-items: center;
+        }
+        .prompt-card {
+            background-color: white;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #E0E0E0;
+            margin-bottom: 10px;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -620,9 +627,9 @@ def onboarding_wizard():
         elif step == 3:
             # 🛡️ SAFETY CHECK: Перевіряємо, чи не зникли дані сесії
             if not st.session_state.get("temp_brand") or not st.session_state.get("temp_domain"):
-                st.warning("⚠️ Дані сесії застаріли. Будь ласка, введіть дані бренду ще раз.")
-                st.session_state["onboarding_step"] = 2
-                if st.button("Оновити сторінку"):
+                st.warning("⚠️ Дані сесії застаріли. Будь ласка, поверніться на крок назад.")
+                if st.button("⬅ Назад до вводу даних"):
+                    st.session_state["onboarding_step"] = 2
                     st.rerun()
                 return
 
@@ -679,7 +686,6 @@ def onboarding_wizard():
                         
                         with c_btn:
                             # Кнопка Редагувати (Олівець)
-                            # Використовуємо container_width, щоб кнопка була гарною
                             if st.button("✏️", key=f"edit_kw_{i}", help="Редагувати текст"):
                                 st.session_state[edit_key] = True
                                 st.rerun()
