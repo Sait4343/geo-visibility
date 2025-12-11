@@ -2440,6 +2440,126 @@ def sidebar_menu():
 
     return selected
 
+def show_auth_page():
+    """
+    Renders the centered authentication card (Login / Register) with Virshi styling.
+    """
+    # Apply custom CSS for the auth page
+    st.markdown("""
+    <style>
+        /* General Page Background */
+        .stApp {
+            background-color: #F4F7F6;
+        }
+        
+        /* Center the form container */
+        [data-testid="stForm"] {
+            background-color: #ffffff;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            border: 1px solid #EAEAEA;
+        }
+
+        /* Input fields styling */
+        .stTextInput > div > div > input {
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+            padding: 10px;
+        }
+
+        /* Primary Button (Virshi Green) */
+        .stButton > button {
+            width: 100%;
+            background-color: #00C896 !important;
+            color: white !important;
+            border: none;
+            border-radius: 8px;
+            padding: 12px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        .stButton > button:hover {
+            background-color: #00a87e !important;
+        }
+        
+        /* Tabs Styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 20px;
+            justify-content: center;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 50px;
+            white-space: pre-wrap;
+            border-radius: 4px 4px 0 0;
+            gap: 1px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Centering Layout using Columns
+    # [Empty Left] [Center Card] [Empty Right]
+    col_l, col_center, col_r = st.columns([1, 1.5, 1])
+
+    with col_center:
+        # Logo Section
+        st.markdown(
+            '<div style="text-align: center; margin-bottom: 20px;">'
+            '<img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="180">'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        
+        st.markdown("<h3 style='text-align: center; color: #333; margin-bottom: 5px;'>Welcome to Virshi</h3>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #666; margin-bottom: 30px;'>Sign in to manage your AI visibility</p>", unsafe_allow_html=True)
+
+        # Tabs for Login / Register
+        tab_login, tab_register = st.tabs(["🔑 Sign In", "📝 Sign Up"])
+
+        # --- LOGIN TAB ---
+        with tab_login:
+            with st.form("login_form"):
+                email = st.text_input("Email", placeholder="name@company.com")
+                password = st.text_input("Password", type="password", placeholder="••••••••")
+                
+                st.write("") # Spacer
+                
+                submit = st.form_submit_button("Sign In", use_container_width=True)
+                
+                if submit:
+                    if not email or not password:
+                        st.warning("Please fill in all fields.")
+                    else:
+                        login_user(email, password)
+
+        # --- REGISTER TAB ---
+        with tab_register:
+            with st.form("register_form"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    first_name = st.text_input("First Name", placeholder="Ivan")
+                with c2:
+                    last_name = st.text_input("Last Name", placeholder="Petrenko")
+                
+                new_email = st.text_input("Email", placeholder="name@company.com")
+                new_password = st.text_input("Password", type="password", placeholder="••••••••", help="Min 6 chars")
+                
+                st.write("") # Spacer
+                
+                submit_reg = st.form_submit_button("Create Account", use_container_width=True)
+                
+                if submit_reg:
+                    if not new_email or not new_password or not first_name:
+                        st.warning("Please fill in required fields.")
+                    elif len(new_password) < 6:
+                        st.warning("Password must be at least 6 characters.")
+                    else:
+                        register_user(new_email, new_password, first_name, last_name)
+
+
+
 def show_admin_page():
     """
     Повноцінна CRM для Адміністратора.
@@ -2711,12 +2831,12 @@ def show_admin_page():
 
 
 def main():
-    # 1. Перевірка сесії
+    # 1. Session Check
     check_session()
 
-    # 2. Якщо не залогінений -> Логін
+    # 2. If not logged in -> Show Auth Page
     if not st.session_state.get("user"):
-        login_page()
+        show_auth_page()  # <--- CHANGED THIS LINE
         return
 
     # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ
