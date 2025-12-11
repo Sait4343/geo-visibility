@@ -1562,13 +1562,12 @@ def show_keyword_details(kw_id):
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-           # =========================================================
-            # 2. ДЖЕРЕЛА (Оптимізована таблиця)
+          # =========================================================
+            # 2. ДЖЕРЕЛА (Повні посилання)
             # =========================================================
             st.markdown("#### 🔗 Цитовані джерела")
             
             try:
-                # Отримуємо дані з бази
                 sources_resp = (
                     supabase.table("extracted_sources")
                     .select("*")
@@ -1580,65 +1579,45 @@ def show_keyword_details(kw_id):
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
                     
-                    # 🛡️ ЗАХИСТ: Перевіряємо наявність колонок і створюємо дефолтні, якщо їх немає
-                    if 'url' not in df_src.columns: df_src['url'] = "#"
+                    # Створюємо колонки, якщо їх немає
+                    if 'url' not in df_src.columns: df_src['url'] = None
                     if 'domain' not in df_src.columns: df_src['domain'] = "-"
                     if 'is_official' not in df_src.columns: df_src['is_official'] = False
-                    
-                    # Перевірка наявності mention_count (якщо немає - ставимо 1)
-                    if 'mention_count' not in df_src.columns:
-                        df_src['mention_count'] = 1
-                    
-                    # Заповнюємо Nan/Null
-                    df_src['mention_count'] = df_src['mention_count'].fillna(1).astype(int)
-                    df_src['url'] = df_src['url'].fillna("#")
+                    if 'mention_count' not in df_src.columns: df_src['mention_count'] = 1
 
-                    # Формуємо статус (Tag)
+                    # Очищення даних
+                    # Якщо URL пустий -> ставимо "#", щоб таблиця не ламалася, але це означає "немає даних"
+                    df_src['url'] = df_src['url'].fillna("#")
+                    df_src['mention_count'] = df_src['mention_count'].fillna(1).astype(int)
+
+                    # Статус
                     df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
                     
-                    # Сортуємо: спочатку офіційні, потім за кількістю згадок
-                    df_src = df_src.sort_values(by=['is_official', 'mention_count'], ascending=[False, False])
+                    # Сортування
+                    df_src = df_src.sort_values(by=['mention_count'], ascending=False)
 
-                    # Формуємо фінальну таблицю для відображення
-                    # Нам потрібні: URL (для лінка), Статус, Згадок
-                    display_df = df_src[['url', 'Статус', 'mention_count']].copy()
-                    
-                    # Перейменовуємо для красивого заголовка
-                    display_df.rename(columns={
-                        'url': 'Джерело',
-                        'mention_count': 'Згадок'
-                    }, inplace=True)
-
+                    # Відображення
                     st.dataframe(
-                        display_df, 
+                        df_src[['url', 'Статус', 'mention_count']], 
                         use_container_width=True, 
                         hide_index=True,
                         column_config={
-                            "Джерело": st.column_config.LinkColumn(
-                                "Джерело",
-                                help="Клікніть, щоб відкрити сторінку",
-                                # 🔥 REGEX: Показуємо тільки домен (без https:// та шляху)
-                                display_text=r"https?://(?:www\.)?([^/]+).*",
-                                width="large"
+                            "url": st.column_config.LinkColumn(
+                                "Посилання (URL)",
+                                width="large",
+                                # Ми прибрали display_text, тепер буде видно повний лінк
+                                validate="^https?://", # Підсвітить червоним, якщо лінк битий
                             ),
-                            "Статус": st.column_config.TextColumn(
-                                "Статус", 
-                                width="small"
-                            ),
-                            "Згадок": st.column_config.NumberColumn(
-                                "Згадок",
-                                help="Кількість разів, скільки це джерело згадується в тексті",
-                                format="%d",
-                                width="small"
-                            )
+                            "Статус": st.column_config.TextColumn("Тип", width="small"),
+                            "mention_count": st.column_config.NumberColumn("Згадок", format="%d", width="small")
                         }
                     )
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
-                    st.caption("Спробуйте запустити нове сканування, щоб оновити дані.")
+                    st.caption("Спробуйте запустити нове сканування.")
                     
             except Exception as e:
-                st.error(f"⚠️ Помилка відображення таблиці джерел: {e}")
+                st.error(f"⚠️ Помилка таблиці джерел: {e}")
 
 
 def show_keywords_page():
