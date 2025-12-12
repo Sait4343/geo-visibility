@@ -2104,9 +2104,7 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    Оновлено:
-    - Додано діаграми (Donut Charts) на вкладки 'Ренкінг доменів' та 'Посилання'.
-    - Вкладка 'Топ Сторінок' перейменована на 'Посилання'.
+    Виправлено: Відображення повних URL у таблиці (прибрано некоректний display_text).
     """
     import pandas as pd
     import plotly.express as px
@@ -2136,7 +2134,7 @@ def show_sources_page():
 
     st.title("📡 Джерела та Репутація")
     
-    # === 1. ЗАВАНТАЖЕННЯ ДАНИХ ===
+    # === 1. ЗАВАНТАЖЕННЯ ТА ОБ'ЄДНАННЯ ДАНИХ ===
     try:
         # A. Whitelist
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
@@ -2164,15 +2162,13 @@ def show_sources_page():
         else:
             # E. MERGE
             df_scans['keyword_text'] = df_scans['keyword_id'].map(kw_map)
-            # При merge 'id' стає 'id_x' (джерело) та 'id_y' (скан)
             df_full = pd.merge(df_sources, df_scans, left_on='scan_result_id', right_on='id', how='left')
             
-            # Повертаємо колонку 'id'
             if 'id_x' in df_full.columns:
                 df_full.rename(columns={'id_x': 'id'}, inplace=True)
-
+            
             # Чистка
-            if 'domain' not in df_full.columns: df_full['domain'] = None
+            if 'domain' not in df_full.columns: df_full['domain'] = "Unknown"
             if 'url' not in df_full.columns: df_full['url'] = None
             if 'is_official' not in df_full.columns: df_full['is_official'] = False
             df_full['is_official'] = df_full['is_official'].fillna(False)
@@ -2188,6 +2184,7 @@ def show_sources_page():
         c_llm_label, c_llm_opts = st.columns([1, 4])
         with c_llm_label:
             st.caption("Оберіть моделі:")
+        
         with c_llm_opts:
             cols = st.columns(len(ALL_MODELS_KEYS))
             selected_models = []
@@ -2245,7 +2242,7 @@ def show_sources_page():
                 st.plotly_chart(fig_official, use_container_width=True)
         
         with c_stat:
-            st.markdown("**Статистика:**")
+            st.markdown("**Статистика (за фільтром):**")
             total_links = stats_tab1['Кількість'].sum()
             off_links = df_filtered[df_filtered['is_official']==True].shape[0]
             st.metric("Всього знайдено посилань", total_links)
@@ -2315,7 +2312,7 @@ def show_sources_page():
                                 st.rerun()
 
     # -------------------------------------------------------
-    # TAB 2: РЕНКІНГ ДОМЕНІВ (Діаграма + Таблиця)
+    # TAB 2: РЕНКІНГ ДОМЕНІВ
     # -------------------------------------------------------
     with tab2:
         st.markdown(f"##### 🏆 Топ Доменів")
@@ -2332,9 +2329,7 @@ def show_sources_page():
             def check_off(d): return any(w in str(d) for w in whitelist)
             domain_stats['Type'] = domain_stats['domain'].apply(lambda x: "✅ Офіційне" if check_off(x) else "🔗 Зовнішнє")
             
-            # --- ВІЗУАЛІЗАЦІЯ (Колонки: Графік | Таблиця) ---
             col_chart, col_table = st.columns([1, 1.5])
-            
             with col_chart:
                 st.markdown("**Топ-10 Доменів:**")
                 top_10_dom = domain_stats.head(10)
@@ -2365,12 +2360,13 @@ def show_sources_page():
             st.info("Доменів не знайдено.")
 
     # -------------------------------------------------------
-    # TAB 3: ПОСИЛАННЯ (Діаграма + Таблиця)
+    # TAB 3: ПОСИЛАННЯ (Повні URL + Графік)
     # -------------------------------------------------------
     with tab3:
         st.markdown("##### 🔗 Топ Конкретних Посилань")
         
         if not df_filtered.empty and df_filtered['url'].notna().any():
+            # Фільтруємо пусті URL
             df_urls = df_filtered[df_filtered['url'].notna() & (df_filtered['url'] != "")].copy()
             
             if not df_urls.empty:
@@ -2381,10 +2377,9 @@ def show_sources_page():
                     Mentions=('id', 'count')
                 ).reset_index().sort_values('Mentions', ascending=False)
                 
-                # Скорочений URL для легенди графіка
+                # Додаємо скорочений URL для графіка (щоб легенда була читабельною)
                 url_stats['ShortURL'] = url_stats['url'].apply(lambda x: x[:40] + "..." if len(x) > 40 else x)
 
-                # --- ВІЗУАЛІЗАЦІЯ ---
                 col_chart_url, col_table_url = st.columns([1, 1.5])
                 
                 with col_chart_url:
@@ -2402,14 +2397,16 @@ def show_sources_page():
                         st.plotly_chart(fig_urls, use_container_width=True)
 
                 with col_table_url:
+                    st.markdown("**Детальний список:**")
                     st.dataframe(
                         url_stats.head(100),
                         use_container_width=True,
                         column_config={
                             "url": st.column_config.LinkColumn(
                                 "Повне Посилання",
-                                display_text=r"https?://.*", 
-                                width="large"
+                                width="large",
+                                # ПРИБРАНО display_text -> тепер буде видно повний URL
+                                validate="^https?://"
                             ),
                             "Mentions": st.column_config.NumberColumn("Цитувань", format="%d"),
                             "ShortURL": None
