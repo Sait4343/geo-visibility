@@ -2104,7 +2104,8 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    Виправлено: Таблиця посилань (Tab 3) тепер показує повний URL без скорочень.
+    Виправлено: 
+    - Таблиця посилань (Tab 3) тепер показує реальний повний URL (прибрано помилковий regex).
     """
     import pandas as pd
     import plotly.express as px
@@ -2134,7 +2135,7 @@ def show_sources_page():
 
     st.title("📡 Джерела та Репутація")
     
-    # === 1. ЗАВАНТАЖЕННЯ ДАНИХ ===
+    # === 1. ЗАВАНТАЖЕННЯ ТА ОБ'ЄДНАННЯ ДАНИХ ===
     try:
         # A. Whitelist
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
@@ -2184,6 +2185,7 @@ def show_sources_page():
         c_llm_label, c_llm_opts = st.columns([1, 4])
         with c_llm_label:
             st.caption("Оберіть моделі:")
+        
         with c_llm_opts:
             cols = st.columns(len(ALL_MODELS_KEYS))
             selected_models = []
@@ -2361,12 +2363,13 @@ def show_sources_page():
             st.info("Доменів не знайдено.")
 
     # -------------------------------------------------------
-    # TAB 3: ПОСИЛАННЯ (ПОВНІ URL)
+    # TAB 3: ПОСИЛАННЯ (ПОВНІ URL + Графік)
     # -------------------------------------------------------
     with tab3:
         st.markdown("##### 🔗 Топ Конкретних Посилань")
         
         if not df_filtered.empty and df_filtered['url'].notna().any():
+            # Фільтруємо пусті URL
             df_urls = df_filtered[df_filtered['url'].notna() & (df_filtered['url'] != "")].copy()
             
             if not df_urls.empty:
@@ -2377,7 +2380,7 @@ def show_sources_page():
                     Mentions=('id', 'count')
                 ).reset_index().sort_values('Mentions', ascending=False)
                 
-                # Для графіка
+                # Для графіка робимо короткий підпис
                 url_stats['ShortURL'] = url_stats['url'].apply(lambda x: x[:40] + "..." if len(x) > 40 else x)
 
                 col_chart_url, col_table_url = st.columns([1, 1.5])
@@ -2405,8 +2408,8 @@ def show_sources_page():
                             "url": st.column_config.LinkColumn(
                                 "Повне Посилання",
                                 width="large",
-                                # 🔥 ОСЬ ТУТ Я ВИПРАВИВ: Тепер показує ВСЕ посилання
-                                display_text=r"(https?://.*)", 
+                                # 🔥 ПРИБРАНО display_text! 
+                                # Тепер відображається сам URL повністю.
                                 validate="^https?://"
                             ),
                             "Mentions": st.column_config.NumberColumn("Цитувань", format="%d"),
@@ -2418,7 +2421,6 @@ def show_sources_page():
                 st.info("URL-адреси відсутні.")
         else:
             st.info("Немає даних URL.")
-
 
 def sidebar_menu():
     from streamlit_option_menu import option_menu
