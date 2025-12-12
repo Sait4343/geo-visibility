@@ -774,7 +774,7 @@ def onboarding_wizard():
 def show_competitors_page():
     """
     Сторінка глибокого конкурентного аналізу.
-    Версія: Вкладки + Спрощені графіки (Bar Charts).
+    Оновлено: Репутація текстом, фільтрація таблиці.
     """
     import pandas as pd
     import plotly.express as px
@@ -835,7 +835,7 @@ def show_competitors_page():
 
         df_mentions = pd.DataFrame(mentions_resp.data)
 
-        # D. Master Data
+        # D. Master Data (Об'єднуємо все в одну таблицю)
         df_full = pd.merge(df_mentions, df_scans, left_on='scan_result_id', right_on='id', how='left')
 
     except Exception as e:
@@ -843,18 +843,19 @@ def show_competitors_page():
         return
 
     # --- 2. ФІЛЬТРИ ---
-    with st.expander("⚙️ Фільтри аналізу", expanded=False):
+    # Виносимо фільтри на видноту
+    with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
             all_models = list(MODEL_MAPPING.keys())
-            sel_models = st.multiselect("Фільтр по ЛЛМ:", all_models, default=all_models)
+            sel_models = st.multiselect("🤖 Фільтр по LLM:", all_models, default=all_models, help="Оберіть, чиї відповіді враховувати в таблиці")
             sel_tech_models = [MODEL_MAPPING[m] for m in sel_models]
 
         with c2:
             all_kws = df_full['keyword_text'].dropna().unique().tolist()
-            sel_kws = st.multiselect("Фільтр по Запитах:", all_kws, default=all_kws)
+            sel_kws = st.multiselect("🔎 Фільтр по Запитах:", all_kws, default=all_kws)
 
-    # Застосування фільтрів
+    # Застосування фільтрів до Master Data
     if sel_tech_models:
         mask_model = df_full['provider'].apply(lambda x: any(t in str(x) for t in sel_tech_models))
     else:
@@ -882,24 +883,34 @@ def show_competitors_page():
     stats = df_filtered.groupby('brand_name').agg(
         Mentions=('id_x', 'count'),
         Avg_Rank=('rank_position', 'mean'),
-        Avg_Sentiment=('sent_score_num', 'mean'),
+        Avg_Sentiment=('sent_score_num', 'mean'), # Середнє число (0-100)
         Is_My_Brand=('is_my_brand', 'max')
     ).reset_index()
 
-    # --- 4. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ---
-    st.write("") # Spacer
+    # --- 4. КОНВЕРТАЦІЯ РЕПУТАЦІЇ В ТЕКСТ ---
+    def score_to_text(score):
+        if score >= 60: return "🟢 Позитивна"
+        if score <= 40: return "🔴 Негативна"
+        return "⚪ Нейтральна"
+
+    stats['Reputation_Text'] = stats['Avg_Sentiment'].apply(score_to_text)
+
+    # --- 5. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ---
+    st.write("") 
     tab_list, tab_sov, tab_rep = st.tabs(["📋 Детальний рейтинг", "📊 Share of Voice", "⭐ Репутація"])
 
     # === TAB 1: ДЕТАЛЬНИЙ РЕЙТИНГ (ТАБЛИЦЯ) ===
     with tab_list:
         st.markdown("##### 📋 Зведена таблиця показників")
+        st.caption("Таблиця оновлюється відповідно до обраних фільтрів зверху.")
         
         # Підготовка таблиці
         display_df = stats.copy()
         display_df = display_df.sort_values('Mentions', ascending=False)
         
-        # Красиве відображення
-        display_df_show = display_df[['brand_name', 'Mentions', 'Avg_Sentiment', 'Avg_Rank', 'Is_My_Brand']].copy()
+        # Формування фінального вигляду
+        # Використовуємо нову колонку Reputation_Text
+        display_df_show = display_df[['brand_name', 'Mentions', 'Reputation_Text', 'Avg_Rank', 'Is_My_Brand']].copy()
         display_df_show.columns = ['Бренд', 'Згадок', 'Репутація', 'Сер. Позиція', 'Це ми?']
         
         display_df_show['Сер. Позиція'] = display_df_show['Сер. Позиція'].apply(lambda x: f"#{x:.1f}")
@@ -909,20 +920,26 @@ def show_competitors_page():
             display_df_show,
             use_container_width=True,
             column_config={
-                "Згадок": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(stats['Mentions'].max())),
-                "Репутація": st.column_config.NumberColumn("Репутація", format="%d / 100"),
+                "Згадок": st.column_config.ProgressColumn(
+                    "Згадок", 
+                    format="%d", 
+                    min_value=0, 
+                    max_value=int(stats['Mentions'].max())
+                ),
+                "Репутація": st.column_config.TextColumn(
+                    "Репутація",
+                    width="medium"
+                ),
                 "Це ми?": st.column_config.CheckboxColumn("Наш бренд?", disabled=True)
             },
             hide_index=True
         )
 
-    # === TAB 2: SHARE OF VOICE (КІЛЬКІСТЬ ЗГАДОК) ===
+    # === TAB 2: SHARE OF VOICE ===
     with tab_sov:
         st.markdown("##### 📊 Хто найгучніший? (Кількість згадок)")
-        st.caption("Показує частку ринку у відповідях ШІ. Чим довша смужка, тим частіше бренд рекомендують.")
         
-        # Сортування: Лідер зверху
-        sov_data = stats.sort_values('Mentions', ascending=True) # Ascending для горизонтального бару (лідер буде зверху)
+        sov_data = stats.sort_values('Mentions', ascending=True)
         
         fig_sov = px.bar(
             sov_data,
@@ -931,7 +948,7 @@ def show_competitors_page():
             orientation='h',
             text="Mentions",
             color="Is_My_Brand",
-            color_discrete_map={True: '#00C896', False: '#E0E0E0'}, # Зелений для нас
+            color_discrete_map={True: '#00C896', False: '#E0E0E0'},
             height=500
         )
         fig_sov.update_layout(
@@ -943,23 +960,20 @@ def show_competitors_page():
         )
         st.plotly_chart(fig_sov, use_container_width=True)
 
-    # === TAB 3: РЕПУТАЦІЯ (ТОНАЛЬНІСТЬ) - НОВИЙ ГРАФІК ===
+    # === TAB 3: РЕПУТАЦІЯ (ТОНАЛЬНІСТЬ) ===
     with tab_rep:
         st.markdown("##### ⭐ Хто найякісніший? (Середня тональність)")
-        st.caption("Рейтинг брендів за якістю відгуків ШІ (0 - Негатив, 100 - Позитив).")
         
-        # Сортування: Найкращі зверху
         rep_data = stats.sort_values('Avg_Sentiment', ascending=True)
         
-        # Стовпчикова діаграма
         fig_rep = px.bar(
             rep_data,
             x="Avg_Sentiment",
             y="brand_name",
             orientation='h',
-            text=rep_data['Avg_Sentiment'].apply(lambda x: f"{x:.0f}"), # Форматуємо текст на барі
+            text=rep_data['Reputation_Text'], # Показуємо текст на графіку теж
             color="Is_My_Brand",
-            color_discrete_map={True: '#00C896', False: '#D1D1D6'}, # Зелений для нас, сірий для інших
+            color_discrete_map={True: '#00C896', False: '#D1D1D6'},
             height=500
         )
         
@@ -971,7 +985,6 @@ def show_competitors_page():
             margin=dict(l=0, r=0, t=30, b=0)
         )
         
-        # Додаємо лінію "Нейтральності"
         fig_rep.add_vline(x=50, line_width=1, line_dash="dash", line_color="gray", annotation_text="Нейтрально")
         
         st.plotly_chart(fig_rep, use_container_width=True)
