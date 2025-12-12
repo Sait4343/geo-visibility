@@ -1426,13 +1426,13 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Відображає детальну аналітику по запиту.
-    Виправлено: Відображення посилань (LinkColumn) та додано графік джерел.
+    Виправлено: StreamlitDuplicateElementId (додано keys) та відображення URL.
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
     
-    # --- 0. ПІДКЛЮЧЕННЯ ---
+    # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
         if 'supabase' in st.session_state:
             supabase = st.session_state['supabase']
@@ -1448,7 +1448,7 @@ def show_keyword_details(kw_id):
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # --- 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ ---
+    # 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ
     try:
         kw_resp = supabase.table("keywords").select("*").eq("id", kw_id).execute()
         if not kw_resp.data:
@@ -1465,7 +1465,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка БД: {e}")
         return
 
-    # --- 2. HEADER ---
+    # 2. HEADER
     col_back, col_title = st.columns([1, 10])
     with col_back:
         if st.button("⬅", key="back_main", help="Назад до списку"):
@@ -1475,7 +1475,7 @@ def show_keyword_details(kw_id):
     with col_title:
         st.markdown(f"<h2 style='margin-top: -10px;'>🔍 {keyword_text}</h2>", unsafe_allow_html=True)
 
-    # --- 3. БЛОК УПРАВЛІННЯ ---
+    # 3. БЛОК УПРАВЛІННЯ
     with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
@@ -1495,7 +1495,7 @@ def show_keyword_details(kw_id):
                     proj = st.session_state.get("current_project", {})
                     brand_name = proj.get("brand_name", "MyBrand")
                     with st.spinner(f"Запускаємо {', '.join(selected_models_ui)}..."):
-                        # Припускаємо, що n8n_trigger_analysis доступна
+                        # Припускаємо, що n8n_trigger_analysis доступна глобально
                         success = n8n_trigger_analysis(project_id, [new_text], brand_name, models=selected_models_ui)
                         if success:
                             st.success("Задачу відправлено! Оновіть сторінку за хвилину.")
@@ -1504,7 +1504,7 @@ def show_keyword_details(kw_id):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- 4. ЗАВАНТАЖЕННЯ ІСТОРІЇ ---
+    # 4. ЗАВАНТАЖЕННЯ ІСТОРІЇ
     try:
         scans_data = (
             supabase.table("scan_results")
@@ -1522,7 +1522,7 @@ def show_keyword_details(kw_id):
         st.info("📭 Для цього запиту ще немає результатів.")
         return
 
-    # --- 5. ВКЛАДКИ ПО МОДЕЛЯХ ---
+    # 5. ВКЛАДКИ ПО МОДЕЛЯХ
     tabs = st.tabs(list(MODEL_MAPPING.keys()))
 
     for tab, ui_model_name in zip(tabs, MODEL_MAPPING.keys()):
@@ -1547,9 +1547,7 @@ def show_keyword_details(kw_id):
             current_scan = history_options[selected_time]
             scan_id = current_scan["id"]
 
-            # =========================================================
             # KPI CARDS
-            # =========================================================
             try:
                 mentions_kpi = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
             except:
@@ -1591,9 +1589,7 @@ def show_keyword_details(kw_id):
             </div>
             """, unsafe_allow_html=True)
 
-            # =========================================================
             # ВІДПОВІДЬ ШІ
-            # =========================================================
             raw_text = current_scan.get("raw_response", "")
             st.markdown("#### 📝 Відповідь ЛЛМ")
             with st.container(border=True):
@@ -1606,9 +1602,7 @@ def show_keyword_details(kw_id):
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # =========================================================
             # 1. БРЕНДИ (Діаграма)
-            # =========================================================
             st.markdown("#### 📊 Конкурентний аналіз (Share of Voice)")
             if mentions_kpi:
                 df_brands = pd.DataFrame(mentions_kpi)
@@ -1625,7 +1619,9 @@ def show_keyword_details(kw_id):
                 fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=300)
 
                 c_chart, c_table = st.columns([1.5, 1])
-                with c_chart: st.plotly_chart(fig_brands, use_container_width=True)
+                with c_chart: 
+                    # 🔥 FIX: Додано унікальний ключ для графіка
+                    st.plotly_chart(fig_brands, use_container_width=True, key=f"chart_brands_{scan_id}")
                 with c_table:
                     st.markdown("**Топ лідерів:**")
                     st.dataframe(
@@ -1643,9 +1639,7 @@ def show_keyword_details(kw_id):
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # =========================================================
-            # 2. ДЖЕРЕЛА (Діаграма + Чиста Таблиця)
-            # =========================================================
+            # 2. ДЖЕРЕЛА (Діаграма + Таблиця)
             st.markdown("#### 🔗 Цитовані джерела")
             
             try:
@@ -1655,22 +1649,21 @@ def show_keyword_details(kw_id):
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
                     
-                    # 1. Заповнення відсутніх колонок (безпека)
+                    # Перевірка та заповнення колонок
                     if 'url' not in df_src.columns: df_src['url'] = None
                     if 'domain' not in df_src.columns: df_src['domain'] = "Unknown"
                     if 'is_official' not in df_src.columns: df_src['is_official'] = False
                     if 'mention_count' not in df_src.columns: df_src['mention_count'] = 1
 
-                    # 2. Жорстка фільтрація: видаляємо все без URL
+                    # Фільтрація сміття
                     df_src = df_src.dropna(subset=['url']) 
                     df_src = df_src[df_src['url'].astype(str).str.strip() != ""]
-                    # Видаляємо тестові записи
                     df_src = df_src[~df_src['url'].astype(str).str.contains("відсутнє", na=False)]
 
                     if df_src.empty:
                         st.info("ℹ️ Джерел не знайдено (або вони були порожніми).")
                     else:
-                        # 3. Нормалізація URL (авто-додавання https)
+                        # Нормалізація URL
                         def normalize_url(u):
                             u = str(u).strip()
                             if not u.startswith(('http://', 'https://')):
@@ -1678,13 +1671,10 @@ def show_keyword_details(kw_id):
                             return u
                         
                         df_src['url'] = df_src['url'].apply(normalize_url)
-
-                        # 4. Оформлення
                         df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
-                        df_src['mention_count'] = df_src['mention_count'].fillna(1).astype(int)
                         df_src = df_src.sort_values(by=['mention_count'], ascending=False)
 
-                        # --- ГРАФІК (Бублик розподілу по доменах) ---
+                        # ГРАФІК (DONUT)
                         col_chart_src, col_table_src = st.columns([1, 1.5])
                         
                         with col_chart_src:
@@ -1692,17 +1682,18 @@ def show_keyword_details(kw_id):
                             domain_counts.columns = ['domain', 'count']
                             
                             fig_src = px.pie(
-                                domain_counts.head(10), 
+                                domain_counts.head(10),
                                 values='count', 
                                 names='domain', 
                                 hole=0.6,
                                 color_discrete_sequence=px.colors.qualitative.Pastel
                             )
                             fig_src.update_traces(textposition='inside', textinfo='percent')
-                            fig_src.update_layout(showlegend=False, margin=dict(t=20, b=0, l=0, r=0), height=250)
-                            st.plotly_chart(fig_src, use_container_width=True)
+                            fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
+                            # 🔥 FIX: Додано унікальний ключ для графіка
+                            st.plotly_chart(fig_src, use_container_width=True, key=f"chart_sources_{scan_id}")
 
-                        # --- ТАБЛИЦЯ ---
+                        # ТАБЛИЦЯ
                         with col_table_src:
                             st.dataframe(
                                 df_src[['url', 'Статус', 'mention_count']], 
@@ -1712,8 +1703,8 @@ def show_keyword_details(kw_id):
                                     "url": st.column_config.LinkColumn(
                                         "Посилання (URL)",
                                         width="large",
-                                        # display_text прибираємо, щоб показувало повний лінк
-                                        validate="^https?://", # Перевіряє, що лінк правильний
+                                        display_text=r"(https?://.*)", 
+                                        validate="^https?://"
                                     ),
                                     "Статус": st.column_config.TextColumn("Тип", width="small"),
                                     "mention_count": st.column_config.NumberColumn("Згадок", format="%d", width="small")
@@ -1721,7 +1712,6 @@ def show_keyword_details(kw_id):
                             )
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
-                    st.caption("Спробуйте запустити нове сканування.")
                     
             except Exception as e:
                 st.error(f"⚠️ Помилка таблиці джерел: {e}")
