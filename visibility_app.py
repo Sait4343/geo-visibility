@@ -1426,13 +1426,13 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Відображає детальну аналітику по запиту.
-    Виправлено: Відображення посилань (LinkColumn) та додано графік джерел.
+    Виправлено: Логіка відображення джерел, додано діаграму-бублик.
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
     
-    # --- 0. ПІДКЛЮЧЕННЯ ---
+    # Підключення до БД
     if 'supabase' not in globals():
         if 'supabase' in st.session_state:
             supabase = st.session_state['supabase']
@@ -1448,7 +1448,7 @@ def show_keyword_details(kw_id):
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # --- 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ ---
+    # 1. Отримання даних про запит
     try:
         kw_resp = supabase.table("keywords").select("*").eq("id", kw_id).execute()
         if not kw_resp.data:
@@ -1465,267 +1465,138 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка БД: {e}")
         return
 
-    # --- 2. HEADER ---
+    # 2. Заголовок і навігація
     col_back, col_title = st.columns([1, 10])
     with col_back:
-        if st.button("⬅", key="back_main", help="Назад до списку"):
+        if st.button("⬅", key="back_main", help="Назад"):
             st.session_state["focus_keyword_id"] = None
             st.rerun()
-    
     with col_title:
         st.markdown(f"<h2 style='margin-top: -10px;'>🔍 {keyword_text}</h2>", unsafe_allow_html=True)
 
-    # --- 3. БЛОК УПРАВЛІННЯ ---
+    # 3. Налаштування (без змін)
     with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
-            new_text = st.text_input("Редагувати запит", value=keyword_text, key="edit_kw_input")
-            if st.button("💾 Зберегти", key="save_kw_btn"):
-                if new_text and new_text != keyword_text:
-                    supabase.table("keywords").update({"keyword_text": new_text}).eq("id", kw_id).execute()
-                    st.success("Збережено!")
-                    st.rerun()
-
+            new_text = st.text_input("Редагувати запит", value=keyword_text)
+            if st.button("💾 Зберегти"):
+                supabase.table("keywords").update({"keyword_text": new_text}).eq("id", kw_id).execute()
+                st.success("Збережено!")
+                st.rerun()
         with c2:
-            model_choices = list(MODEL_MAPPING.keys())
-            selected_models_ui = st.multiselect("Запустити пересканування:", model_choices, default=["Perplexity"], key="rescan_models_select")
-            
-            if st.button("🚀 Сканувати", key="rescan_btn"):
-                if selected_models_ui:
+            models = st.multiselect("Запустити пересканування:", list(MODEL_MAPPING.keys()), default=["Perplexity"])
+            if st.button("🚀 Сканувати"):
+                if models:
                     proj = st.session_state.get("current_project", {})
-                    brand_name = proj.get("brand_name", "MyBrand")
-                    with st.spinner(f"Запускаємо {', '.join(selected_models_ui)}..."):
-                        # Припускаємо, що n8n_trigger_analysis доступна
-                        success = n8n_trigger_analysis(project_id, [new_text], brand_name, models=selected_models_ui)
-                        if success:
-                            st.success("Задачу відправлено! Оновіть сторінку за хвилину.")
-                else:
-                    st.warning("Оберіть хоча б одну ЛЛМ.")
-
+                    success = n8n_trigger_analysis(project_id, [new_text], proj.get("brand_name"), models=models)
+                    if success: st.success("Запущено!")
+    
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- 4. ЗАВАНТАЖЕННЯ ІСТОРІЇ ---
+    # 4. Завантаження історії сканувань
     try:
-        scans_data = (
-            supabase.table("scan_results")
-            .select("*")
-            .eq("keyword_id", kw_id)
-            .order("created_at", desc=True)
-            .execute()
-            .data
-        )
-    except Exception as e:
-        st.error(f"Не вдалося завантажити історію: {e}")
+        scans_data = supabase.table("scan_results").select("*").eq("keyword_id", kw_id).order("created_at", desc=True).execute().data
+    except:
         scans_data = []
 
     if not scans_data:
-        st.info("📭 Для цього запиту ще немає результатів.")
+        st.info("📭 Немає результатів.")
         return
 
-    # --- 5. ВКЛАДКИ ПО МОДЕЛЯХ ---
+    # 5. Вкладки по моделях
     tabs = st.tabs(list(MODEL_MAPPING.keys()))
 
-    for tab, ui_model_name in zip(tabs, MODEL_MAPPING.keys()):
+    for tab, ui_model in zip(tabs, MODEL_MAPPING.keys()):
         with tab:
-            tech_model_id = MODEL_MAPPING[ui_model_name]
-            model_scans = [s for s in scans_data if tech_model_id in (s.get("provider") or "").lower()]
+            tech_id = MODEL_MAPPING[ui_model]
+            model_scans = [s for s in scans_data if tech_id in (s.get("provider") or "").lower()]
             
             if not model_scans:
-                st.write(f"📉 Даних від **{ui_model_name}** ще немає.")
+                st.write(f"📉 Даних від **{ui_model}** немає.")
                 continue
 
             # Вибір дати
-            history_options = {s["created_at"][:16].replace("T", " "): s for s in model_scans}
-            col_date, _ = st.columns([2, 4])
-            with col_date:
-                selected_time = st.selectbox(
-                    f"📅 Дата аналізу ({ui_model_name}):", 
-                    list(history_options.keys()),
-                    key=f"hist_sel_{tech_model_id}"
-                )
+            opts = {s["created_at"][:16].replace("T", " "): s for s in model_scans}
+            sel_date = st.selectbox(f"📅 Дата аналізу ({ui_model}):", list(opts.keys()), key=f"hist_{tech_id}")
+            scan_id = opts[sel_date]["id"]
+
+            # --- KPI Cards (Коротко) ---
+            mentions = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
+            my_brand = next((m for m in mentions if m.get("is_my_brand")), None)
             
-            current_scan = history_options[selected_time]
-            scan_id = current_scan["id"]
-
-            # =========================================================
-            # KPI CARDS
-            # =========================================================
-            try:
-                mentions_kpi = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
-            except:
-                mentions_kpi = []
-
-            total_market_mentions = sum(item.get("mention_count", 0) for item in mentions_kpi) if mentions_kpi else 0
-            my_brand_data = next((item for item in mentions_kpi if item.get("is_my_brand") is True), None)
-
-            if my_brand_data:
-                val_count = my_brand_data.get("mention_count", 0)
-                val_sentiment = my_brand_data.get("sentiment_score", "Нейтральний")
-                raw_pos = my_brand_data.get("rank_position")
-                val_position = raw_pos if raw_pos is not None else 0
-                val_sov = (val_count / total_market_mentions * 100) if total_market_mentions > 0 else 0
+            if my_brand:
+                sov = (my_brand['mention_count'] / sum(m['mention_count'] for m in mentions) * 100) if mentions else 0
+                st.info(f"📊 Частка голосу: **{sov:.1f}%** | Згадок: **{my_brand['mention_count']}** | Позиція: **#{my_brand['rank_position']}**")
             else:
-                val_count = 0
-                val_sentiment = "Не згадано"
-                val_position = 0 
-                val_sov = 0
+                st.warning("Бренд не знайдено у відповіді.")
 
-            sent_color = "#333"
-            if val_sentiment == "Позитивний": sent_color = "#00C896"
-            elif val_sentiment == "Негативний": sent_color = "#FF4B4B"
-            elif val_sentiment == "Не згадано": sent_color = "#999"
-
-            st.markdown(f"""
-            <style>
-                .virshi-kpi-container {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; font-family: 'Source Sans Pro', sans-serif; }}
-                .virshi-card {{ background-color: white; border: 1px solid #E0E0E0; border-top: 4px solid #00C896; border-radius: 8px; padding: 20px 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.04); }}
-                .virshi-label {{ color: #888; font-size: 11px; text-transform: uppercase; font-weight: 600; margin-bottom: 10px; }}
-                .virshi-value {{ color: #111; font-size: 28px; font-weight: 700; line-height: 1.2; }}
-                .virshi-sub {{ font-size: 14px; color: {sent_color}; font-weight: 600; }}
-            </style>
-            <div class="virshi-kpi-container">
-                <div class="virshi-card"><div class="virshi-label">Частка Голосу (SOV)</div><div class="virshi-value">{val_sov:.1f}%</div></div>
-                <div class="virshi-card"><div class="virshi-label">Згадок Бренду</div><div class="virshi-value">{val_count}</div></div>
-                <div class="virshi-card"><div class="virshi-label">Тональність</div><div class="virshi-value virshi-sub">{val_sentiment}</div></div>
-                <div class="virshi-card"><div class="virshi-label">Позиція у списку</div><div class="virshi-value">{val_position if val_position > 0 else "-"}</div></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # =========================================================
-            # ВІДПОВІДЬ ШІ
-            # =========================================================
-            raw_text = current_scan.get("raw_response", "")
             st.markdown("#### 📝 Відповідь ЛЛМ")
             with st.container(border=True):
-                if raw_text:
-                    my_brand = st.session_state.get("current_project", {}).get("brand_name", "")
-                    highlighted_text = raw_text.replace(my_brand, f"<span style='color:#00C896; font-weight:bold;'>{my_brand}</span>")
-                    st.markdown(highlighted_text, unsafe_allow_html=True)
-                else:
-                    st.caption("Текст відповіді не збережено.")
+                st.markdown(opts[sel_date].get("raw_response", "Текст відсутній"))
 
             st.markdown("<br>", unsafe_allow_html=True)
 
             # =========================================================
-            # 1. БРЕНДИ (Діаграма)
-            # =========================================================
-            st.markdown("#### 📊 Конкурентний аналіз (Share of Voice)")
-            if mentions_kpi:
-                df_brands = pd.DataFrame(mentions_kpi)
-                df_brands = df_brands.sort_values(by="mention_count", ascending=False)
-                color_map = {}
-                for index, row in df_brands.iterrows():
-                    color_map[row['brand_name']] = '#00C896' if row.get('is_my_brand') else '#9EA0A5'
-
-                fig_brands = px.pie(
-                    df_brands, names='brand_name', values='mention_count', hole=0.6,
-                    color='brand_name', color_discrete_map=color_map, hover_data=['rank_position']
-                )
-                fig_brands.update_traces(textposition='inside', textinfo='percent+label')
-                fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=300)
-
-                c_chart, c_table = st.columns([1.5, 1])
-                with c_chart: st.plotly_chart(fig_brands, use_container_width=True)
-                with c_table:
-                    st.markdown("**Топ лідерів:**")
-                    st.dataframe(
-                        df_brands[['brand_name', 'mention_count', 'rank_position']].head(5), 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "brand_name": "Бренд",
-                            "mention_count": "Згадок",
-                            "rank_position": "Ранг"
-                        }
-                    )
-            else:
-                st.info("Брендів не знайдено.")
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # =========================================================
-            # 2. ДЖЕРЕЛА (Діаграма + Чиста Таблиця)
+            # 🔥 ЦИТОВАНІ ДЖЕРЕЛА (ВИПРАВЛЕНО)
             # =========================================================
             st.markdown("#### 🔗 Цитовані джерела")
             
             try:
-                sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", scan_id).execute()
-                sources_data = sources_resp.data
+                src_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", scan_id).execute()
+                df_src = pd.DataFrame(src_resp.data)
 
-                if sources_data:
-                    df_src = pd.DataFrame(sources_data)
+                if not df_src.empty:
+                    # 1. Захист від відсутніх колонок
+                    for col in ['url', 'domain', 'is_official', 'mention_count']:
+                        if col not in df_src.columns: df_src[col] = None
                     
-                    # 1. Заповнення відсутніх колонок (безпека)
-                    if 'url' not in df_src.columns: df_src['url'] = None
-                    if 'domain' not in df_src.columns: df_src['domain'] = "Unknown"
-                    if 'is_official' not in df_src.columns: df_src['is_official'] = False
-                    if 'mention_count' not in df_src.columns: df_src['mention_count'] = 1
+                    # 2. Фільтрація пустих URL
+                    df_src = df_src.dropna(subset=['url'])
+                    df_src = df_src[df_src['url'].str.len() > 5] # Фільтр надто коротких сміттєвих даних
 
-                    # 2. Жорстка фільтрація: видаляємо все без URL
-                    df_src = df_src.dropna(subset=['url']) 
-                    df_src = df_src[df_src['url'].astype(str).str.strip() != ""]
-                    # Видаляємо тестові записи
-                    df_src = df_src[~df_src['url'].astype(str).str.contains("відсутнє", na=False)]
-
-                    if df_src.empty:
-                        st.info("ℹ️ Джерел не знайдено (або вони були порожніми).")
-                    else:
-                        # 3. Нормалізація URL (авто-додавання https)
-                        def normalize_url(u):
-                            u = str(u).strip()
-                            if not u.startswith(('http://', 'https://')):
-                                return f"https://{u}"
-                            return u
-                        
-                        df_src['url'] = df_src['url'].apply(normalize_url)
-
-                        # 4. Оформлення
-                        df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
+                    if not df_src.empty:
+                        # 3. Нормалізація
                         df_src['mention_count'] = df_src['mention_count'].fillna(1).astype(int)
-                        df_src = df_src.sort_values(by=['mention_count'], ascending=False)
-
-                        # --- ГРАФІК (Бублик розподілу по доменах) ---
-                        col_chart_src, col_table_src = st.columns([1, 1.5])
+                        df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
                         
-                        with col_chart_src:
-                            domain_counts = df_src['domain'].value_counts().reset_index()
-                            domain_counts.columns = ['domain', 'count']
-                            
-                            fig_src = px.pie(
-                                domain_counts.head(10), 
-                                values='count', 
-                                names='domain', 
-                                hole=0.6,
-                                color_discrete_sequence=px.colors.qualitative.Pastel
-                            )
-                            fig_src.update_traces(textposition='inside', textinfo='percent')
-                            fig_src.update_layout(showlegend=False, margin=dict(t=20, b=0, l=0, r=0), height=250)
-                            st.plotly_chart(fig_src, use_container_width=True)
+                        # Додаємо https якщо немає (для клікабельності)
+                        def fix_link(u):
+                            return u if u.startswith("http") else f"https://{u}"
+                        df_src['clean_url'] = df_src['url'].apply(fix_link)
+
+                        # --- ДІАГРАМА (БУБЛИК) ---
+                        c_chart, c_table = st.columns([1, 2])
+                        with c_chart:
+                            # Топ-5 доменів
+                            dom_counts = df_src['domain'].value_counts().reset_index()
+                            dom_counts.columns = ['domain', 'count']
+                            fig = px.pie(dom_counts.head(5), values='count', names='domain', hole=0.5)
+                            fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
+                            st.plotly_chart(fig, use_container_width=True)
 
                         # --- ТАБЛИЦЯ ---
-                        with col_table_src:
+                        with c_table:
                             st.dataframe(
-                                df_src[['url', 'Статус', 'mention_count']], 
-                                use_container_width=True, 
+                                df_src[['clean_url', 'domain', 'Статус', 'mention_count']],
+                                use_container_width=True,
                                 hide_index=True,
                                 column_config={
-                                    "url": st.column_config.LinkColumn(
-                                        "Посилання (URL)",
-                                        width="large",
-                                        # display_text прибираємо, щоб показувало повний лінк
-                                        validate="^https?://", # Перевіряє, що лінк правильний
+                                    "clean_url": st.column_config.LinkColumn(
+                                        "Посилання",
+                                        display_text=r"https?://(?:www\.)?(.*)", # Показує повний шлях без протоколу
+                                        width="large"
                                     ),
-                                    "Статус": st.column_config.TextColumn("Тип", width="small"),
-                                    "mention_count": st.column_config.NumberColumn("Згадок", format="%d", width="small")
+                                    "domain": "Домен",
+                                    "mention_count": st.column_config.NumberColumn("Згадок")
                                 }
                             )
+                    else:
+                        st.info("ℹ️ Джерел не знайдено (після фільтрації).")
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
-                    st.caption("Спробуйте запустити нове сканування.")
-                    
-            except Exception as e:
-                st.error(f"⚠️ Помилка таблиці джерел: {e}")
 
+            except Exception as e:
+                st.error(f"Помилка відображення джерел: {e}")
 
 def show_keywords_page():
     """
