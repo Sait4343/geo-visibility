@@ -1425,15 +1425,12 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Відображає детальну аналітику по запиту з KPI картками у стилі Virshi.
-    Оновлено:
-    - Додано Donut Chart для джерел.
-    - Виправлено відображення посилань у таблиці (авто-додавання https://).
+    Відображає детальну аналітику по запиту.
+    Виправлено: Відображення посилань (LinkColumn) та додано графік джерел.
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
-    import requests 
     
     # --- 0. ПІДКЛЮЧЕННЯ ---
     if 'supabase' not in globals():
@@ -1498,6 +1495,7 @@ def show_keyword_details(kw_id):
                     proj = st.session_state.get("current_project", {})
                     brand_name = proj.get("brand_name", "MyBrand")
                     with st.spinner(f"Запускаємо {', '.join(selected_models_ui)}..."):
+                        # Припускаємо, що n8n_trigger_analysis доступна
                         success = n8n_trigger_analysis(project_id, [new_text], brand_name, models=selected_models_ui)
                         if success:
                             st.success("Задачу відправлено! Оновіть сторінку за хвилину.")
@@ -1630,59 +1628,65 @@ def show_keyword_details(kw_id):
                 with c_chart: st.plotly_chart(fig_brands, use_container_width=True)
                 with c_table:
                     st.markdown("**Топ лідерів:**")
-                    st.dataframe(df_brands[['brand_name', 'mention_count', 'rank_position']].head(5), use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        df_brands[['brand_name', 'mention_count', 'rank_position']].head(5), 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config={
+                            "brand_name": "Бренд",
+                            "mention_count": "Згадок",
+                            "rank_position": "Ранг"
+                        }
+                    )
             else:
                 st.info("Брендів не знайдено.")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
             # =========================================================
-            # 2. ДЖЕРЕЛА (Діаграма + Таблиця з повними URL)
+            # 2. ДЖЕРЕЛА (Діаграма + Чиста Таблиця)
             # =========================================================
             st.markdown("#### 🔗 Цитовані джерела")
             
             try:
-                # Витягуємо дані
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", scan_id).execute()
                 sources_data = sources_resp.data
 
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
                     
-                    # 1. Створюємо колонки, якщо їх немає
+                    # 1. Заповнення відсутніх колонок (безпека)
                     if 'url' not in df_src.columns: df_src['url'] = None
                     if 'domain' not in df_src.columns: df_src['domain'] = "Unknown"
                     if 'is_official' not in df_src.columns: df_src['is_official'] = False
                     if 'mention_count' not in df_src.columns: df_src['mention_count'] = 1
 
-                    # 2. 🛡️ ФІЛЬТРАЦІЯ СМІТТЯ (Критично важливо!)
-                    # Викидаємо рядки, де URL пустий або None
+                    # 2. Жорстка фільтрація: видаляємо все без URL
                     df_src = df_src.dropna(subset=['url']) 
                     df_src = df_src[df_src['url'].astype(str).str.strip() != ""]
-                    # Викидаємо, якщо це помилковий текст з минулого разу
+                    # Видаляємо тестові записи
                     df_src = df_src[~df_src['url'].astype(str).str.contains("відсутнє", na=False)]
 
                     if df_src.empty:
                         st.info("ℹ️ Джерел не знайдено (або вони були порожніми).")
                     else:
-                        # 3. Нормалізація URL (щоб вони були клікабельні)
-                        def make_clickable(u):
+                        # 3. Нормалізація URL (авто-додавання https)
+                        def normalize_url(u):
                             u = str(u).strip()
-                            if not u.startswith('http'):
+                            if not u.startswith(('http://', 'https://')):
                                 return f"https://{u}"
                             return u
                         
-                        df_src['url'] = df_src['url'].apply(make_clickable)
+                        df_src['url'] = df_src['url'].apply(normalize_url)
 
-                        # 4. Статус і сортування
+                        # 4. Оформлення
                         df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
                         df_src['mention_count'] = df_src['mention_count'].fillna(1).astype(int)
                         df_src = df_src.sort_values(by=['mention_count'], ascending=False)
 
-                        # --- ВІЗУАЛІЗАЦІЯ ---
+                        # --- ГРАФІК (Бублик розподілу по доменах) ---
                         col_chart_src, col_table_src = st.columns([1, 1.5])
                         
-                        # А. ГРАФІК (Бублик по доменах)
                         with col_chart_src:
                             domain_counts = df_src['domain'].value_counts().reset_index()
                             domain_counts.columns = ['domain', 'count']
@@ -1692,13 +1696,13 @@ def show_keyword_details(kw_id):
                                 values='count', 
                                 names='domain', 
                                 hole=0.6,
-                                title="Топ доменів"
+                                color_discrete_sequence=px.colors.qualitative.Pastel
                             )
                             fig_src.update_traces(textposition='inside', textinfo='percent')
-                            fig_src.update_layout(showlegend=False, margin=dict(t=30, b=0, l=0, r=0), height=250)
+                            fig_src.update_layout(showlegend=False, margin=dict(t=20, b=0, l=0, r=0), height=250)
                             st.plotly_chart(fig_src, use_container_width=True)
 
-                        # Б. ТАБЛИЦЯ
+                        # --- ТАБЛИЦЯ ---
                         with col_table_src:
                             st.dataframe(
                                 df_src[['url', 'Статус', 'mention_count']], 
@@ -1708,8 +1712,8 @@ def show_keyword_details(kw_id):
                                     "url": st.column_config.LinkColumn(
                                         "Посилання (URL)",
                                         width="large",
-                                        # display_text не задаємо, щоб показував повний URL
-                                        validate="^https?://", # Перевіряє, чи це лінк
+                                        # display_text прибираємо, щоб показувало повний лінк
+                                        validate="^https?://", # Перевіряє, що лінк правильний
                                     ),
                                     "Статус": st.column_config.TextColumn("Тип", width="small"),
                                     "mention_count": st.column_config.NumberColumn("Згадок", format="%d", width="small")
@@ -1717,6 +1721,7 @@ def show_keyword_details(kw_id):
                             )
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
+                    st.caption("Спробуйте запустити нове сканування.")
                     
             except Exception as e:
                 st.error(f"⚠️ Помилка таблиці джерел: {e}")
