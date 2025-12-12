@@ -2104,7 +2104,9 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    Виправлено: Таблиця посилань тепер показує ПОВНИЙ шлях (URL), а не тільки домен.
+    Оновлено:
+    - Tab 2: Групування по доменах.
+    - Tab 3: Групування по URL. Посилання відображаються ПОВНІСТЮ.
     """
     import pandas as pd
     import plotly.express as px
@@ -2134,25 +2136,25 @@ def show_sources_page():
 
     st.title("📡 Джерела та Репутація")
     
-    # === 1. ЗАВАНТАЖЕННЯ ТА ОБ'ЄДНАННЯ ДАНИХ ===
+    # === 1. ЗАВАНТАЖЕННЯ ДАНИХ ===
     try:
-        # A. Whitelist
+        # Whitelist
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
         assets = assets_resp.data if assets_resp.data else []
         whitelist = [a['domain_or_url'] for a in assets]
 
-        # B. Скани
+        # Скани
         scans_resp = supabase.table("scan_results").select("id, provider, keyword_id").eq("project_id", proj["id"]).execute()
         if not scans_resp.data:
             st.info("Даних немає.")
             return
         df_scans = pd.DataFrame(scans_resp.data)
 
-        # C. Ключові слова
+        # Слова
         kws_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
         kw_map = {k['id']: k['keyword_text'] for k in kws_resp.data}
         
-        # D. Джерела
+        # Джерела
         scan_ids = df_scans['id'].tolist()
         sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
         df_sources = pd.DataFrame(sources_resp.data)
@@ -2160,7 +2162,7 @@ def show_sources_page():
         if df_sources.empty:
             df_full = pd.DataFrame()
         else:
-            # E. MERGE
+            # Merge
             df_scans['keyword_text'] = df_scans['keyword_id'].map(kw_map)
             df_full = pd.merge(df_sources, df_scans, left_on='scan_result_id', right_on='id', how='left')
             
@@ -2177,14 +2179,13 @@ def show_sources_page():
         st.error(f"Помилка завантаження даних: {e}")
         return
 
-    # === 2. ГЛОБАЛЬНІ ФІЛЬТРИ ===
+    # === 2. ФІЛЬТРИ ===
     with st.container(border=True):
         st.markdown("**⚙️ Фільтри відображення**")
         
         c_llm_label, c_llm_opts = st.columns([1, 4])
         with c_llm_label:
             st.caption("Оберіть моделі:")
-        
         with c_llm_opts:
             cols = st.columns(len(ALL_MODELS_KEYS))
             selected_models = []
@@ -2242,7 +2243,7 @@ def show_sources_page():
                 st.plotly_chart(fig_official, use_container_width=True)
         
         with c_stat:
-            st.markdown("**Статистика (за фільтром):**")
+            st.markdown("**Статистика:**")
             total_links = stats_tab1['Кількість'].sum()
             off_links = df_filtered[df_filtered['is_official']==True].shape[0]
             st.metric("Всього знайдено посилань", total_links)
@@ -2312,7 +2313,7 @@ def show_sources_page():
                                 st.rerun()
 
     # -------------------------------------------------------
-    # TAB 2: РЕНКІНГ ДОМЕНІВ (Групування по доменах)
+    # TAB 2: РЕНКІНГ ДОМЕНІВ
     # -------------------------------------------------------
     with tab2:
         st.markdown(f"##### 🏆 Топ Доменів")
@@ -2321,6 +2322,7 @@ def show_sources_page():
             df_tab2 = df_filtered.copy()
             df_tab2['domain'] = df_tab2['domain'].astype(str)
             
+            # ГРУПУВАННЯ ПО ДОМЕНУ
             domain_stats = df_tab2.groupby('domain').agg(
                 Mentions=('id', 'count'), 
                 Queries=('scan_result_id', 'nunique')
@@ -2329,7 +2331,7 @@ def show_sources_page():
             def check_off(d): return any(w in str(d) for w in whitelist)
             domain_stats['Type'] = domain_stats['domain'].apply(lambda x: "✅ Офіційне" if check_off(x) else "🔗 Зовнішнє")
             
-            # ВІЗУАЛІЗАЦІЯ
+            # --- ВІЗУАЛІЗАЦІЯ ---
             col_chart, col_table = st.columns([1, 1.5])
             with col_chart:
                 st.markdown("**Топ-10 Доменів:**")
@@ -2361,7 +2363,7 @@ def show_sources_page():
             st.info("Доменів не знайдено.")
 
     # -------------------------------------------------------
-    # TAB 3: ПОСИЛАННЯ (ПОВНІ URL)
+    # TAB 3: ПОСИЛАННЯ (Повні URL + Графік)
     # -------------------------------------------------------
     with tab3:
         st.markdown("##### 🔗 Топ Конкретних Посилань")
@@ -2373,12 +2375,12 @@ def show_sources_page():
             if not df_urls.empty:
                 df_urls['url'] = df_urls['url'].astype(str)
                 
-                # Групування по URL
+                # ГРУПУВАННЯ ПО ПОВНОМУ URL
                 url_stats = df_urls.groupby('url').agg(
                     Mentions=('id', 'count')
                 ).reset_index().sort_values('Mentions', ascending=False)
                 
-                # Для графіка робимо короткий підпис
+                # Для графіка робимо короткий підпис, щоб він вліз
                 url_stats['ShortURL'] = url_stats['url'].apply(lambda x: x[:40] + "..." if len(x) > 40 else x)
 
                 col_chart_url, col_table_url = st.columns([1, 1.5])
@@ -2406,10 +2408,9 @@ def show_sources_page():
                             "url": st.column_config.LinkColumn(
                                 "Повне Посилання",
                                 width="large",
-                                # 🔥 FIX: Ось тут зміна! 
-                                # Ми використовуємо regex (.*), щоб показати все після протоколу
-                                # Це дасть вигляд: domain.com/page/list
-                                display_text=r"https?://(?:www\.)?(.*)",
+                                # 🔥 ОСЬ ЦЕ ВИРІШУЄ ПРОБЛЕМУ:
+                                # Ми кажемо: відображай будь-який текст, що починається з http, як є
+                                display_text=r"(https?://.*)", 
                                 validate="^https?://"
                             ),
                             "Mentions": st.column_config.NumberColumn("Цитувань", format="%d"),
