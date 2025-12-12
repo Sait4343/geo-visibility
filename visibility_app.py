@@ -2179,11 +2179,13 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    Оновлено: Редагування офіційних ресурсів, перейменована вкладка.
+    Оновлено: 
+    - Таб 1: Додано графік (Donut) співвідношення Офіційні/Зовнішні + Фільтр ЛЛМ.
+    - Таб 3: Перейменовано на "Посилання", додано графік (Donut), повні URL.
     """
     import pandas as pd
+    import plotly.express as px
     import streamlit as st
-    from urllib.parse import urlparse
     import time
     
     # 0. ПІДКЛЮЧЕННЯ
@@ -2237,17 +2239,70 @@ def show_sources_page():
         df_sources['provider'] = df_sources['scan_result_id'].map(scan_map)
         if 'domain' not in df_sources.columns: df_sources['domain'] = None
         if 'url' not in df_sources.columns: df_sources['url'] = None
+        if 'is_official' not in df_sources.columns: df_sources['is_official'] = False
+        
+        # Заповнення Nan
+        df_sources['is_official'] = df_sources['is_official'].fillna(False)
     
     # === 3. ВКЛАДКИ ===
-    # 👇 Перейменована перша вкладка
-    tab1, tab2, tab3 = st.tabs(["🛡️ Офіційні ресурси бренду", "🌐 Ренкінг доменів", "📄 Топ Сторінок (URL)"])
+    tab1, tab2, tab3 = st.tabs(["🛡️ Офіційні ресурси бренду", "🌐 Ренкінг доменів", "🔗 Посилання"])
 
     # -------------------------------------------------------
-    # TAB 1: ОФІЦІЙНІ РЕСУРСИ (З Редагуванням)
+    # TAB 1: ОФІЦІЙНІ РЕСУРСИ (Статистика + Редагування)
     # -------------------------------------------------------
     with tab1:
-        st.markdown("##### 🟢 Ваші офіційні ресурси")
-        st.caption("Домени, які система позначатиме як 'Офіційні' (✅).")
+        st.markdown("##### 📊 Аналіз охоплення офіційних ресурсів")
+        
+        # 1. Фільтр
+        with st.container(border=True):
+            c_fil_1, c_fil_2 = st.columns([2, 1])
+            with c_fil_1:
+                sel_models_tab1 = st.multiselect(
+                    "Фільтр по ЛЛМ (для графіку):", 
+                    ALL_MODELS_KEYS, 
+                    default=ALL_MODELS_KEYS, 
+                    key="filter_tab1"
+                )
+        
+        # 2. Підготовка даних для графіку
+        if not df_sources.empty and sel_models_tab1:
+            sel_tech_1 = [MODEL_MAPPING[m] for m in sel_models_tab1]
+            mask_1 = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech_1))
+            df_tab1 = df_sources[mask_1].copy()
+            
+            # Групування: Офіційні vs Зовнішні
+            df_tab1['Тип'] = df_tab1['is_official'].apply(lambda x: "✅ Офіційні" if x else "🔗 Зовнішні")
+            stats_tab1 = df_tab1['Тип'].value_counts().reset_index()
+            stats_tab1.columns = ['Тип', 'Кількість']
+            
+            # Графік
+            c_chart, c_stat = st.columns([1, 1])
+            with c_chart:
+                if not stats_tab1.empty:
+                    fig_official = px.pie(
+                        stats_tab1, 
+                        names='Тип', 
+                        values='Кількість', 
+                        hole=0.6,
+                        color='Тип',
+                        color_discrete_map={"✅ Офіційні": "#00C896", "🔗 Зовнішні": "#E0E0E0"}
+                    )
+                    fig_official.update_traces(textinfo='percent+label')
+                    fig_official.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
+                    st.plotly_chart(fig_official, use_container_width=True)
+                else:
+                    st.caption("Немає даних для графіку.")
+            
+            with c_stat:
+                st.markdown("**Статистика:**")
+                total_links = stats_tab1['Кількість'].sum() if not stats_tab1.empty else 0
+                off_links = df_tab1[df_tab1['is_official']==True].shape[0]
+                st.metric("Всього знайдено посилань", total_links)
+                st.metric("З них на ваші ресурси", off_links)
+
+        st.divider()
+        st.markdown("##### ⚙️ Керування списком (Whitelist)")
+        st.caption("Додайте сюди домени вашого сайту та соцмереж, щоб система позначала їх як 'Офіційні'.")
         
         # Блок додавання
         with st.container(border=True):
@@ -2273,17 +2328,12 @@ def show_sources_page():
                             st.error(f"Помилка: {e}")
 
         if assets:
-            st.markdown("---")
-            st.caption("Список активів (можна редагувати):")
-            
+            st.caption("Ваші активи (можна редагувати):")
             for asset in assets:
-                # Унікальний ключ для стейту редагування
                 edit_key = f"edit_mode_{asset['id']}"
-                
                 with st.container(border=True):
-                    # Перевіряємо, чи увімкнено режим редагування для цього рядка
                     if st.session_state.get(edit_key, False):
-                        # === РЕЖИМ РЕДАГУВАННЯ ===
+                        # РЕЖИМ РЕДАГУВАННЯ
                         ec1, ec2 = st.columns([4, 1])
                         with ec1:
                             new_val = st.text_input("Редагування", value=asset['domain_or_url'], key=f"input_{asset['id']}", label_visibility="collapsed")
@@ -2293,50 +2343,40 @@ def show_sources_page():
                                 try:
                                     clean_val = new_val.replace("https://", "").replace("http://", "").strip().rstrip("/")
                                     supabase.table("official_assets").update({"domain_or_url": clean_val}).eq("id", asset['id']).execute()
-                                    st.session_state[edit_key] = False # Вимикаємо редагування
+                                    st.session_state[edit_key] = False
                                     st.success("Збережено!")
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Помилка: {e}")
-                            
                             if b_cancel.button("❌", key=f"cancel_{asset['id']}", help="Скасувати"):
                                 st.session_state[edit_key] = False
                                 st.rerun()
                     else:
-                        # === РЕЖИМ ПЕРЕГЛЯДУ ===
+                        # РЕЖИМ ПЕРЕГЛЯДУ
                         c_txt, c_type, c_acts = st.columns([3.5, 1, 1.5])
-                        
                         with c_txt:
                             st.markdown(f"**{asset['domain_or_url']}**")
-                        
                         with c_type:
                             st.caption(asset['type'].upper())
-                        
                         with c_acts:
                             b_edit, b_del = st.columns(2)
-                            # Кнопка Редагувати
-                            if b_edit.button("✏️", key=f"edit_btn_{asset['id']}", help="Редагувати"):
+                            if b_edit.button("✏️", key=f"edit_btn_{asset['id']}"):
                                 st.session_state[edit_key] = True
                                 st.rerun()
-                            
-                            # Кнопка Видалити
-                            if b_del.button("🗑", key=f"del_{asset['id']}", help="Видалити"):
+                            if b_del.button("🗑", key=f"del_{asset['id']}"):
                                 supabase.table("official_assets").delete().eq("id", asset['id']).execute()
                                 st.rerun()
         else:
             st.info("Список пустий. Додайте ваш сайт.")
 
     # -------------------------------------------------------
-    # TAB 2: РЕНКІНГ ДОМЕНІВ (Фільтр + Таблиця)
+    # TAB 2: РЕНКІНГ ДОМЕНІВ
     # -------------------------------------------------------
     with tab2:
         c_filter, _ = st.columns([2, 2])
         with c_filter:
             sel_models_tab2 = st.multiselect(
-                "Фільтр ЛЛМ:", 
-                ALL_MODELS_KEYS, 
-                default=ALL_MODELS_KEYS, 
-                key="filter_domains"
+                "Фільтр ЛЛМ:", ALL_MODELS_KEYS, default=ALL_MODELS_KEYS, key="filter_domains"
             )
         
         if not df_sources.empty and sel_models_tab2:
@@ -2349,7 +2389,6 @@ def show_sources_page():
         st.markdown(f"##### 🏆 Топ Доменів")
         
         if not df_tab2.empty and df_tab2['domain'].notna().any():
-            # Захист від змішаних типів (None/String) перед групуванням
             df_tab2['domain'] = df_tab2['domain'].astype(str)
             
             domain_stats = df_tab2.groupby('domain').agg(
@@ -2360,33 +2399,32 @@ def show_sources_page():
             def check_off(d): return any(w in str(d) for w in whitelist)
             domain_stats['Type'] = domain_stats['domain'].apply(lambda x: "✅ Офіційний" if check_off(x) else "🔗 Зовнішній")
             
-            show_dom = domain_stats[['domain', 'Type', 'Mentions', 'Queries']].copy()
-            show_dom.columns = ['Домен', 'Тип', 'К-сть цитувань', 'Охоплення запитів']
-
             st.dataframe(
-                show_dom, 
+                domain_stats, 
                 use_container_width=True,
                 column_config={
-                    "К-сть цитувань": st.column_config.ProgressColumn("Цитувань", format="%d", min_value=0, max_value=int(show_dom['К-сть цитувань'].max()))
+                    "domain": "Домен",
+                    "Type": "Тип",
+                    "Mentions": st.column_config.ProgressColumn("Цитувань", format="%d", min_value=0, max_value=int(domain_stats['Mentions'].max())),
+                    "Queries": "Охоплення запитів"
                 },
                 hide_index=True
             )
         else:
-            st.info("Доменів не знайдено (перевірте, чи заповнюється колонка 'domain' в базі).")
+            st.info("Доменів не знайдено.")
 
     # -------------------------------------------------------
-    # TAB 3: ТОП СТОРІНОК (Фільтр + Таблиця)
+    # TAB 3: ПОСИЛАННЯ (Повні URL + Графік)
     # -------------------------------------------------------
     with tab3:
+        # 1. Фільтр
         c_filter_url, _ = st.columns([2, 2])
         with c_filter_url:
             sel_models_tab3 = st.multiselect(
-                "Фільтр ЛЛМ:", 
-                ALL_MODELS_KEYS, 
-                default=ALL_MODELS_KEYS, 
-                key="filter_urls"
+                "Фільтр ЛЛМ:", ALL_MODELS_KEYS, default=ALL_MODELS_KEYS, key="filter_urls"
             )
 
+        # 2. Фільтрація даних
         if not df_sources.empty and sel_models_tab3:
             sel_tech_url = [MODEL_MAPPING[m] for m in sel_models_tab3]
             mask_url = df_sources['provider'].apply(lambda x: any(t in str(x) for t in sel_tech_url))
@@ -2394,113 +2432,59 @@ def show_sources_page():
         else:
             df_tab3 = pd.DataFrame()
 
-        st.markdown("##### 📄 Топ Конкретних Сторінок (URL)")
+        st.markdown("##### 🔗 Топ Конкретних Посилань")
         
         if not df_tab3.empty and df_tab3['url'].notna().any():
             df_urls = df_tab3[df_tab3['url'].notna() & (df_tab3['url'] != "")]
             
             if not df_urls.empty:
-                # Приведення до рядка перед групуванням
                 df_urls['url'] = df_urls['url'].astype(str)
                 
+                # Групування
                 url_stats = df_urls.groupby('url').agg(
                     Mentions=('id', 'count')
-                ).reset_index().sort_values('Mentions', ascending=False).head(100)
+                ).reset_index().sort_values('Mentions', ascending=False)
+                
+                # Додаємо скорочений URL для графіка (щоб було красиво)
+                url_stats['ShortURL'] = url_stats['url'].apply(lambda x: x[:40] + "..." if len(x) > 40 else x)
 
-                st.dataframe(
-                    url_stats,
-                    use_container_width=True,
-                    column_config={
-                        "url": st.column_config.LinkColumn("Посилання"),
-                        "Mentions": st.column_config.NumberColumn("К-сть цитувань")
-                    },
-                    hide_index=True
-                )
+                # 3. Графік (Бублик Топ-10)
+                col_chart, col_table = st.columns([1, 1.5])
+                
+                with col_chart:
+                    st.markdown("**Топ-10 посилань:**")
+                    top_10 = url_stats.head(10)
+                    if not top_10.empty:
+                        fig_urls = px.pie(
+                            top_10,
+                            names='ShortURL',
+                            values='Mentions',
+                            hole=0.6,
+                        )
+                        fig_urls.update_traces(textposition='inside', textinfo='percent')
+                        fig_urls.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
+                        st.plotly_chart(fig_urls, use_container_width=True)
+
+                with col_table:
+                    st.markdown("**Детальний список:**")
+                    st.dataframe(
+                        url_stats.head(100),
+                        use_container_width=True,
+                        column_config={
+                            "url": st.column_config.LinkColumn(
+                                "Повне Посилання",
+                                display_text=r"https?://.*", # Показувати повний текст URL, а не "Link"
+                                width="large"
+                            ),
+                            "Mentions": st.column_config.NumberColumn("К-сть цитувань", format="%d"),
+                            "ShortURL": None # Ховаємо технічну колонку
+                        },
+                        hide_index=True
+                    )
             else:
                 st.info("URL-адреси відсутні.")
         else:
             st.info("Немає даних URL.")
-            
-def show_chat_page():
-    proj = st.session_state.get("current_project")
-    if not proj:
-        st.info("Спочатку створіть проект.")
-        return
-
-    st.title(f"🤖 Virshi AI: Асистент для {proj.get('brand_name')}")
-    st.caption("Задайте питання про ваші позиції, конкурентів або попросіть пораду.")
-
-    # 1. Завантажуємо історію повідомлень
-    try:
-        messages = (
-            supabase.table("chat_messages")
-            .select("*")
-            .eq("project_id", proj["id"])
-            .order("created_at", desc=False) # Старі зверху
-            .execute()
-            .data
-        )
-    except:
-        messages = []
-
-    # 2. Відображаємо історію
-    if not messages:
-        # Привітання, якщо чат пустий
-        with st.chat_message("assistant"):
-            st.write(f"Привіт! Я проаналізував дані по **{proj.get('brand_name')}**. Що вас цікавить?")
-            st.write("Наприклад: _'Хто мій головний конкурент?'_ або _'Напиши пост для LinkedIn про наш рейтинг'_.")
-
-    for msg in messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # 3. Поле вводу
-    if prompt := st.chat_input("Напишіть ваше питання..."):
-        # А. Показуємо питання користувача одразу
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # Б. Зберігаємо питання в базу
-        try:
-            supabase.table("chat_messages").insert({
-                "project_id": proj["id"],
-                "user_id": st.session_state["user"].id,
-                "role": "user",
-                "content": prompt
-            }).execute()
-        except Exception as e:
-            st.error(f"Помилка збереження: {e}")
-
-        # В. Генеруємо відповідь (Тут буде підключення до n8n)
-        with st.chat_message("assistant"):
-            with st.spinner("Аналізую дані..."):
-                # --- ТУТ МАЄ БУТИ ВИКЛИК N8N ---
-                # response = n8n_chat_webhook(prompt, proj_id)
-                
-                # ПОКИ ЩО: Симуляція розумної відповіді
-                time.sleep(1.5) 
-                
-                # Проста логіка заглушки для демо
-                if "конкурент" in prompt.lower():
-                    response_text = f"Вашим головним конкурентом виглядає **PrivatBank** (за кількістю згадок). Вам варто звернути увагу на їх активність у статтях на Minfin."
-                elif "пост" in prompt.lower():
-                    response_text = f"Ось чернетка посут:\n\n🚀 **{proj.get('brand_name')} вривається в топи!**\n\nШІ відзначають нас як лідера... (тут текст)"
-                else:
-                    response_text = f"Це цікаве питання про **{proj.get('brand_name')}**. Для точної відповіді мені треба зібрати більше даних сканування. Спробуйте запустити новий скан у вкладці 'Перелік запитів'."
-                
-                st.markdown(response_text)
-
-        # Г. Зберігаємо відповідь асистента в базу
-        try:
-            supabase.table("chat_messages").insert({
-                "project_id": proj["id"],
-                "user_id": st.session_state["user"].id,
-                "role": "assistant",
-                "content": response_text
-            }).execute()
-        except:
-            pass
-
 
 def sidebar_menu():
     from streamlit_option_menu import option_menu
