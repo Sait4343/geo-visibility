@@ -2179,12 +2179,13 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    FIX: Виправлено KeyError 'id' після об'єднання таблиць (merge).
+    Оновлено:
+    - Додано діаграми (Donut Charts) на вкладки 'Ренкінг доменів' та 'Посилання'.
+    - Вкладка 'Топ Сторінок' перейменована на 'Посилання'.
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
-    import time
     
     # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
@@ -2210,14 +2211,14 @@ def show_sources_page():
 
     st.title("📡 Джерела та Репутація")
     
-    # === 1. ЗАВАНТАЖЕННЯ ТА ОБ'ЄДНАННЯ ДАНИХ ===
+    # === 1. ЗАВАНТАЖЕННЯ ДАНИХ ===
     try:
         # A. Whitelist
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
         assets = assets_resp.data if assets_resp.data else []
         whitelist = [a['domain_or_url'] for a in assets]
 
-        # B. Скани (метадані)
+        # B. Скани
         scans_resp = supabase.table("scan_results").select("id, provider, keyword_id").eq("project_id", proj["id"]).execute()
         if not scans_resp.data:
             st.info("Даних немає.")
@@ -2236,18 +2237,15 @@ def show_sources_page():
         if df_sources.empty:
             df_full = pd.DataFrame()
         else:
-            # E. MERGE (Джерела + Скани + Слова)
-            # Додаємо keyword_text до scans
+            # E. MERGE
             df_scans['keyword_text'] = df_scans['keyword_id'].map(kw_map)
-            
-            # Додаємо інфо про скан до джерел
-            # 🔥 ПРИМІТКА: При merge колонка 'id' стає 'id_x' (джерело) та 'id_y' (скан)
+            # При merge 'id' стає 'id_x' (джерело) та 'id_y' (скан)
             df_full = pd.merge(df_sources, df_scans, left_on='scan_result_id', right_on='id', how='left')
-
-            # 🔥 FIX: Повертаємо колонку 'id' (для підрахунку Mentions)
+            
+            # Повертаємо колонку 'id'
             if 'id_x' in df_full.columns:
                 df_full.rename(columns={'id_x': 'id'}, inplace=True)
-            
+
             # Чистка
             if 'domain' not in df_full.columns: df_full['domain'] = None
             if 'url' not in df_full.columns: df_full['url'] = None
@@ -2262,21 +2260,16 @@ def show_sources_page():
     with st.container(border=True):
         st.markdown("**⚙️ Фільтри відображення**")
         
-        # Ряд 1: Чекбокси LLM
         c_llm_label, c_llm_opts = st.columns([1, 4])
         with c_llm_label:
             st.caption("Оберіть моделі:")
-        
         with c_llm_opts:
-            # Створюємо чекбокси горизонтально
             cols = st.columns(len(ALL_MODELS_KEYS))
             selected_models = []
             for i, model_name in enumerate(ALL_MODELS_KEYS):
-                # За дефолтом всі обрані
                 if cols[i].checkbox(model_name, value=True, key=f"chk_src_{model_name}"):
                     selected_models.append(MODEL_MAPPING[model_name])
         
-        # Ряд 2: Dropdown Запитів
         all_keywords = df_full['keyword_text'].dropna().unique().tolist() if not df_full.empty else []
         selected_keywords = st.multiselect(
             "Фільтр по запитах:",
@@ -2285,13 +2278,10 @@ def show_sources_page():
             placeholder="Оберіть запити для аналізу..."
         )
 
-    # === 3. ФІЛЬТРАЦІЯ ДАНИХ ===
+    # === 3. ФІЛЬТРАЦІЯ ===
     if not df_full.empty:
-        # 1. Фільтр по моделях
         mask_model = df_full['provider'].apply(lambda x: any(t in str(x) for t in selected_models))
-        # 2. Фільтр по словах
         mask_kw = df_full['keyword_text'].isin(selected_keywords)
-        
         df_filtered = df_full[mask_model & mask_kw].copy()
     else:
         df_filtered = pd.DataFrame()
@@ -2305,17 +2295,15 @@ def show_sources_page():
     tab1, tab2, tab3 = st.tabs(["🛡️ Офіційні ресурси бренду", "🌐 Ренкінг доменів", "🔗 Посилання"])
 
     # -------------------------------------------------------
-    # TAB 1: ОФІЦІЙНІ РЕСУРСИ (Статистика + Редагування)
+    # TAB 1: ОФІЦІЙНІ РЕСУРСИ
     # -------------------------------------------------------
     with tab1:
         st.markdown("##### 📊 Аналіз охоплення офіційних ресурсів")
         
-        # Групування: Офіційні vs Зовнішні
         df_filtered['Тип'] = df_filtered['is_official'].apply(lambda x: "✅ Офіційні" if x else "🔗 Зовнішні")
         stats_tab1 = df_filtered['Тип'].value_counts().reset_index()
         stats_tab1.columns = ['Тип', 'Кількість']
         
-        # Графік
         c_chart, c_stat = st.columns([1, 1])
         with c_chart:
             if not stats_tab1.empty:
@@ -2332,7 +2320,7 @@ def show_sources_page():
                 st.plotly_chart(fig_official, use_container_width=True)
         
         with c_stat:
-            st.markdown("**Статистика (за фільтром):**")
+            st.markdown("**Статистика:**")
             total_links = stats_tab1['Кількість'].sum()
             off_links = df_filtered[df_filtered['is_official']==True].shape[0]
             st.metric("Всього знайдено посилань", total_links)
@@ -2341,7 +2329,6 @@ def show_sources_page():
         st.divider()
         st.markdown("##### ⚙️ Керування списком (Whitelist)")
         
-        # Блок додавання активів
         with st.container(border=True):
             c1, c2, c3 = st.columns([3, 1, 1])
             with c1:
@@ -2370,7 +2357,6 @@ def show_sources_page():
                 edit_key = f"edit_mode_{asset['id']}"
                 with st.container(border=True):
                     if st.session_state.get(edit_key, False):
-                        # РЕЖИМ РЕДАГУВАННЯ
                         ec1, ec2 = st.columns([4, 1])
                         with ec1:
                             new_val = st.text_input("Редагування", value=asset['domain_or_url'], key=f"input_{asset['id']}", label_visibility="collapsed")
@@ -2389,7 +2375,6 @@ def show_sources_page():
                                 st.session_state[edit_key] = False
                                 st.rerun()
                     else:
-                        # РЕЖИМ ПЕРЕГЛЯДУ
                         c_txt, c_type, c_acts = st.columns([3.5, 1, 1.5])
                         with c_txt:
                             st.markdown(f"**{asset['domain_or_url']}**")
@@ -2403,11 +2388,9 @@ def show_sources_page():
                             if b_del.button("🗑", key=f"del_{asset['id']}"):
                                 supabase.table("official_assets").delete().eq("id", asset['id']).execute()
                                 st.rerun()
-        else:
-            st.info("Список пустий. Додайте ваш сайт.")
 
     # -------------------------------------------------------
-    # TAB 2: РЕНКІНГ ДОМЕНІВ
+    # TAB 2: РЕНКІНГ ДОМЕНІВ (Діаграма + Таблиця)
     # -------------------------------------------------------
     with tab2:
         st.markdown(f"##### 🏆 Топ Доменів")
@@ -2416,7 +2399,6 @@ def show_sources_page():
             df_tab2 = df_filtered.copy()
             df_tab2['domain'] = df_tab2['domain'].astype(str)
             
-            # 🔥 ТУТ БУЛА ПОМИЛКА - Тепер 'id' існує
             domain_stats = df_tab2.groupby('domain').agg(
                 Mentions=('id', 'count'), 
                 Queries=('scan_result_id', 'nunique')
@@ -2425,22 +2407,40 @@ def show_sources_page():
             def check_off(d): return any(w in str(d) for w in whitelist)
             domain_stats['Type'] = domain_stats['domain'].apply(lambda x: "✅ Офіційне" if check_off(x) else "🔗 Зовнішнє")
             
-            st.dataframe(
-                domain_stats, 
-                use_container_width=True,
-                column_config={
-                    "domain": "Домен",
-                    "Type": "Тип",
-                    "Mentions": st.column_config.ProgressColumn("Цитувань", format="%d", min_value=0, max_value=int(domain_stats['Mentions'].max())),
-                    "Queries": "Охоплення запитів"
-                },
-                hide_index=True
-            )
+            # --- ВІЗУАЛІЗАЦІЯ (Колонки: Графік | Таблиця) ---
+            col_chart, col_table = st.columns([1, 1.5])
+            
+            with col_chart:
+                st.markdown("**Топ-10 Доменів:**")
+                top_10_dom = domain_stats.head(10)
+                if not top_10_dom.empty:
+                    fig_dom = px.pie(
+                        top_10_dom,
+                        names='domain',
+                        values='Mentions',
+                        hole=0.6,
+                    )
+                    fig_dom.update_traces(textposition='inside', textinfo='percent')
+                    fig_dom.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
+                    st.plotly_chart(fig_dom, use_container_width=True)
+
+            with col_table:
+                st.dataframe(
+                    domain_stats.head(50), 
+                    use_container_width=True,
+                    column_config={
+                        "domain": "Домен",
+                        "Type": st.column_config.TextColumn("Тип", width="small"),
+                        "Mentions": st.column_config.ProgressColumn("Цитувань", format="%d", min_value=0, max_value=int(domain_stats['Mentions'].max())),
+                        "Queries": st.column_config.NumberColumn("В запитах")
+                    },
+                    hide_index=True
+                )
         else:
             st.info("Доменів не знайдено.")
 
     # -------------------------------------------------------
-    # TAB 3: ПОСИЛАННЯ (Повні URL + Графік)
+    # TAB 3: ПОСИЛАННЯ (Діаграма + Таблиця)
     # -------------------------------------------------------
     with tab3:
         st.markdown("##### 🔗 Топ Конкретних Посилань")
@@ -2456,18 +2456,18 @@ def show_sources_page():
                     Mentions=('id', 'count')
                 ).reset_index().sort_values('Mentions', ascending=False)
                 
-                # Додаємо скорочений URL для графіка
+                # Скорочений URL для легенди графіка
                 url_stats['ShortURL'] = url_stats['url'].apply(lambda x: x[:40] + "..." if len(x) > 40 else x)
 
-                # Графік (Бублик Топ-10)
-                c_chart, c_table = st.columns([1, 1.5])
+                # --- ВІЗУАЛІЗАЦІЯ ---
+                col_chart_url, col_table_url = st.columns([1, 1.5])
                 
-                with c_chart:
+                with col_chart_url:
                     st.markdown("**Топ-10 посилань:**")
-                    top_10 = url_stats.head(10)
-                    if not top_10.empty:
+                    top_10_url = url_stats.head(10)
+                    if not top_10_url.empty:
                         fig_urls = px.pie(
-                            top_10,
+                            top_10_url,
                             names='ShortURL',
                             values='Mentions',
                             hole=0.6,
@@ -2476,18 +2476,17 @@ def show_sources_page():
                         fig_urls.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
                         st.plotly_chart(fig_urls, use_container_width=True)
 
-                with c_table:
-                    st.markdown("**Детальний список:**")
+                with col_table_url:
                     st.dataframe(
                         url_stats.head(100),
                         use_container_width=True,
                         column_config={
                             "url": st.column_config.LinkColumn(
                                 "Повне Посилання",
-                                display_text=r"https?://.*", # Показувати повний текст URL
+                                display_text=r"https?://.*", 
                                 width="large"
                             ),
-                            "Mentions": st.column_config.NumberColumn("К-сть цитувань", format="%d"),
+                            "Mentions": st.column_config.NumberColumn("Цитувань", format="%d"),
                             "ShortURL": None
                         },
                         hide_index=True
@@ -2496,6 +2495,7 @@ def show_sources_page():
                 st.info("URL-адреси відсутні.")
         else:
             st.info("Немає даних URL.")
+
 
 def sidebar_menu():
     from streamlit_option_menu import option_menu
