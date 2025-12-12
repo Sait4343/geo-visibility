@@ -225,10 +225,7 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    Включає: 
-    1. Перевірку статусу (Gatekeeper).
-    2. Мапінг назв моделей.
-    3. Отримання офіційних джерел (Whitelist).
+    FIX: Виправлено помилку NoneType при перевірці статусу.
     """
     
     # 1. Мапінг назв (UI -> Technical)
@@ -239,9 +236,14 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     }
 
     # 2. 🔒 ПЕРЕВІРКА СТАТУСУ (БЛОКУВАННЯ)
-    # Отримуємо поточний проект із сесії
-    current_proj = st.session_state.get("current_project", {})
-    status = current_proj.get("status", "trial")
+    current_proj = st.session_state.get("current_project")
+    
+    # 🔥 FIX: Якщо проекту немає (None), вважаємо статус 'trial' (для онбордингу), 
+    # або перевіряємо, чи це не перший запуск.
+    if current_proj is None:
+        status = "trial" 
+    else:
+        status = current_proj.get("status", "trial")
     
     # Якщо статус заблокований або термін дії вийшов - зупиняємо
     if status in ["blocked", "expired"]:
@@ -249,7 +251,9 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         return False
 
     try:
-        user_email = st.session_state["user"].email if st.session_state.get("user") else None
+        # Отримуємо email безпечно
+        user = st.session_state.get("user")
+        user_email = user.email if user else "no-reply@virshi.ai"
         
         if isinstance(keywords, str):
             keywords = [keywords]
@@ -271,9 +275,8 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             print(f"Error fetching assets: {e}")
             official_assets = []
 
-        # 4. ЦИКЛ ВІДПРАВКИ (По кожній моделі окремо)
+        # 4. ЦИКЛ ВІДПРАВКИ
         for ui_model_name in models:
-            # Конвертуємо красиву назву в технічний ID
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
             payload = {
@@ -281,13 +284,12 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "keywords": keywords, 
                 "brand_name": brand_name,
                 "user_email": user_email,
-                "provider": tech_model_id,     # Для Switch в n8n
-                "models": [tech_model_id],     # Для сумісності
-                "official_assets": official_assets # Передаємо Whitelist
+                "provider": tech_model_id,
+                "models": [tech_model_id],
+                "official_assets": official_assets
             }
             
             try:
-                # Відправка на вебхук
                 response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=10)
                 
                 if response.status_code == 200:
@@ -1631,7 +1633,7 @@ def show_keyword_details(kw_id):
             st.markdown("<br>", unsafe_allow_html=True)
 
           # =========================================================
-            # 2. ДЖЕРЕЛА (Повні посилання)
+            # 2. ДЖЕРЕЛА (Безпечний вивід)
             # =========================================================
             st.markdown("#### 🔗 Цитовані джерела")
             
@@ -1647,14 +1649,13 @@ def show_keyword_details(kw_id):
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
                     
-                    # Створюємо колонки, якщо їх немає
+                    # 🔥 FIX: Гарантуємо наявність колонок перед зверненням
                     if 'url' not in df_src.columns: df_src['url'] = None
                     if 'domain' not in df_src.columns: df_src['domain'] = "-"
                     if 'is_official' not in df_src.columns: df_src['is_official'] = False
                     if 'mention_count' not in df_src.columns: df_src['mention_count'] = 1
 
-                    # Очищення даних
-                    # Якщо URL пустий -> ставимо "#", щоб таблиця не ламалася, але це означає "немає даних"
+                    # Очищення
                     df_src['url'] = df_src['url'].fillna("#")
                     df_src['mention_count'] = df_src['mention_count'].fillna(1).astype(int)
 
@@ -1664,7 +1665,7 @@ def show_keyword_details(kw_id):
                     # Сортування
                     df_src = df_src.sort_values(by=['mention_count'], ascending=False)
 
-                    # Відображення
+                    # Відображення (тільки існуючі колонки)
                     st.dataframe(
                         df_src[['url', 'Статус', 'mention_count']], 
                         use_container_width=True, 
@@ -1673,8 +1674,7 @@ def show_keyword_details(kw_id):
                             "url": st.column_config.LinkColumn(
                                 "Посилання (URL)",
                                 width="large",
-                                # Ми прибрали display_text, тепер буде видно повний лінк
-                                validate="^https?://", # Підсвітить червоним, якщо лінк битий
+                                validate="^https?://", 
                             ),
                             "Статус": st.column_config.TextColumn("Тип", width="small"),
                             "mention_count": st.column_config.NumberColumn("Згадок", format="%d", width="small")
@@ -1682,7 +1682,6 @@ def show_keyword_details(kw_id):
                     )
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
-                    st.caption("Спробуйте запустити нове сканування.")
                     
             except Exception as e:
                 st.error(f"⚠️ Помилка таблиці джерел: {e}")
@@ -1750,7 +1749,7 @@ def show_keywords_page():
             # Вибір ЛЛМ і Сабміт
             c_models, c_submit = st.columns([3, 1])
             with c_models:
-                selected_models_add = st.multiselect("ЛЛМ для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="add_multiselect")
+                selected_models_add = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="add_multiselect")
             
             with c_submit:
                 st.write("")
@@ -1841,7 +1840,7 @@ def show_keywords_page():
     elif sort_option == "Давно не скановані":
         keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
-    # --- Рядок 2: Масові дії (Container) ---
+# --- Рядок 2: Масові дії (Container) ---
     with st.container(border=True):
         c_check, c_models, c_btn = st.columns([0.5, 3, 1.5])
         
@@ -1873,7 +1872,10 @@ def show_keywords_page():
                     with st.spinner(f"Відправляємо {len(selected_kws_text)} запитів..."):
                         n8n_trigger_analysis(proj["id"], selected_kws_text, proj.get("brand_name"), models=bulk_models)
                         st.success("Успішно! Оновіть сторінку за хвилину.")
-                        if select_all: st.session_state["select_all_kws"] = False
+                        
+                        # 🔥 FIX: ВИДАЛЕНО РЯДОК, ЩО ВИКЛИКАВ ПОМИЛКУ
+                        # if select_all: st.session_state["select_all_kws"] = False <--- ЦЕ БУЛА ПРИЧИНА
+                        
                         time.sleep(2)
                         st.rerun()
                 else:
