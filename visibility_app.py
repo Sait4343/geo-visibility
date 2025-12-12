@@ -2179,11 +2179,7 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка управління джерелами та аналізу репутації.
-    Оновлено: 
-    - Глобальні фільтри зверху.
-    - Фільтр LLM через чекбокси.
-    - Фільтр по Запитах (Dropdown).
-    - Об'єднання даних для фільтрації.
+    FIX: Виправлено KeyError 'id' після об'єднання таблиць (merge).
     """
     import pandas as pd
     import plotly.express as px
@@ -2215,8 +2211,6 @@ def show_sources_page():
     st.title("📡 Джерела та Репутація")
     
     # === 1. ЗАВАНТАЖЕННЯ ТА ОБ'ЄДНАННЯ ДАНИХ ===
-    # Нам потрібно знати Keyword і Provider для кожного джерела, 
-    # тому ми тягнемо все і мерджимо.
     try:
         # A. Whitelist
         assets_resp = supabase.table("official_assets").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
@@ -2247,8 +2241,13 @@ def show_sources_page():
             df_scans['keyword_text'] = df_scans['keyword_id'].map(kw_map)
             
             # Додаємо інфо про скан до джерел
+            # 🔥 ПРИМІТКА: При merge колонка 'id' стає 'id_x' (джерело) та 'id_y' (скан)
             df_full = pd.merge(df_sources, df_scans, left_on='scan_result_id', right_on='id', how='left')
 
+            # 🔥 FIX: Повертаємо колонку 'id' (для підрахунку Mentions)
+            if 'id_x' in df_full.columns:
+                df_full.rename(columns={'id_x': 'id'}, inplace=True)
+            
             # Чистка
             if 'domain' not in df_full.columns: df_full['domain'] = None
             if 'url' not in df_full.columns: df_full['url'] = None
@@ -2417,8 +2416,9 @@ def show_sources_page():
             df_tab2 = df_filtered.copy()
             df_tab2['domain'] = df_tab2['domain'].astype(str)
             
+            # 🔥 ТУТ БУЛА ПОМИЛКА - Тепер 'id' існує
             domain_stats = df_tab2.groupby('domain').agg(
-                Mentions=('id', 'count'),
+                Mentions=('id', 'count'), 
                 Queries=('scan_result_id', 'nunique')
             ).reset_index().sort_values('Mentions', ascending=False)
 
