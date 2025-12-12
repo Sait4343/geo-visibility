@@ -1425,12 +1425,15 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Відображає детальну аналітику по запиту з KPI картками у стилі Virshi (Green/White).
-    FIX: Виправлено помилку NoneType при розрахунку rank_position.
+    Відображає детальну аналітику по запиту з KPI картками у стилі Virshi.
+    Оновлено:
+    - Додано Donut Chart для джерел.
+    - Виправлено відображення посилань у таблиці (авто-додавання https://).
     """
     import pandas as pd
+    import plotly.express as px
     import streamlit as st
-    import requests # Потрібно для n8n_trigger_analysis, якщо він викликається тут
+    import requests 
     
     # --- 0. ПІДКЛЮЧЕННЯ ---
     if 'supabase' not in globals():
@@ -1442,7 +1445,6 @@ def show_keyword_details(kw_id):
     else:
         supabase = globals()['supabase']
 
-    # Локальний мапінг
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
@@ -1496,7 +1498,6 @@ def show_keyword_details(kw_id):
                     proj = st.session_state.get("current_project", {})
                     brand_name = proj.get("brand_name", "MyBrand")
                     with st.spinner(f"Запускаємо {', '.join(selected_models_ui)}..."):
-                        # Передбачається, що функція n8n_trigger_analysis доступна глобально
                         success = n8n_trigger_analysis(project_id, [new_text], brand_name, models=selected_models_ui)
                         if success:
                             st.success("Задачу відправлено! Оновіть сторінку за хвилину.")
@@ -1549,28 +1550,21 @@ def show_keyword_details(kw_id):
             scan_id = current_scan["id"]
 
             # =========================================================
-            # 👇 НОВИЙ UI: КАРТКИ KPI
+            # KPI CARDS
             # =========================================================
-            
-            # 1. Завантажуємо згадки
             try:
                 mentions_kpi = supabase.table("brand_mentions").select("*").eq("scan_result_id", scan_id).execute().data
             except:
                 mentions_kpi = []
 
-            # 2. Розрахунок метрик
             total_market_mentions = sum(item.get("mention_count", 0) for item in mentions_kpi) if mentions_kpi else 0
             my_brand_data = next((item for item in mentions_kpi if item.get("is_my_brand") is True), None)
 
             if my_brand_data:
                 val_count = my_brand_data.get("mention_count", 0)
                 val_sentiment = my_brand_data.get("sentiment_score", "Нейтральний")
-                
-                # 🔥 FIX: Обробка NoneType для позиції
                 raw_pos = my_brand_data.get("rank_position")
-                # Якщо прийшло None -> ставимо 0
                 val_position = raw_pos if raw_pos is not None else 0
-                
                 val_sov = (val_count / total_market_mentions * 100) if total_market_mentions > 0 else 0
             else:
                 val_count = 0
@@ -1578,77 +1572,24 @@ def show_keyword_details(kw_id):
                 val_position = 0 
                 val_sov = 0
 
-            # Колір для сентименту
             sent_color = "#333"
             if val_sentiment == "Позитивний": sent_color = "#00C896"
             elif val_sentiment == "Негативний": sent_color = "#FF4B4B"
             elif val_sentiment == "Не згадано": sent_color = "#999"
 
-            # 3. HTML/CSS Стилізація
             st.markdown(f"""
             <style>
-                .virshi-kpi-container {{
-                    display: grid;
-                    grid-template-columns: repeat(4, 1fr);
-                    gap: 15px;
-                    margin-bottom: 25px;
-                    font-family: 'Source Sans Pro', sans-serif;
-                }}
-                .virshi-card {{
-                    background-color: white;
-                    border: 1px solid #E0E0E0;
-                    border-top: 4px solid #00C896; 
-                    border-radius: 8px;
-                    padding: 20px 15px;
-                    text-align: center;
-                    box-shadow: 0 4px 6px rgba(0,0,0,0.04);
-                    transition: transform 0.2s;
-                }}
-                .virshi-card:hover {{
-                    transform: translateY(-2px);
-                    box-shadow: 0 6px 12px rgba(0,0,0,0.08);
-                }}
-                .virshi-label {{
-                    color: #888;
-                    font-size: 11px;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                    font-weight: 600;
-                    margin-bottom: 10px;
-                }}
-                .virshi-value {{
-                    color: #111;
-                    font-size: 28px;
-                    font-weight: 700;
-                    line-height: 1.2;
-                }}
-                .virshi-sub {{
-                    font-size: 14px;
-                    color: {sent_color};
-                    font-weight: 600;
-                }}
-                @media (max-width: 768px) {{
-                    .virshi-kpi-container {{ grid-template-columns: repeat(2, 1fr); }}
-                }}
+                .virshi-kpi-container {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; font-family: 'Source Sans Pro', sans-serif; }}
+                .virshi-card {{ background-color: white; border: 1px solid #E0E0E0; border-top: 4px solid #00C896; border-radius: 8px; padding: 20px 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.04); }}
+                .virshi-label {{ color: #888; font-size: 11px; text-transform: uppercase; font-weight: 600; margin-bottom: 10px; }}
+                .virshi-value {{ color: #111; font-size: 28px; font-weight: 700; line-height: 1.2; }}
+                .virshi-sub {{ font-size: 14px; color: {sent_color}; font-weight: 600; }}
             </style>
-
             <div class="virshi-kpi-container">
-                <div class="virshi-card">
-                    <div class="virshi-label">Частка Голосу (SOV)</div>
-                    <div class="virshi-value">{val_sov:.1f}%</div>
-                </div>
-                <div class="virshi-card">
-                    <div class="virshi-label">Згадок Бренду</div>
-                    <div class="virshi-value">{val_count}</div>
-                </div>
-                <div class="virshi-card">
-                    <div class="virshi-label">Тональність</div>
-                    <div class="virshi-value virshi-sub">{val_sentiment}</div>
-                </div>
-                <div class="virshi-card">
-                    <div class="virshi-label">Позиція у списку</div>
-                    <div class="virshi-value">{val_position if val_position > 0 else "-"}</div>
-                </div>
+                <div class="virshi-card"><div class="virshi-label">Частка Голосу (SOV)</div><div class="virshi-value">{val_sov:.1f}%</div></div>
+                <div class="virshi-card"><div class="virshi-label">Згадок Бренду</div><div class="virshi-value">{val_count}</div></div>
+                <div class="virshi-card"><div class="virshi-label">Тональність</div><div class="virshi-value virshi-sub">{val_sentiment}</div></div>
+                <div class="virshi-card"><div class="virshi-label">Позиція у списку</div><div class="virshi-value">{val_position if val_position > 0 else "-"}</div></div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -1656,7 +1597,6 @@ def show_keyword_details(kw_id):
             # ВІДПОВІДЬ ШІ
             # =========================================================
             raw_text = current_scan.get("raw_response", "")
-            
             st.markdown("#### 📝 Відповідь ЛЛМ")
             with st.container(border=True):
                 if raw_text:
@@ -1669,134 +1609,107 @@ def show_keyword_details(kw_id):
             st.markdown("<br>", unsafe_allow_html=True)
 
             # =========================================================
-            # ТАБЛИЦІ
-            # =========================================================
-            
-            # =========================================================
-            # 1. БРЕНДИ (Діаграма замість таблиці)
+            # 1. БРЕНДИ (Діаграма)
             # =========================================================
             st.markdown("#### 📊 Конкурентний аналіз (Share of Voice)")
-            
             if mentions_kpi:
-                import plotly.express as px # Імпортуємо тут, щоб не було помилок
-                
                 df_brands = pd.DataFrame(mentions_kpi)
-                
-                # Сортуємо: свій бренд, потім лідери
                 df_brands = df_brands.sort_values(by="mention_count", ascending=False)
-                
-                # Логіка кольорів: Наш = Зелений, Інші = Сірий
-                # Створюємо словник кольорів {BrandName: Color}
                 color_map = {}
                 for index, row in df_brands.iterrows():
-                    b_name = row['brand_name']
-                    # Якщо це наш бренд - Зелений, інакше - різні відтінки сірого/нейтрального
-                    if row.get('is_my_brand'):
-                        color_map[b_name] = '#00C896' # Virshi Green
-                    else:
-                        color_map[b_name] = '#9EA0A5' # Neutral Grey
+                    color_map[row['brand_name']] = '#00C896' if row.get('is_my_brand') else '#9EA0A5'
 
-                # Будуємо "Бублик" (Donut Chart)
                 fig_brands = px.pie(
-                    df_brands,
-                    names='brand_name',
-                    values='mention_count',
-                    hole=0.6, # Робить "дірку" всередині (бублик)
-                    color='brand_name',
-                    color_discrete_map=color_map, # Застосовуємо наші кольори
-                    hover_data=['rank_position']
+                    df_brands, names='brand_name', values='mention_count', hole=0.6,
+                    color='brand_name', color_discrete_map=color_map, hover_data=['rank_position']
                 )
+                fig_brands.update_traces(textposition='inside', textinfo='percent+label')
+                fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=300)
 
-                # Налаштування вигляду
-                fig_brands.update_traces(
-                    textposition='inside', 
-                    textinfo='percent+label',
-                    hovertemplate = "<b>%{label}</b><br>Згадок: %{value}<br>Частка: %{percent}"
-                )
-                
-                fig_brands.update_layout(
-                    showlegend=False, # Ховаємо легенду, щоб не забивати місце (підписи всередині)
-                    margin=dict(t=0, b=0, l=0, r=0),
-                    height=300
-                )
-
-                # Відображаємо
                 c_chart, c_table = st.columns([1.5, 1])
-                
-                with c_chart:
-                    st.plotly_chart(fig_brands, use_container_width=True)
-                
-                # Додатково маленька легенда/таблиця справа для точності
+                with c_chart: st.plotly_chart(fig_brands, use_container_width=True)
                 with c_table:
                     st.markdown("**Топ лідерів:**")
-                    # Проста табличка топ-5
-                    top_df = df_brands[['brand_name', 'mention_count', 'rank_position']].head(5)
-                    st.dataframe(
-                        top_df, 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "brand_name": "Бренд",
-                            "mention_count": st.column_config.NumberColumn("Згадок"),
-                            "rank_position": st.column_config.NumberColumn("Ранг")
-                        }
-                    )
-
+                    st.dataframe(df_brands[['brand_name', 'mention_count', 'rank_position']].head(5), use_container_width=True, hide_index=True)
             else:
-                st.info("Брендів у відповіді не знайдено.")
+                st.info("Брендів не знайдено.")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-          # =========================================================
-            # 2. ДЖЕРЕЛА (Безпечний вивід)
+            # =========================================================
+            # 2. ДЖЕРЕЛА (Діаграма + Таблиця)
             # =========================================================
             st.markdown("#### 🔗 Цитовані джерела")
             
             try:
-                sources_resp = (
-                    supabase.table("extracted_sources")
-                    .select("*")
-                    .eq("scan_result_id", scan_id)
-                    .execute()
-                )
+                sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", scan_id).execute()
                 sources_data = sources_resp.data
 
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
                     
-                    # 🔥 FIX: Гарантуємо наявність колонок перед зверненням
+                    # Перевірка та заповнення колонок
                     if 'url' not in df_src.columns: df_src['url'] = None
-                    if 'domain' not in df_src.columns: df_src['domain'] = "-"
+                    if 'domain' not in df_src.columns: df_src['domain'] = "Unknown"
                     if 'is_official' not in df_src.columns: df_src['is_official'] = False
                     if 'mention_count' not in df_src.columns: df_src['mention_count'] = 1
 
-                    # Очищення
-                    df_src['url'] = df_src['url'].fillna("#")
-                    df_src['mention_count'] = df_src['mention_count'].fillna(1).astype(int)
+                    # Хелпер для виправлення URL (додає https:// якщо немає)
+                    def fix_url(u):
+                        if not u: return None
+                        u = str(u).strip()
+                        if not u.startswith('http'):
+                            return f"https://{u}"
+                        return u
 
-                    # Статус
-                    df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
+                    df_src['url'] = df_src['url'].apply(fix_url)
                     
-                    # Сортування
+                    # Для порожніх URL ставимо заповнювач, щоб таблиця не ламалася
+                    df_src['url_display'] = df_src['url'].fillna("Посилання відсутнє в БД")
+                    
+                    df_src['Статус'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
                     df_src = df_src.sort_values(by=['mention_count'], ascending=False)
 
-                    # Відображення (тільки існуючі колонки)
-                    st.dataframe(
-                        df_src[['url', 'Статус', 'mention_count']], 
-                        use_container_width=True, 
-                        hide_index=True,
-                        column_config={
-                            "url": st.column_config.LinkColumn(
-                                "Посилання (URL)",
-                                width="large",
-                                validate="^https?://", 
-                            ),
-                            "Статус": st.column_config.TextColumn("Тип", width="small"),
-                            "mention_count": st.column_config.NumberColumn("Згадок", format="%d", width="small")
-                        }
-                    )
+                    # --- ГРАФІК (DONUT) ---
+                    # Групуємо по доменах для діаграми
+                    col_chart_src, col_table_src = st.columns([1, 1.5])
+                    
+                    with col_chart_src:
+                        if not df_src.empty:
+                            domain_counts = df_src['domain'].value_counts().reset_index()
+                            domain_counts.columns = ['domain', 'count']
+                            
+                            fig_src = px.pie(
+                                domain_counts.head(10), # Топ 10 доменів
+                                values='count', 
+                                names='domain', 
+                                hole=0.6,
+                                color_discrete_sequence=px.colors.qualitative.Pastel
+                            )
+                            fig_src.update_traces(textposition='inside', textinfo='percent')
+                            fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
+                            st.plotly_chart(fig_src, use_container_width=True)
+
+                    # --- ТАБЛИЦЯ ---
+                    with col_table_src:
+                        st.dataframe(
+                            df_src[['url_display', 'Статус', 'mention_count']], 
+                            use_container_width=True, 
+                            hide_index=True,
+                            column_config={
+                                "url_display": st.column_config.LinkColumn(
+                                    "Посилання (URL)",
+                                    width="large",
+                                    validate="^https?://", # Тепер валідація пройде, бо ми додали https
+                                    display_text=r"https?://(www\.)?(.+)" # Показувати трохи чистіше (без https://www.)
+                                ),
+                                "Статус": st.column_config.TextColumn("Тип", width="small"),
+                                "mention_count": st.column_config.NumberColumn("Згадок", format="%d", width="small")
+                            }
+                        )
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
+                    st.caption("Спробуйте запустити нове сканування.")
                     
             except Exception as e:
                 st.error(f"⚠️ Помилка таблиці джерел: {e}")
