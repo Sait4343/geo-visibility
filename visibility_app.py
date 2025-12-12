@@ -774,9 +774,10 @@ def onboarding_wizard():
 def show_competitors_page():
     """
     Сторінка глибокого конкурентного аналізу.
-    Оновлено:
-    - Вкладка 'Частота згадки': Bar Chart на всю ширину.
-    - Вкладка 'Детальний рейтинг': Репутація текстом, перейменовано стовпчик 'Цільовий бренд'.
+    Оновлено: 
+    - Тональність: Stacked Bar Chart (Розподіл емоцій).
+    - Середня позиція: Donut Chart з інверсією (Краще місце = Більший сектор).
+    - Таблиця: Текстова репутація.
     """
     import pandas as pd
     import plotly.express as px
@@ -874,6 +875,8 @@ def show_competitors_page():
         return
 
     # --- 3. АГРЕГАЦІЯ ---
+    
+    # Хелпер: Текст -> Число (для сортування і середнього)
     def sentiment_to_score(s):
         if s == 'Позитивний': return 100
         if s == 'Негативний': return 0
@@ -881,23 +884,22 @@ def show_competitors_page():
     
     df_filtered['sent_score_num'] = df_filtered['sentiment_score'].apply(sentiment_to_score)
 
+    # Основна статистика по брендах
     stats = df_filtered.groupby('brand_name').agg(
         Mentions=('id_x', 'count'),
         Avg_Rank=('rank_position', 'mean'),
-        Avg_Sentiment=('sent_score_num', 'mean'),
+        Avg_Sentiment_Num=('sent_score_num', 'mean'),
         Is_My_Brand=('is_my_brand', 'max')
     ).reset_index()
 
-    # Хелпер для тексту репутації
+    # Хелпер: Число -> Текст (для таблиці)
     def get_sentiment_text(score):
-        if score >= 60: return "Позитивний"
-        if score <= 40: return "Негативний"
-        return "Нейтральний"
+        if score >= 60: return "Позитивна"
+        if score <= 40: return "Негативна"
+        return "Нейтральна"
 
-    stats['Reputation_Text'] = stats['Avg_Sentiment'].apply(get_sentiment_text)
-    
-    # Додаємо колонку для чекбоксів (для фільтрації графіків)
-    stats['Show'] = True
+    stats['Reputation_Text'] = stats['Avg_Sentiment_Num'].apply(get_sentiment_text)
+    stats['Show'] = True # Для чекбоксів
 
     # --- 4. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ---
     st.write("") 
@@ -922,43 +924,36 @@ def show_competitors_page():
             use_container_width=True,
             column_config={
                 "brand_name": "Бренд",
-                "Mentions": st.column_config.ProgressColumn(
-                    "Згадок", 
-                    format="%d", 
-                    min_value=0, 
-                    max_value=int(stats['Mentions'].max())
-                ),
+                "Mentions": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(stats['Mentions'].max())),
                 "Reputation_Text": st.column_config.TextColumn("Репутація"),
                 "Is_My_Brand": st.column_config.CheckboxColumn("Цільовий бренд", disabled=True)
             },
             hide_index=True
         )
 
-    # === TAB 2: ЧАСТОТА ЗГАДКИ (BAR CHART FULL WIDTH) ===
+    # === TAB 2: ЧАСТОТА ЗГАДКИ (BAR CHART) ===
     with tab_freq:
-        st.markdown("##### 📊 Частота згадки")
-        st.caption("Оберіть бренди у таблиці нижче, щоб оновити графік.")
-
-        # 1. Таблиця керування (Згорнута або компактна)
-        with st.expander("🛠️ Керування відображенням брендів", expanded=True):
-            df_freq_editor = stats[['Show', 'brand_name', 'Mentions', 'Is_My_Brand']].copy()
-            df_freq_editor = df_freq_editor.sort_values('Mentions', ascending=False)
-
+        st.markdown("##### 📊 Частота згадки (Share of Voice)")
+        
+        # Керування
+        with st.expander("🛠️ Керування відображенням", expanded=False):
+            df_freq_editor = stats[['Show', 'brand_name', 'Mentions']].sort_values('Mentions', ascending=False)
             edited_freq_df = st.data_editor(
                 df_freq_editor,
                 column_config={
-                    "Show": st.column_config.CheckboxColumn("Показати?", width="small"),
+                    "Show": st.column_config.CheckboxColumn("Show", width="small"),
                     "brand_name": st.column_config.TextColumn("Бренд", disabled=True),
-                    "Mentions": st.column_config.NumberColumn("К-сть", disabled=True),
-                    "Is_My_Brand": None
+                    "Mentions": st.column_config.NumberColumn("К-сть", disabled=True)
                 },
                 hide_index=True,
                 use_container_width=True,
                 key="editor_freq"
             )
 
-        # 2. Графік (На всю ширину)
+        # Графік
         chart_data = edited_freq_df[edited_freq_df['Show'] == True]
+        # Підтягуємо Is_My_Brand для кольору
+        chart_data = pd.merge(chart_data, stats[['brand_name', 'Is_My_Brand']], on='brand_name', how='left')
 
         if not chart_data.empty:
             fig_bar = px.bar(
@@ -967,82 +962,108 @@ def show_competitors_page():
                 y='Mentions',
                 text='Mentions',
                 color='Is_My_Brand',
-                # Наш бренд - Зелений, Конкуренти - Сірий
                 color_discrete_map={True: '#00C896', False: '#E0E0E0', 1: '#00C896', 0: '#E0E0E0'},
                 height=500
             )
-            
             fig_bar.update_traces(textposition='outside')
             fig_bar.update_layout(
-                xaxis_title="Бренди",
-                yaxis_title="Частота згадок",
-                showlegend=False,
-                plot_bgcolor='rgba(0,0,0,0)',
-                margin=dict(l=0, r=0, t=30, b=0)
+                xaxis_title="Бренди", yaxis_title="Частота згадок",
+                showlegend=False, plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=0, r=0, t=30, b=0)
             )
-            
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
-            st.info("Оберіть хоча б один бренд для відображення.")
+            st.info("Оберіть бренд.")
 
-    # === TAB 3: ТОНАЛЬНІСТЬ ===
+    # === TAB 3: ТОНАЛЬНІСТЬ (STACKED BAR) ===
     with tab_sent:
-        st.markdown("##### ⭐ Тональність (Середня оцінка)")
+        st.markdown("##### ⭐ Аналіз Тональності (Розподіл)")
+        st.caption("Структура відгуків: Позитивні vs Нейтральні vs Негативні.")
+
+        # 1. Готуємо дані розподілу (Aggregation)
+        # Групуємо: Бренд + Тональність -> Кількість
+        sent_distribution = df_filtered.groupby(['brand_name', 'sentiment_score']).size().reset_index(name='count')
         
-        col_rep_table, col_rep_chart = st.columns([1.5, 2])
+        # Обчислюємо відсотки
+        total_per_brand = sent_distribution.groupby('brand_name')['count'].transform('sum')
+        sent_distribution['percentage'] = (sent_distribution['count'] / total_per_brand * 100).round(1)
 
-        with col_rep_table:
-            df_rep_editor = stats[['Show', 'brand_name', 'Avg_Sentiment', 'Is_My_Brand']].copy()
-            df_rep_editor = df_rep_editor.sort_values('Avg_Sentiment', ascending=False)
-
-            edited_rep_df = st.data_editor(
-                df_rep_editor,
+        # 2. Керування
+        col_list, col_chart = st.columns([1.5, 2.5])
+        
+        with col_list:
+            # Використовуємо той самий список брендів для вибору
+            df_sent_editor = stats[['Show', 'brand_name', 'Reputation_Text']].sort_values('brand_name')
+            edited_sent_df = st.data_editor(
+                df_sent_editor,
                 column_config={
                     "Show": st.column_config.CheckboxColumn("Show", width="small"),
                     "brand_name": "Бренд",
-                    "Avg_Sentiment": st.column_config.ProgressColumn("Бали (0-100)", min_value=0, max_value=100),
-                    "Is_My_Brand": None
+                    "Reputation_Text": "Загалом"
                 },
                 hide_index=True,
                 use_container_width=True,
                 key="editor_sent"
             )
 
-        with col_rep_chart:
-            chart_data_sent = edited_rep_df[edited_rep_df['Show'] == True]
-            if not chart_data_sent.empty:
-                # Donut Chart для Тональності
-                fig_sent = px.pie(
-                    chart_data_sent,
-                    names='brand_name',
-                    values='Avg_Sentiment',
-                    hole=0.6,
-                    color='Is_My_Brand',
-                    color_discrete_map={True: '#00C896', False: '#D1D1D6', 1: '#00C896', 0: '#D1D1D6'},
-                    hover_data=['brand_name']
-                )
-                fig_sent.update_traces(textinfo='label+value')
-                fig_sent.update_layout(showlegend=False, height=400, margin=dict(t=20, b=20))
-                st.plotly_chart(fig_sent, use_container_width=True)
-            else:
-                st.info("Оберіть бренд.")
+        with col_chart:
+            selected_brands = edited_sent_df[edited_sent_df['Show'] == True]['brand_name'].tolist()
+            chart_data_sent = sent_distribution[sent_distribution['brand_name'].isin(selected_brands)]
 
-    # === TAB 4: СЕРЕДНЯ ПОЗИЦІЯ ===
+            if not chart_data_sent.empty:
+                # Визначаємо порядок кольорів
+                color_map_sent = {
+                    "Позитивний": "#00C896",   # Green
+                    "Нейтральний": "#E0E0E0",  # Grey
+                    "Негативний": "#FF4B4B"    # Red
+                }
+                
+                fig_stack = px.bar(
+                    chart_data_sent,
+                    y="brand_name",
+                    x="percentage",
+                    color="sentiment_score",
+                    orientation='h',
+                    text="percentage",
+                    color_discrete_map=color_map_sent,
+                    category_orders={"sentiment_score": ["Негативний", "Нейтральний", "Позитивний"]}, # Порядок у стеку
+                    height=500
+                )
+                
+                fig_stack.update_traces(texttemplate='%{text}%', textposition='inside')
+                fig_stack.update_layout(
+                    barmode='stack',
+                    xaxis_title="Частка (%)",
+                    yaxis_title="",
+                    legend_title="Тональність",
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    margin=dict(l=0, r=0, t=30, b=0)
+                )
+                st.plotly_chart(fig_stack, use_container_width=True)
+            else:
+                st.info("Оберіть бренд для аналізу.")
+
+    # === TAB 4: СЕРЕДНЯ ПОЗИЦІЯ (DONUT INVERSE) ===
     with tab_rank:
         st.markdown("##### 🏆 Середня позиція")
-        
+        st.caption("Чим краща (менша) позиція, тим більший сектор на діаграмі.")
+
         col_rank_table, col_rank_chart = st.columns([1.5, 2])
 
         with col_rank_table:
-            df_rank_editor = stats[['Show', 'brand_name', 'Avg_Rank', 'Is_My_Brand']].copy()
-            df_rank_editor = df_rank_editor.sort_values('Avg_Rank', ascending=True)
+            # Сортуємо: 1-ше місце (менше число) зверху
+            df_rank_editor = stats[['Show', 'brand_name', 'Avg_Rank', 'Is_My_Brand']].sort_values('Avg_Rank', ascending=True)
 
             edited_rank_df = st.data_editor(
                 df_rank_editor,
                 column_config={
                     "Show": st.column_config.CheckboxColumn("Show", width="small"),
-                    "brand_name": "Бренд",
-                    "Avg_Rank": st.column_config.NumberColumn("Ранг", format="%.1f"),
+                    "brand_name": st.column_config.TextColumn("Бренд", disabled=True),
+                    "Avg_Rank": st.column_config.NumberColumn(
+                        "Сер. Місце", 
+                        format="%.1f",
+                        min_value=1,
+                        max_value=100
+                    ),
                     "Is_My_Brand": None
                 },
                 hide_index=True,
@@ -1051,20 +1072,43 @@ def show_competitors_page():
             )
 
         with col_rank_chart:
-            chart_data_rank = edited_rank_df[edited_rank_df['Show'] == True]
+            chart_data_rank = edited_rank_df[edited_rank_df['Show'] == True].copy()
+            
             if not chart_data_rank.empty:
-                # Donut Chart для Позицій
+                # --- ЛОГІКА ІНВЕРСІЇ ---
+                # Знаходимо максимальний ранг серед відображених (або фіксований, напр. 20)
+                max_rank_val = chart_data_rank['Avg_Rank'].max()
+                base_val = max_rank_val + 2 # +2 щоб навіть останній мав хоч якусь вагу
+                
+                # Обчислюємо "Visual Score" (чим менший ранг, тим більше число)
+                chart_data_rank['Inverse_Score'] = base_val - chart_data_rank['Avg_Rank']
+
                 fig_rank = px.pie(
                     chart_data_rank,
                     names='brand_name',
-                    values='Avg_Rank',
+                    values='Inverse_Score', # Використовуємо інвертовану вагу для розміру
                     hole=0.6,
                     color='Is_My_Brand',
                     color_discrete_map={True: '#00C896', False: '#FFCE56', 1: '#00C896', 0: '#FFCE56'},
                     hover_data=['brand_name']
                 )
-                fig_rank.update_traces(textinfo='label+value', hovertemplate="<b>%{label}</b><br>Середнє місце: %{value:.1f}")
-                fig_rank.update_layout(showlegend=False, height=400, margin=dict(t=20, b=20))
+                
+                # Але у підписах показуємо РЕАЛЬНИЙ ранг!
+                # Використовуємо custom_data для передачі реального Avg_Rank у шаблон
+                fig_rank.update_traces(
+                    customdata=chart_data_rank[['Avg_Rank']],
+                    textinfo='label', # Показуємо лише назву, значення (інвертоване) сховаємо
+                    hovertemplate = "<b>%{label}</b><br>Середнє місце: %{customdata[0]:.1f}"
+                )
+                
+                # Додаємо анотацію по центру з лідером
+                leader = chart_data_rank.iloc[0] # Вже відсортовано
+                fig_rank.update_layout(
+                    showlegend=False, 
+                    margin=dict(t=20, b=20, l=20, r=20), 
+                    height=350,
+                    annotations=[dict(text=f"Лідер:<br>{leader['brand_name']}<br>#{leader['Avg_Rank']:.1f}", x=0.5, y=0.5, font_size=14, showarrow=False)]
+                )
                 st.plotly_chart(fig_rank, use_container_width=True)
             else:
                 st.info("Оберіть бренд.")
