@@ -774,7 +774,9 @@ def onboarding_wizard():
 def show_competitors_page():
     """
     Сторінка глибокого конкурентного аналізу.
-    Оновлено: Репутація текстом, фільтрація таблиці.
+    Оновлено: 
+    1. Фільтрація брендів (Show/Hide).
+    2. Градієнтне фарбування (Theming) для графіку Репутації.
     """
     import pandas as pd
     import plotly.express as px
@@ -835,27 +837,26 @@ def show_competitors_page():
 
         df_mentions = pd.DataFrame(mentions_resp.data)
 
-        # D. Master Data (Об'єднуємо все в одну таблицю)
+        # D. Master Data
         df_full = pd.merge(df_mentions, df_scans, left_on='scan_result_id', right_on='id', how='left')
 
     except Exception as e:
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # --- 2. ФІЛЬТРИ ---
-    # Виносимо фільтри на видноту
+    # --- 2. ФІЛЬТРИ ДАНИХ (Global Filters) ---
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
             all_models = list(MODEL_MAPPING.keys())
-            sel_models = st.multiselect("🤖 Фільтр по LLM:", all_models, default=all_models, help="Оберіть, чиї відповіді враховувати в таблиці")
+            sel_models = st.multiselect("🤖 Фільтр по ЛЛМ:", all_models, default=all_models, help="Чиї відповіді враховувати?")
             sel_tech_models = [MODEL_MAPPING[m] for m in sel_models]
 
         with c2:
             all_kws = df_full['keyword_text'].dropna().unique().tolist()
             sel_kws = st.multiselect("🔎 Фільтр по Запитах:", all_kws, default=all_kws)
 
-    # Застосування фільтрів до Master Data
+    # Застосування технічних фільтрів
     if sel_tech_models:
         mask_model = df_full['provider'].apply(lambda x: any(t in str(x) for t in sel_tech_models))
     else:
@@ -883,11 +884,10 @@ def show_competitors_page():
     stats = df_filtered.groupby('brand_name').agg(
         Mentions=('id_x', 'count'),
         Avg_Rank=('rank_position', 'mean'),
-        Avg_Sentiment=('sent_score_num', 'mean'), # Середнє число (0-100)
+        Avg_Sentiment=('sent_score_num', 'mean'),
         Is_My_Brand=('is_my_brand', 'max')
     ).reset_index()
 
-    # --- 4. КОНВЕРТАЦІЯ РЕПУТАЦІЇ В ТЕКСТ ---
     def score_to_text(score):
         if score >= 60: return "🟢 Позитивна"
         if score <= 40: return "🔴 Негативна"
@@ -895,21 +895,38 @@ def show_competitors_page():
 
     stats['Reputation_Text'] = stats['Avg_Sentiment'].apply(score_to_text)
 
+    # --- 4. ФІЛЬТР БРЕНДІВ (ВІЗУАЛІЗАЦІЯ) ---
+    # Додаємо можливість вимкнути бренди з графіків
+    st.write("")
+    all_brands_list = stats['brand_name'].unique().tolist()
+    
+    # Знаходимо наш бренд, щоб він був завжди першим або виділеним
+    my_brand_name = proj.get("brand_name")
+    
+    with st.expander("👁️ Налаштування видимості брендів", expanded=False):
+        selected_brands = st.multiselect(
+            "Оберіть бренди для відображення:", 
+            options=all_brands_list, 
+            default=all_brands_list  # По замовчуванню показуємо всі
+        )
+    
+    if not selected_brands:
+        st.warning("Оберіть хоча б один бренд.")
+        return
+
+    # Фільтруємо статистику для графіків
+    stats_show = stats[stats['brand_name'].isin(selected_brands)].copy()
+
     # --- 5. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ---
     st.write("") 
-    tab_list, tab_sov, tab_rep = st.tabs(["📋 Детальний рейтинг", "📊 Share of Voice", "⭐ Репутація"])
+    tab_list, tab_sov, tab_rep = st.tabs(["📋 Детальний рейтинг", "📊 Share of Voice", "⭐ Репутація (Heatmap)"])
 
-    # === TAB 1: ДЕТАЛЬНИЙ РЕЙТИНГ (ТАБЛИЦЯ) ===
+    # === TAB 1: ТАБЛИЦЯ ===
     with tab_list:
-        st.markdown("##### 📋 Зведена таблиця показників")
-        st.caption("Таблиця оновлюється відповідно до обраних фільтрів зверху.")
+        st.markdown("##### 📋 Порівняльна таблиця")
         
-        # Підготовка таблиці
-        display_df = stats.copy()
-        display_df = display_df.sort_values('Mentions', ascending=False)
+        display_df = stats_show.sort_values('Mentions', ascending=False)
         
-        # Формування фінального вигляду
-        # Використовуємо нову колонку Reputation_Text
         display_df_show = display_df[['brand_name', 'Mentions', 'Reputation_Text', 'Avg_Rank', 'Is_My_Brand']].copy()
         display_df_show.columns = ['Бренд', 'Згадок', 'Репутація', 'Сер. Позиція', 'Це ми?']
         
@@ -920,16 +937,8 @@ def show_competitors_page():
             display_df_show,
             use_container_width=True,
             column_config={
-                "Згадок": st.column_config.ProgressColumn(
-                    "Згадок", 
-                    format="%d", 
-                    min_value=0, 
-                    max_value=int(stats['Mentions'].max())
-                ),
-                "Репутація": st.column_config.TextColumn(
-                    "Репутація",
-                    width="medium"
-                ),
+                "Згадок": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(stats['Mentions'].max())),
+                "Репутація": st.column_config.TextColumn("Репутація", width="medium"),
                 "Це ми?": st.column_config.CheckboxColumn("Наш бренд?", disabled=True)
             },
             hide_index=True
@@ -937,9 +946,9 @@ def show_competitors_page():
 
     # === TAB 2: SHARE OF VOICE ===
     with tab_sov:
-        st.markdown("##### 📊 Хто найгучніший? (Кількість згадок)")
+        st.markdown("##### 📊 Хто найгучніший?")
         
-        sov_data = stats.sort_values('Mentions', ascending=True)
+        sov_data = stats_show.sort_values('Mentions', ascending=True)
         
         fig_sov = px.bar(
             sov_data,
@@ -947,9 +956,10 @@ def show_competitors_page():
             y="brand_name",
             orientation='h',
             text="Mentions",
+            # Тут використовуємо фіксовані кольори: Ми vs Конкуренти
             color="Is_My_Brand",
             color_discrete_map={True: '#00C896', False: '#E0E0E0'},
-            height=500
+            height=max(400, len(sov_data) * 40) # Адаптивна висота
         )
         fig_sov.update_layout(
             yaxis_title="",
@@ -960,21 +970,31 @@ def show_competitors_page():
         )
         st.plotly_chart(fig_sov, use_container_width=True)
 
-    # === TAB 3: РЕПУТАЦІЯ (ТОНАЛЬНІСТЬ) ===
+    # === TAB 3: РЕПУТАЦІЯ (THEMING / HEATMAP) ===
     with tab_rep:
-        st.markdown("##### ⭐ Хто найякісніший? (Середня тональність)")
+        st.markdown("##### ⭐ Аналіз тональності (Heatmap)")
+        st.caption("Колір показує якість відгуків: 🔴 Негатив (0-30) → 🟡 Нейтрально (40-60) → 🟢 Позитив (70-100).")
         
-        rep_data = stats.sort_values('Avg_Sentiment', ascending=True)
+        # Сортуємо за якістю репутації
+        rep_data = stats_show.sort_values('Avg_Sentiment', ascending=True)
         
+        # Графік з градієнтом (Continuous Color Scale)
         fig_rep = px.bar(
             rep_data,
             x="Avg_Sentiment",
             y="brand_name",
             orientation='h',
-            text=rep_data['Reputation_Text'], # Показуємо текст на графіку теж
-            color="Is_My_Brand",
-            color_discrete_map={True: '#00C896', False: '#D1D1D6'},
-            height=500
+            text="Reputation_Text", 
+            # 🔥 THEMING: Фарбуємо в залежності від Балів
+            color="Avg_Sentiment",
+            # Градієнт: Червоний -> Сірий -> Зелений (Virshi Green)
+            color_continuous_scale=[
+                (0.0, "#FF4B4B"),   # 0% - Негатив (Red)
+                (0.5, "#E0E0E0"),   # 50% - Нейтрально (Grey)
+                (1.0, "#00C896")    # 100% - Позитив (Green)
+            ],
+            range_color=[0, 100],   # Фіксуємо шкалу від 0 до 100
+            height=max(400, len(rep_data) * 40)
         )
         
         fig_rep.update_layout(
@@ -982,9 +1002,11 @@ def show_competitors_page():
             yaxis_title="",
             showlegend=False,
             plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=0, r=0, t=30, b=0)
+            margin=dict(l=0, r=0, t=30, b=0),
+            coloraxis_showscale=False # Ховаємо шкалу кольорів збоку для чистоти
         )
         
+        # Лінія нейтральності
         fig_rep.add_vline(x=50, line_width=1, line_dash="dash", line_color="gray", annotation_text="Нейтрально")
         
         st.plotly_chart(fig_rep, use_container_width=True)
