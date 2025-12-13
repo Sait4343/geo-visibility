@@ -1438,11 +1438,11 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FIXED & RESTORED.
-    1. Вкладки (Tabs) відображаються завжди.
-    2. Повернуто графіки брендів та джерел.
-    3. Виправлено шкалу часу (X-axis).
-    4. Збережено фіолетовий дизайн та глосарій.
+    ВЕРСІЯ: FINAL RESTORED.
+    1. Повернуто блок "Налаштування та Нове сканування".
+    2. Виправлено підписи на графіках-бубликах (без brand_name).
+    3. Фільтр LLM показує всі варіанти завжди.
+    4. Шкала часу на графіку відображається коректно.
     """
     import pandas as pd
     import plotly.express as px
@@ -1460,14 +1460,14 @@ def show_keyword_details(kw_id):
     else:
         supabase = globals()['supabase']
 
-    # Список всіх моделей для вкладок
-    ALL_MODELS_UI = ["Perplexity", "OpenAI GPT", "Google Gemini"]
-    
+    # Налаштування моделей (UI -> DB ID)
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
+    ALL_MODELS_UI = list(MODEL_MAPPING.keys())
+    ALL_MODELS_DB = list(MODEL_MAPPING.values())
 
     # --- HELPER: TOOLTIP ---
     def tooltip(text):
@@ -1506,6 +1506,35 @@ def show_keyword_details(kw_id):
     with col_title:
         st.markdown(f"<h3 style='margin-top: -5px;'>🔍 {keyword_text}</h3>", unsafe_allow_html=True)
 
+    # 🔥 1. ПОВЕРНУТО БЛОК НАЛАШТУВАНЬ І ЗАПУСКУ
+    with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            new_text = st.text_input("Редагувати запит", value=keyword_text, key="edit_kw_input")
+            if st.button("💾 Зберегти зміни", key="save_kw_btn"):
+                if new_text and new_text != keyword_text:
+                    supabase.table("keywords").update({"keyword_text": new_text}).eq("id", kw_id).execute()
+                    st.success("Збережено!")
+                    st.rerun()
+        with c2:
+            # Вибір моделей для запуску
+            selected_models_ui = st.multiselect(
+                "Оберіть моделі для сканування:", 
+                options=ALL_MODELS_UI, 
+                default=["Perplexity"], 
+                key="rescan_models_select"
+            )
+            
+            if st.button("🚀 Запустити сканування", key="rescan_btn"):
+                proj = st.session_state.get("current_project", {})
+                if 'n8n_trigger_analysis' in globals():
+                    # Передаємо project_id, список слів, бренд і обрані моделі
+                    st.info("Відправка задачі...")
+                    n8n_trigger_analysis(project_id, [new_text], proj.get("brand_name"), models=selected_models_ui)
+                    st.success("Задачу відправлено! Результати з'являться через хвилину.")
+                else:
+                    st.error("Функція запуску не знайдена.")
+
     # 2. ОТРИМАННЯ ДАНИХ
     try:
         # A. Сканування
@@ -1517,7 +1546,6 @@ def show_keyword_details(kw_id):
         
         scans_data = scans_resp.data if scans_resp.data else []
         
-        # Якщо немає даних, все одно показуємо інтерфейс, але пустий
         df_scans = pd.DataFrame(scans_data)
         if not df_scans.empty:
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
@@ -1558,7 +1586,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. АГРЕГАЦІЯ
+    # 3. АГРЕГАЦІЯ ДЛЯ KPI
     if not df_full.empty:
         df_full['my_mention_val'] = df_full.apply(lambda x: x['mention_count'] if x['is_my_brand'] else 0, axis=1)
 
@@ -1580,9 +1608,7 @@ def show_keyword_details(kw_id):
     else:
         df_my_brand = pd.DataFrame()
 
-    # ==========================================
-    # 4. РОЗРАХУНОК МЕТРИК
-    # ==========================================
+    # 4. KPI & DELTA
     if not scan_stats.empty:
         avg_sov = scan_stats['sov'].mean()
     else:
@@ -1602,19 +1628,17 @@ def show_keyword_details(kw_id):
         display_pos = "-"
         pos_pct, neg_pct, neu_pct = 0, 0, 0
 
-    # Delta
+    # Delta logic
     if not scan_stats.empty:
         first_scan = scan_stats.iloc[0]
         first_sov = first_scan['sov']
         first_mentions = first_scan['my_mentions']
         
-        # Спробуємо знайти позицію в першому скані
         if not df_my_brand.empty:
             first_brand_rows = df_my_brand[df_my_brand['scan_result_id'] == first_scan['scan_id']]
             if not first_brand_rows.empty:
                 first_pos = first_brand_rows['rank_position'].mean()
                 first_pos = first_pos if pd.notna(first_pos) else 0
-                
                 f_s_counts = first_brand_rows['sentiment_score'].value_counts(normalize=True) * 100
                 first_pos_pct = f_s_counts.get("Позитивний", 0.0)
             else:
@@ -1632,7 +1656,6 @@ def show_keyword_details(kw_id):
         delta_pos = first_pos - avg_pos
     else:
         delta_pos = 0
-    
     delta_sent = pos_pct - first_pos_pct
 
     def get_delta_html(val, suffix="", inverse=False):
@@ -1641,8 +1664,8 @@ def show_keyword_details(kw_id):
         arrow = "↑" if val > 0 else "↓"
         return f"<span style='color:{color}; font-size:12px; font-weight:600;'>{arrow} {abs(val):.1f}{suffix}</span>"
 
-    # 5. ВІДОБРАЖЕННЯ KPI
-    if scans_data: # Показуємо KPI тільки якщо є дані
+    # ВІДОБРАЖЕННЯ KPI
+    if scans_data:
         st.markdown("""
         <style>
             .stat-box {
@@ -1685,7 +1708,7 @@ def show_keyword_details(kw_id):
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-    # 6. ГРАФІК ДИНАМІКИ
+    # 5. ГРАФІК ДИНАМІКИ
     st.markdown("##### 📈 Динаміка показників")
     
     if not df_my_brand.empty:
@@ -1708,8 +1731,13 @@ def show_keyword_details(kw_id):
             else:
                 date_range = None
         with f_col3:
-            avail = df_chart['provider'].unique().tolist() if not df_chart.empty else []
-            selected_providers = st.multiselect("Фільтр по LLM:", options=avail, default=avail)
+            # 🔥 2. ФІЛЬТР: Показуємо ВСІ моделі, навіть якщо їх немає в даних
+            # Об'єднуємо моделі з даних і список всіх можливих, прибираємо дублі
+            existing = df_chart['provider'].unique().tolist() if not df_chart.empty else []
+            # Переконаємось що всі стандартні моделі є в списку
+            all_options = sorted(list(set(existing + ALL_MODELS_DB)))
+            
+            selected_providers = st.multiselect("Фільтр по LLM:", options=all_options, default=all_options)
 
     if not df_chart.empty and date_range:
         if isinstance(date_range, tuple):
@@ -1750,11 +1778,11 @@ def show_keyword_details(kw_id):
             if y_range: fig.update_yaxes(range=y_range)
             if metric_choice == "Позиція у списку": fig.update_yaxes(autorange="reversed")
 
-            # 🔥 FIX: Примусове відображення осі X (навіть для 1 точки)
             fig.update_xaxes(
                 showgrid=True,
                 showticklabels=True,
-                tickformat="%d.%m\n%H:%M" # День.Місяць Час
+                tickformat="%d.%m\n%H:%M",
+                title_text="Час"
             )
             
             fig.update_layout(
@@ -1767,32 +1795,19 @@ def show_keyword_details(kw_id):
         else:
             st.info("Немає даних за обраний період.")
     else:
-        # Якщо немає даних взагалі - кнопка запуску
-        st.info("Ще немає історії сканувань для графіка.")
-        with st.expander("⚙️ Запустити сканування", expanded=True):
-             c1, c2 = st.columns(2)
-             with c2:
-                selected_models_ui = st.multiselect("Моделі:", ALL_MODELS_UI, default=["Perplexity"], key="rescan_models_select_empty")
-                if st.button("🚀 Сканувати зараз", key="rescan_btn_empty"):
-                     proj = st.session_state.get("current_project", {})
-                     if 'n8n_trigger_analysis' in globals():
-                         n8n_trigger_analysis(project_id, [keyword_text], proj.get("brand_name"), models=selected_models_ui)
-                         st.success("Запущено!")
+        st.info("Для побудови графіка потрібна історія сканувань.")
 
     st.markdown("---")
 
-    # 7. ДЕТАЛІЗАЦІЯ (ВКЛАДКИ - ЗАВЖДИ ВИДИМІ)
+    # 7. ДЕТАЛІЗАЦІЯ (ВКЛАДКИ)
     st.markdown("##### 📝 Детальний аналіз відповідей")
     
-    # 🔥 FIX: Створюємо вкладки статично для всіх моделей
     tabs = st.tabs(ALL_MODELS_UI)
     
     for tab, ui_model_name in zip(tabs, ALL_MODELS_UI):
         with tab:
-            # Отримуємо ID моделі для пошуку в базі
             tech_model_id = MODEL_MAPPING.get(ui_model_name)
             
-            # Фільтруємо скани для цієї конкретної моделі
             if not df_scans.empty:
                 model_scans = df_scans[df_scans['provider'] == tech_model_id].sort_values('created_at', ascending=False)
             else:
@@ -1811,7 +1826,6 @@ def show_keyword_details(kw_id):
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             raw_text = current_scan_row.get('raw_response', '')
             
-            # Текст відповіді
             st.markdown("**Відповідь AI:**")
             with st.container(border=True):
                 proj = st.session_state.get("current_project", {})
@@ -1827,7 +1841,7 @@ def show_keyword_details(kw_id):
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- БЛОК БРЕНДІВ (ПОВЕРНУТО ГРАФІК) ---
+            # --- БРЕНДИ (ВИПРАВЛЕНО ГРАФІК) ---
             st.markdown(f"**Знайдені бренди:** {tooltip('Бренди, які AI згадав у цій відповіді.')}", unsafe_allow_html=True)
             
             scan_mentions = pd.DataFrame()
@@ -1835,20 +1849,26 @@ def show_keyword_details(kw_id):
                 scan_mentions = df_mentions[df_mentions['scan_result_id'] == selected_scan_id].copy()
             
             if not scan_mentions.empty:
-                # 🔥 FIX: Фільтруємо тільки ті, де згадок > 0 (щоб не показувати пусті)
                 scan_mentions = scan_mentions[scan_mentions['mention_count'] > 0]
                 scan_mentions = scan_mentions.sort_values('mention_count', ascending=False)
 
                 if not scan_mentions.empty:
-                    # 1. Графік (Pie Chart)
+                    # 🔥 3. ГРАФІК: КРАСИВІ ПІДПИСИ (Hovers)
                     fig_brands = px.pie(
                         scan_mentions, 
                         values='mention_count', 
                         names='brand_name',
                         hole=0.5,
-                        color_discrete_sequence=px.colors.qualitative.Pastel
+                        color_discrete_sequence=px.colors.qualitative.Pastel,
+                        # Перейменовуємо поля для гарного відображення
+                        labels={'brand_name': 'Бренд', 'mention_count': 'Згадок'}
                     )
-                    fig_brands.update_traces(textposition='inside', textinfo='percent+label')
+                    # Налаштовуємо шаблон підказки
+                    fig_brands.update_traces(
+                        textposition='inside', 
+                        textinfo='percent+label',
+                        hovertemplate='<b>%{label}</b><br>Згадок: %{value}'
+                    )
                     fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
                     
                     c_chart, c_table = st.columns([1, 1.5])
@@ -1868,13 +1888,13 @@ def show_keyword_details(kw_id):
                             hide_index=True
                         )
                 else:
-                     st.info("Брендів у цій відповіді не знайдено.")
+                     st.info("Брендів не знайдено.")
             else:
-                st.info("Брендів у цій відповіді не знайдено.")
+                st.info("Брендів не знайдено.")
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- БЛОК ДЖЕРЕЛ (ПОВЕРНУТО ГРАФІК) ---
+            # --- ДЖЕРЕЛА (ВИПРАВЛЕНО ГРАФІК) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
@@ -1897,9 +1917,14 @@ def show_keyword_details(kw_id):
                                 domain_counts.head(10), 
                                 values='count', 
                                 names='domain', 
-                                hole=0.5
+                                hole=0.5,
+                                labels={'domain': 'Домен', 'count': 'Кількість'}
                             )
-                            fig_src.update_traces(textposition='inside', textinfo='percent')
+                            fig_src.update_traces(
+                                textposition='inside', 
+                                textinfo='percent',
+                                hovertemplate='<b>%{label}</b><br>Кількість: %{value}'
+                            )
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
                             
                             c_src_chart, c_src_table = st.columns([1, 2])
