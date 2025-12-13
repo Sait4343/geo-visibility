@@ -1439,11 +1439,11 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL PRODUCTION (ALL BUGS FIXED).
-    1. SyntaxError: Виправлено (st.date_input).
-    2. Metrics: Логіка розрахунку локальних метрик переписана (без #nan).
-    3. UI: Джерела згруповані, графіки відцентровані.
-    4. Data: Безпечне використання scan_id.
+    ВЕРСІЯ: FINAL FIXED & POLISHED.
+    1. Повернуто сповіщення про успішний запуск (з затримкою).
+    2. Повернуто глосарій (tooltips) для метрик.
+    3. Виправлено логіку Тональності (100% розподіл або 0).
+    4. Виправлено відображення метрик після пересканування.
     """
     import pandas as pd
     import plotly.express as px
@@ -1451,6 +1451,7 @@ def show_keyword_details(kw_id):
     import streamlit as st
     from datetime import datetime, timedelta
     import numpy as np
+    import time  # Додано для затримки сповіщення
     
     # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
@@ -1569,7 +1570,9 @@ def show_keyword_details(kw_id):
                                 proj.get("brand_name"), 
                                 models=selected_models_to_run
                             )
-                            st.success("Задачу відправлено!")
+                            # 🔥 FIX: Показуємо сповіщення і чекаємо
+                            st.success("Задачу відправлено! Оновлення даних...")
+                            time.sleep(2) 
                             st.session_state[confirm_run_key] = False
                             st.rerun()
                         else:
@@ -1591,7 +1594,6 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
@@ -1631,7 +1633,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL)
+    # 3. KPI (GLOBAL LOGIC)
     if not df_mentions.empty:
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
@@ -1654,7 +1656,7 @@ def show_keyword_details(kw_id):
         avg_pos = my_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # Sentiment
+        # Sentiment (Global 100% Logic)
         my_sentiment = df_mentions[df_mentions['is_my_brand'] == True]['sentiment_score']
         if not my_sentiment.empty:
             s_counts = my_sentiment.value_counts(normalize=True) * 100
@@ -1669,14 +1671,8 @@ def show_keyword_details(kw_id):
         display_pos = "-"
         pos_pct, neg_pct, neu_pct = 0, 0, 0
 
-    # Delta (Placeholder)
+    # Delta
     delta_sov, delta_mentions, delta_pos = 0, 0, 0
-
-    def get_delta_html(val, suffix="", inverse=False):
-        if val == 0: return f"<span style='color:#999; font-size:12px;'>без змін</span>"
-        color = "#00C896" if val > 0 else "#FF4B4B" 
-        arrow = "↑" if val > 0 else "↓"
-        return f"<span style='color:{color}; font-size:12px; font-weight:600;'>{arrow} {abs(val):.1f}{suffix}</span>"
 
     st.markdown("""
     <style>
@@ -1723,7 +1719,6 @@ def show_keyword_details(kw_id):
     # 4. ГРАФІК ДИНАМІКИ
     st.markdown("##### 📈 Динаміка показників")
 
-    # 🔥 FIX: ВИКОРИСТОВУЄМО scan_id ДЛЯ ГРУПУВАННЯ
     if not df_full.empty and 'scan_id' in df_full.columns:
         totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
         totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
@@ -1740,9 +1735,12 @@ def show_keyword_details(kw_id):
             if not df_plot_base.empty:
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
-                
-                # 🔥 FIX: SYNTAX ERROR ВИПРАВЛЕНО (ОДИН РЯДОК)
-                date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
+                date_range = st.date_input(
+                    "Діапазон дат:", 
+                    value=(min_d, max_d), 
+                    min_value=min_d, 
+                    max_value=max_d
+                )
             else:
                 date_range = None
                 st.date_input("Діапазон дат:", disabled=True)
@@ -1840,7 +1838,7 @@ def show_keyword_details(kw_id):
             selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS (ВИПРАВЛЕНО #nan) ---
+            # --- LOCAL METRICS ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не знайдено"
@@ -1862,7 +1860,6 @@ def show_keyword_details(kw_id):
                     loc_mentions = int(val_my_mentions)
                     loc_sov = (val_my_mentions / total_in_scan * 100) if total_in_scan > 0 else 0
                     loc_sent = val_sentiment
-                    # FIX #nan:
                     loc_rank_str = f"#{val_rank:.0f}" if pd.notna(val_rank) else "-"
             
             sent_color = "#333"
@@ -1873,19 +1870,19 @@ def show_keyword_details(kw_id):
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ЧАСТКА ГОЛОСУ (SOV)</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ЧАСТКА ГОЛОСУ (SOV) {tooltip('Відсоток згадок вашого бренду в цій конкретній відповіді.')}</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_sov:.1f}%</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ЗГАДОК БРЕНДУ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ЗГАДОК БРЕНДУ {tooltip('Кількість разів, коли бренд був згаданий.')}</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_mentions}</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ТОНАЛЬНІСТЬ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ТОНАЛЬНІСТЬ {tooltip('Емоційне забарвлення згадки в цій відповіді.')}</div>
                     <div style="font-size:18px; font-weight:600; color:{sent_color}; margin-top:5px;">{loc_sent}</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ПОЗИЦІЯ У СПИСКУ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ПОЗИЦІЯ У СПИСКУ {tooltip('Порядковий номер першої згадки бренду.')}</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_rank_str}</div>
                 </div>
             </div>
@@ -1996,7 +1993,6 @@ def show_keyword_details(kw_id):
                     st.info("ℹ️ Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка завантаження джерел: {e}")
-
 
 def show_keywords_page():
     """
