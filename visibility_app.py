@@ -1438,9 +1438,8 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    Оновлено:
-    - Графік: фікс шкали SOV (0-100), вибір дат, адаптивна вісь часу.
-    - KPI: Фіолетовий дизайн, Delta (зміни від першого скану).
+    Виправлено: KeyError (конфлікт id) та відновлено повний функціонал (Вкладки, Тексти, Джерела).
+    Додано: Глосарій, Дельта змін, Графік часу, Зменшений заголовок.
     """
     import pandas as pd
     import plotly.express as px
@@ -1464,6 +1463,10 @@ def show_keyword_details(kw_id):
         "Google Gemini": "gemini-1.5-pro"
     }
 
+    # --- HELPER: TOOLTIP ---
+    def tooltip(text):
+        return f'<span title="{text}" style="cursor:help; font-size:14px; color:#999; margin-left:4px;">ℹ️</span>'
+
     # 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ
     try:
         kw_resp = supabase.table("keywords").select("*").eq("id", kw_id).execute()
@@ -1480,7 +1483,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка БД: {e}")
         return
 
-    # HEADER
+    # HEADER (ЗМЕНШЕНИЙ ШРИФТ + КНОПКА НАЗАД)
     col_back, col_title = st.columns([1, 15])
     with col_back:
         if st.button("⬅", key="back_from_details", help="Назад до списку"):
@@ -1490,7 +1493,7 @@ def show_keyword_details(kw_id):
     with col_title:
         st.markdown(f"<h3 style='margin-top: -5px;'>🔍 {keyword_text}</h3>", unsafe_allow_html=True)
 
-    # 2. ОТРИМАННЯ ДАНИХ
+    # 2. ОТРИМАННЯ ДАНИХ (SCANS + MENTIONS)
     try:
         # A. Сканування
         scans_resp = supabase.table("scan_results")\
@@ -1522,8 +1525,9 @@ def show_keyword_details(kw_id):
             return
 
         df_scans = pd.DataFrame(scans_data)
+        # 🔥 ВАЖЛИВО: Перейменовуємо ID скану, щоб уникнути KeyError
         df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
-        # Convert timezone-aware to naive for simpler plotting/filtering
+        
         df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
         df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
 
@@ -1539,16 +1543,19 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # C. Об'єднання
+        # C. Об'єднання (Master DF) - БЕЗПЕЧНИЙ МЕТОД
         if not df_mentions.empty:
+            # Заповнюємо is_my_brand
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
+            
+            # Мердж: scan_id (ліво) == scan_result_id (право)
             df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
         else:
             df_full = df_scans.copy()
             df_full['mention_count'] = 0
             df_full['is_my_brand'] = False
-            df_full['scan_result_id'] = df_full['scan_id']
+            df_full['scan_result_id'] = df_full['scan_id'] # Заповнюємо для цілісності
             df_full['sentiment_score'] = None
             df_full['rank_position'] = None
 
@@ -1556,10 +1563,12 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. АГРЕГАЦІЯ ДЛЯ СТАТИСТИКИ
+    # 3. АГРЕГАЦІЯ СТАТИСТИКИ (Fix KeyError: використовуємо scan_id)
+    
+    # Створюємо колонку для підрахунку власних згадок
     df_full['my_mention_val'] = df_full.apply(lambda x: x['mention_count'] if x['is_my_brand'] else 0, axis=1)
 
-    # Агрегація по скан-ід (щоб отримати метрики кожного скану окремо)
+    # Агрегуємо по scan_id (тепер це унікальний ідентифікатор кожного запуску)
     if 'scan_id' in df_full.columns:
         scan_stats = df_full.groupby('scan_id').agg(
             total_mentions=('mention_count', 'sum'),
@@ -1567,13 +1576,14 @@ def show_keyword_details(kw_id):
             provider=('provider', 'first'),
             created_at=('created_at', 'first'),
             date_str=('date_str', 'first')
-        ).reset_index().sort_values('created_at') # Сортуємо по часу!
+        ).reset_index().sort_values('created_at')
         
+        # Рахуємо SOV
         scan_stats['sov'] = scan_stats.apply(lambda x: (x['my_mentions'] / x['total_mentions'] * 100) if x['total_mentions'] > 0 else 0, axis=1)
     else:
         scan_stats = pd.DataFrame()
 
-    # Отримуємо дані для тональності та позиції
+    # Отримуємо дані тільки мого бренду для тональності та позиції
     if not df_mentions.empty:
         df_my_brand = df_mentions[df_mentions['is_my_brand'] == True].copy()
     else:
@@ -1605,18 +1615,13 @@ def show_keyword_details(kw_id):
         first_scan = scan_stats.iloc[0] # Найстаріший скан
         first_scan_id = first_scan['scan_id']
         first_sov = first_scan['sov']
-        
-        # Згадки в першому скані
         first_mentions = first_scan['my_mentions']
         
-        # Позиція та тональність в першому скані
         if not df_my_brand.empty:
             first_brand_rows = df_my_brand[df_my_brand['scan_result_id'] == first_scan_id]
             if not first_brand_rows.empty:
                 first_pos = first_brand_rows['rank_position'].mean()
                 first_pos = first_pos if pd.notna(first_pos) else 0
-                # Для тональності беремо просто домінуючу або % позитиву першого скану?
-                # Давайте візьмемо % позитиву першого скану як бенчмарк
                 f_s_counts = first_brand_rows['sentiment_score'].value_counts(normalize=True) * 100
                 first_pos_pct = f_s_counts.get("Позитивний", 0.0)
             else:
@@ -1630,13 +1635,14 @@ def show_keyword_details(kw_id):
 
     # 3. Розрахунок Delta
     delta_sov = avg_sov - first_sov
-    delta_mentions = int(total_my_mentions) - int(first_mentions) # Тут сумарна vs перша трохи дивно, але покажемо приріст бази
-    # Для згадок краще показати: Середня кількість згадок зараз vs В першому скані
-    # Але користувач просив "на скільки змінилось". Покажемо різницю.
     
-    # Для позиції: (Менше - краще). Якщо було 5, стало 1 -> покращення. Delta = 5 - 1 = 4. 
+    # Для згадок: порівнюємо середнє зараз vs перше
+    avg_mentions_per_scan = scan_stats['my_mentions'].mean() if not scan_stats.empty else 0
+    delta_avg_mentions = avg_mentions_per_scan - first_mentions
+    
+    # Для позиції (менше = краще, тому інвертуємо)
     if avg_pos and first_pos:
-        delta_pos = first_pos - avg_pos # Позитивна дельта значить покращення (ранг зменшився)
+        delta_pos = first_pos - avg_pos 
     else:
         delta_pos = 0
         
@@ -1645,19 +1651,20 @@ def show_keyword_details(kw_id):
     # --- Хелпер для HTML Дельти ---
     def get_delta_html(val, suffix="", inverse=False):
         if val == 0: return f"<span style='color:#999; font-size:12px;'>без змін</span>"
-        color = "#00C896" if val > 0 else "#FF4B4B" # Зелений ріст
-        if inverse: color = "#00C896" if val < 0 else "#FF4B4B" # Для позиції (але ми вже інвертували логіку вище)
+        # За замовчуванням: більше = зелений. 
+        # Але позиція вже оброблена вище (delta = old - new), тому позитивна дельта = покращення.
+        color = "#00C896" if val > 0 else "#FF4B4B" 
         
         arrow = "↑" if val > 0 else "↓"
         return f"<span style='color:{color}; font-size:12px; font-weight:600;'>{arrow} {abs(val):.1f}{suffix}</span>"
 
-    # 5. ВІДОБРАЖЕННЯ KPI (ФІОЛЕТОВИЙ БОРДЕР)
+    # 5. ВІДОБРАЖЕННЯ KPI (ФІОЛЕТОВИЙ БОРДЕР + ГЛОСАРІЙ)
     st.markdown("""
     <style>
         .stat-box {
             background-color: #ffffff;
             border: 1px solid #E0E0E0;
-            border-top: 4px solid #8041F6; /* ФІОЛЕТОВИЙ БОРДЕР */
+            border-top: 4px solid #8041F6; 
             border-radius: 8px;
             padding: 15px;
             text-align: center;
@@ -1678,40 +1685,38 @@ def show_keyword_details(kw_id):
     """
     if df_my_brand.empty: sent_display = "<span style='color:#999'>Не згадано</span>"
 
-    # Колонки KPI
+    # Колонки KPI з Tooltips
     k1, k2, k3, k4 = st.columns(4)
     
     with k1:
+        tt = tooltip("Частка голосу (Share of Voice) — відсоток згадок вашого бренду серед усіх згаданих брендів у цьому запиті.")
         st.markdown(f"""
         <div class="stat-box">
-            <div class="stat-label">Частка голосу (SOV)</div>
+            <div class="stat-label">Частка голосу (SOV) {tt}</div>
             <div class="stat-value">{avg_sov:.1f}%</div>
             <div class="stat-delta">{get_delta_html(delta_sov, "%")} з початку</div>
         </div>""", unsafe_allow_html=True)
     with k2:
-        # Для згадок показуємо Total, дельта - це приріст нових? 
-        # Давайте покажемо: "Середня за скан" vs "В першому"
-        avg_mentions_per_scan = scan_stats['my_mentions'].mean() if not scan_stats.empty else 0
-        delta_avg_mentions = avg_mentions_per_scan - first_mentions
-        
+        tt = tooltip("Кількість разів, коли AI згадав ваш бренд у відповіді на цей запит.")
         st.markdown(f"""
         <div class="stat-box">
-            <div class="stat-label">Згадок (Всього / Сер.)</div>
-            <div class="stat-value">{int(total_my_mentions)} <span style="font-size:14px; color:#999">({avg_mentions_per_scan:.1f})</span></div>
+            <div class="stat-label">Згадок (Всього) {tt}</div>
+            <div class="stat-value">{int(total_my_mentions)} <span style="font-size:14px; color:#999">({avg_mentions_per_scan:.1f} сер.)</span></div>
             <div class="stat-delta">{get_delta_html(delta_avg_mentions)} сер. ріст</div>
         </div>""", unsafe_allow_html=True)
     with k3:
+        tt = tooltip("Емоційне забарвлення згадок. Відсоток позитивних, нейтральних та негативних контекстів.")
         st.markdown(f"""
         <div class="stat-box">
-            <div class="stat-label">Тональність</div>
+            <div class="stat-label">Тональність {tt}</div>
             <div style="font-size: 14px; font-weight:600; margin-top:5px;">{sent_display}</div>
             <div class="stat-delta">{get_delta_html(delta_sent, "% (pos)")}</div>
         </div>""", unsafe_allow_html=True)
     with k4:
-        # Позиція
+        tt = tooltip("Середня позиція вашого бренду у списку рекомендацій AI. (Менше число — краще, #1 — топ).")
         st.markdown(f"""
         <div class="stat-box">
-            <div class="stat-label">Сер. Позиція</div>
+            <div class="stat-label">Сер. Позиція {tt}</div>
             <div class="stat-value">{display_pos}</div>
             <div class="stat-delta">{get_delta_html(delta_pos, "")} місць</div>
         </div>""", unsafe_allow_html=True)
@@ -1721,7 +1726,6 @@ def show_keyword_details(kw_id):
     # 6. ГРАФІК ДИНАМІКИ (З ФІЛЬТРАМИ І ЧАСОМ)
     st.markdown("##### 📈 Динаміка показників")
     
-    # Готуємо дані
     if not df_my_brand.empty:
         rank_per_scan = df_my_brand.groupby('scan_result_id')['rank_position'].mean().reset_index()
         df_chart = pd.merge(scan_stats, rank_per_scan, left_on='scan_id', right_on='scan_result_id', how='left')
@@ -1740,16 +1744,12 @@ def show_keyword_details(kw_id):
             )
         
         with f_col2:
-            # Date Range Picker
-            min_d = df_chart['created_at'].min().date()
-            max_d = df_chart['created_at'].max().date()
-            
-            date_range = st.date_input(
-                "Діапазон дат:",
-                value=(min_d, max_d),
-                min_value=min_d,
-                max_value=max_d
-            )
+            if not df_chart.empty:
+                min_d = df_chart['created_at'].min().date()
+                max_d = df_chart['created_at'].max().date()
+                date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
+            else:
+                date_range = None
         
         with f_col3:
             available_providers = df_chart['provider'].unique().tolist()
@@ -1760,27 +1760,25 @@ def show_keyword_details(kw_id):
             )
 
     # Фільтрація даних
-    # 1. По даті
-    if isinstance(date_range, tuple):
-        if len(date_range) == 2:
-            start_d, end_d = date_range
-            mask_date = (df_chart['created_at'].dt.date >= start_d) & (df_chart['created_at'].dt.date <= end_d)
-            df_chart = df_chart[mask_date]
-        elif len(date_range) == 1:
-            start_d = date_range[0]
-            mask_date = (df_chart['created_at'].dt.date == start_d)
-            df_chart = df_chart[mask_date]
+    if not df_chart.empty and date_range:
+        if isinstance(date_range, tuple):
+            if len(date_range) == 2:
+                start_d, end_d = date_range
+                mask_date = (df_chart['created_at'].dt.date >= start_d) & (df_chart['created_at'].dt.date <= end_d)
+                df_chart = df_chart[mask_date]
+            elif len(date_range) == 1:
+                start_d = date_range[0]
+                mask_date = (df_chart['created_at'].dt.date == start_d)
+                df_chart = df_chart[mask_date]
 
-    # 2. По LLM
     df_chart_filtered = df_chart[df_chart['provider'].isin(selected_providers)].sort_values('created_at')
 
     if not df_chart_filtered.empty:
-        # Налаштування осей
         if metric_choice == "Частка голосу (SOV)":
             y_col = "sov"
             y_title = "SOV (%)"
             color_seq = ["#00C896"]
-            y_range = [0, 100] # 🔥 FIX: Жорстка шкала 0-100
+            y_range = [0, 100]
         elif metric_choice == "Згадки бренду":
             y_col = "my_mentions"
             y_title = "Кількість згадок"
@@ -1790,29 +1788,24 @@ def show_keyword_details(kw_id):
             y_col = "rank_position"
             y_title = "Позиція"
             color_seq = ["#FF9F40"]
-            y_range = None # Тут буде автореверс
+            y_range = None
 
-        # Графік
         fig = px.line(
             df_chart_filtered, 
-            x="created_at",  # Використовуємо datetime об'єкт для розумної осі
+            x="created_at", 
             y=y_col, 
             color="provider",
             markers=True,
             labels={"created_at": "Час", "provider": "Модель", y_col: y_title}
         )
         
-        # Налаштування осі Y
-        if y_range:
-            fig.update_yaxes(range=y_range)
-        if metric_choice == "Позиція у списку":
-            fig.update_yaxes(autorange="reversed")
+        if y_range: fig.update_yaxes(range=y_range)
+        if metric_choice == "Позиція у списку": fig.update_yaxes(autorange="reversed")
 
-        # Налаштування осі X (Розумний формат)
-        # Plotly сам вирішує, але ми можемо підказати
+        # Адаптивна вісь X
         fig.update_xaxes(
             tickformat="%d.%m\n%H:%M" if len(df_chart_filtered) < 10 else "%d.%m",
-            dtick="D1" if len(date_range) > 1 and isinstance(date_range, tuple) else None # Дні, якщо діапазон великий
+            dtick="D1" if len(date_range) > 1 and isinstance(date_range, tuple) else None
         )
 
         fig.update_layout(
@@ -1823,11 +1816,11 @@ def show_keyword_details(kw_id):
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Немає даних для графіка за обраний період.")
+        st.info("Немає даних для графіка.")
 
     st.markdown("---")
 
-    # 7. ДЕТАЛІЗАЦІЯ (TABS)
+    # 7. ДЕТАЛІЗАЦІЯ (TABS) - ПОВЕРНУТО
     st.markdown("##### 📝 Детальний аналіз відповідей")
     
     unique_models = df_scans['provider'].unique().tolist()
@@ -1842,15 +1835,16 @@ def show_keyword_details(kw_id):
                     st.write("Немає даних.")
                     continue
 
+                # Вибір дати
                 scan_options = {row['date_str']: row['scan_id'] for _, row in model_scans.iterrows()}
                 selected_date = st.selectbox(f"Оберіть дату аналізу ({model}):", list(scan_options.keys()), key=f"sel_date_{model}")
                 selected_scan_id = scan_options[selected_date]
                 
                 # Контент скану
                 current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
-                
-                # Підсвітка бренду
                 raw_text = current_scan_row.get('raw_response', '')
+                
+                # Текст відповіді (з підсвіткою)
                 st.markdown("**Відповідь AI:**")
                 with st.container(border=True):
                     proj = st.session_state.get("current_project", {})
@@ -1864,25 +1858,51 @@ def show_keyword_details(kw_id):
                     else:
                         st.caption("Текст відповіді не збережено.")
 
-                # Таблиця
+                # Таблиця брендів (З Глосарієм)
+                st.markdown(f"**Знайдені бренди:** {tooltip('Список усіх брендів, які AI згадав у відповіді на цей запит.')}", unsafe_allow_html=True)
+                
                 if not df_mentions.empty:
                     scan_mentions = df_mentions[df_mentions['scan_result_id'] == selected_scan_id].copy()
                     if not scan_mentions.empty:
                         scan_mentions = scan_mentions.sort_values('rank_position', ascending=True)
-                        st.markdown("**Знайдені бренди:**")
                         st.dataframe(
                             scan_mentions[['brand_name', 'mention_count', 'rank_position', 'sentiment_score']],
                             column_config={
                                 "brand_name": "Бренд",
-                                "mention_count": "К-сть згадок",
-                                "rank_position": "Позиція",
-                                "sentiment_score": "Тональність"
+                                "mention_count": st.column_config.NumberColumn("К-сть згадок"),
+                                "rank_position": st.column_config.NumberColumn("Позиція"),
+                                "sentiment_score": st.column_config.TextColumn("Тональність")
                             },
                             use_container_width=True,
                             hide_index=True
                         )
                     else:
                         st.info("Брендів не знайдено.")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Джерела (З Глосарієм)
+                st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Список посилань, які AI надав як джерела інформації.')}", unsafe_allow_html=True)
+                try:
+                    sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
+                    sources_data = sources_resp.data
+                    if sources_data:
+                        df_src = pd.DataFrame(sources_data)
+                        if 'url' in df_src.columns:
+                            st.dataframe(
+                                df_src[['url', 'domain', 'is_official']], 
+                                use_container_width=True, 
+                                hide_index=True,
+                                column_config={
+                                    "url": st.column_config.LinkColumn("Посилання"),
+                                    "domain": "Домен",
+                                    "is_official": st.column_config.CheckboxColumn("Офіційне?")
+                                }
+                            )
+                    else:
+                        st.info("ℹ️ Джерел не знайдено.")
+                except:
+                    st.error("Помилка завантаження джерел.")
 
 def show_keywords_page():
     """
