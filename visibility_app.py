@@ -1468,8 +1468,8 @@ def show_dashboard():
 
 def show_keyword_details(kw_id):
     """
-    Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: PRODUCTION STABLE (SYNTAX FIXED).
+    Detailed analytics page for a single keyword.
+    VERSION: PRODUCTION STABLE - FIXED SYNTAX ERROR.
     """
     import pandas as pd
     import plotly.express as px
@@ -1478,17 +1478,17 @@ def show_keyword_details(kw_id):
     from datetime import datetime, timedelta
     import numpy as np
     
-    # 0. ПІДКЛЮЧЕННЯ
+    # 0. DATABASE CONNECTION
     if 'supabase' not in globals():
         if 'supabase' in st.session_state:
             supabase = st.session_state['supabase']
         else:
-            st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
+            st.error("🚨 Error: 'supabase' variable not found.")
             return
     else:
         supabase = globals()['supabase']
 
-    # --- MAPPING ---
+    # --- MAPPING CONFIGURATION ---
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
@@ -1513,11 +1513,11 @@ def show_keyword_details(kw_id):
         if not u.startswith(('http://', 'https://')): return f"https://{u}"
         return u
 
-    # 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ
+    # 1. FETCH KEYWORD DATA
     try:
         kw_resp = supabase.table("keywords").select("*").eq("id", kw_id).execute()
         if not kw_resp.data:
-            st.error("Запит не знайдено.")
+            st.error("Keyword not found.")
             st.session_state["focus_keyword_id"] = None
             st.rerun()
             return
@@ -1526,67 +1526,69 @@ def show_keyword_details(kw_id):
         keyword_text = keyword_record["keyword_text"]
         project_id = keyword_record["project_id"]
     except Exception as e:
-        st.error(f"Помилка БД: {e}")
+        st.error(f"DB Error: {e}")
         return
 
     # HEADER
     col_back, col_title = st.columns([1, 15])
     with col_back:
-        if st.button("⬅", key="back_from_details", help="Назад до списку"):
+        if st.button("⬅", key="back_from_details", help="Back to list"):
             st.session_state["focus_keyword_id"] = None
             st.rerun()
     
     with col_title:
         st.markdown(f"<h3 style='margin-top: -5px;'>🔍 {keyword_text}</h3>", unsafe_allow_html=True)
 
-    # ⚙️ БЛОК НАЛАШТУВАНЬ
-    with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
+    # ⚙️ SETTINGS & NEW SCAN BLOCK
+    with st.expander("⚙️ Settings & New Scan", expanded=False):
         c1, c2 = st.columns(2)
         
-        # ЛІВА: РЕДАГУВАННЯ
+        # LEFT: EDIT KEYWORD
         with c1:
             edit_key = f"edit_mode_{kw_id}"
             if edit_key not in st.session_state: st.session_state[edit_key] = False
             
             new_text = st.text_input(
-                "Текст запиту", 
+                "Keyword Text", 
                 value=keyword_text, 
                 key="edit_kw_input",
                 disabled=not st.session_state[edit_key]
             )
             
+            # Button logic: Edit -> Save
             if not st.session_state[edit_key]:
-                if st.button("✏️ Редагувати", key="enable_edit_btn"):
+                if st.button("✏️ Edit", key="enable_edit_btn"):
                     st.session_state[edit_key] = True
                     st.rerun()
             else:
-                if st.button("💾 Зберегти", key="save_kw_btn"):
+                if st.button("💾 Save", key="save_kw_btn"):
                     if new_text and new_text != keyword_text:
                         supabase.table("keywords").update({"keyword_text": new_text}).eq("id", kw_id).execute()
-                        st.success("Збережено!")
+                        st.success("Saved!")
                     st.session_state[edit_key] = False
                     st.rerun()
 
-        # ПРАВА: ЗАПУСК
+        # RIGHT: LAUNCH SCAN
         with c2:
             selected_models_to_run = st.multiselect(
-                "Оберіть моделі для сканування:", 
+                "Select models to scan:", 
                 options=ALL_MODELS_UI, 
                 default=ALL_MODELS_UI, 
                 key="rescan_models_select"
             )
             
+            # Double confirmation logic
             confirm_run_key = f"confirm_run_{kw_id}"
             if confirm_run_key not in st.session_state: st.session_state[confirm_run_key] = False
 
             if not st.session_state[confirm_run_key]:
-                if st.button("🚀 Запустити сканування", key="pre_run_btn"):
+                if st.button("🚀 Run Analysis", key="pre_run_btn"):
                     st.session_state[confirm_run_key] = True
                     st.rerun()
             else:
                 c_conf1, c_conf2 = st.columns(2)
                 with c_conf1:
-                    if st.button("✅ Підтвердити", type="primary", key="real_run_btn"):
+                    if st.button("✅ Confirm", type="primary", key="real_run_btn"):
                         proj = st.session_state.get("current_project", {})
                         if 'n8n_trigger_analysis' in globals():
                             n8n_trigger_analysis(
@@ -1595,18 +1597,19 @@ def show_keyword_details(kw_id):
                                 proj.get("brand_name"), 
                                 models=selected_models_to_run
                             )
-                            st.success("Задачу відправлено!")
+                            st.success("Task sent!")
                             st.session_state[confirm_run_key] = False
                             st.rerun()
                         else:
-                            st.error("Функція запуску не знайдена.")
+                            st.error("Launch function not found.")
                 with c_conf2:
-                    if st.button("❌ Скасувати", key="cancel_run_btn"):
+                    if st.button("❌ Cancel", key="cancel_run_btn"):
                         st.session_state[confirm_run_key] = False
                         st.rerun()
 
-    # 2. ОТРИМАННЯ ДАНИХ
+    # 2. DATA RETRIEVAL & PREPARATION
     try:
+        # A. Scans
         scans_resp = supabase.table("scan_results")\
             .select("id, created_at, provider, raw_response")\
             .eq("keyword_id", kw_id)\
@@ -1617,7 +1620,6 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
@@ -1625,6 +1627,7 @@ def show_keyword_details(kw_id):
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
 
+        # B. Mentions
         if not df_scans.empty:
             scan_ids = df_scans['scan_id'].tolist()
             if scan_ids:
@@ -1639,10 +1642,11 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # Merge
+        # C. Merge (Master DataFrame)
         if not df_mentions.empty:
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
+            
             df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
         else:
             df_full = df_scans.copy()
@@ -1654,15 +1658,14 @@ def show_keyword_details(kw_id):
             df_full['brand_name'] = None
 
     except Exception as e:
-        st.error(f"Помилка обробки даних: {e}")
+        st.error(f"Data processing error: {e}")
         return
 
-    # 3. KPI (GLOBAL LOGIC)
+    # 3. GLOBAL METRICS CALCULATION
     if not df_mentions.empty:
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
         
-        # SOV Calculation
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
@@ -1675,12 +1678,10 @@ def show_keyword_details(kw_id):
         
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
-        # Rank Calculation
         my_ranks = df_mentions[df_mentions['is_my_brand'] == True]['rank_position']
         avg_pos = my_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # Sentiment
         my_sentiment = df_mentions[df_mentions['is_my_brand'] == True]['sentiment_score']
         if not my_sentiment.empty:
             s_counts = my_sentiment.value_counts(normalize=True) * 100
@@ -1689,15 +1690,12 @@ def show_keyword_details(kw_id):
             neu_pct = s_counts.get("Нейтральний", 0.0)
         else:
             pos_pct, neg_pct, neu_pct = 0, 0, 0
-            
     else:
         avg_sov, total_my_mentions, unique_competitors = 0, 0, 0
         display_pos = "-"
         pos_pct, neg_pct, neu_pct = 0, 0, 0
 
-    # Delta (Placeholder)
-    delta_sov, delta_mentions, delta_pos = 0, 0, 0
-
+    # VISUALIZATION: GLOBAL KPI BLOCKS
     st.markdown("""
     <style>
         .stat-box {
@@ -1722,28 +1720,27 @@ def show_keyword_details(kw_id):
     <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp;
     <span style='color:#FF4B4B'>😡 {neg_pct:.0f}%</span>
     """
-    if total_my_mentions == 0: sent_display = "<span style='color:#999'>Не знайдено</span>"
+    if total_my_mentions == 0: sent_display = "<span style='color:#999'>Not Found</span>"
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        tt = tooltip("Частка голосу (SOV) — % згадок вашого бренду.")
-        st.markdown(f"""<div class="stat-box"><div class="stat-label">Частка голосу (SOV) {tt}</div><div class="stat-value">{avg_sov:.1f}%</div></div>""", unsafe_allow_html=True)
+        tt = tooltip("Share of Voice (SOV) - % of your brand mentions vs total mentions.")
+        st.markdown(f"""<div class="stat-box"><div class="stat-label">Share of Voice (SOV) {tt}</div><div class="stat-value">{avg_sov:.1f}%</div></div>""", unsafe_allow_html=True)
     with k2:
-        tt = tooltip("Всього згадок вашого бренду (та кількість унікальних брендів конкурентів).")
-        st.markdown(f"""<div class="stat-box"><div class="stat-label">Згадок (Всього) {tt}</div><div class="stat-value">{int(total_my_mentions)}</div><div class="stat-sub">Конкурентів: {unique_competitors}</div></div>""", unsafe_allow_html=True)
+        tt = tooltip("Total mentions of your brand (and count of unique competitors found).")
+        st.markdown(f"""<div class="stat-box"><div class="stat-label">Mentions (Total) {tt}</div><div class="stat-value">{int(total_my_mentions)}</div><div class="stat-sub">Competitors: {unique_competitors}</div></div>""", unsafe_allow_html=True)
     with k3:
-        tt = tooltip("Розподіл тональності (Позитив / Нейтраль / Негатив).")
-        st.markdown(f"""<div class="stat-box"><div class="stat-label">Тональність {tt}</div><div style="font-size: 14px; font-weight:600; margin-top:10px;">{sent_display}</div></div>""", unsafe_allow_html=True)
+        tt = tooltip("Sentiment distribution (Positive / Neutral / Negative).")
+        st.markdown(f"""<div class="stat-box"><div class="stat-label">Sentiment {tt}</div><div style="font-size: 14px; font-weight:600; margin-top:10px;">{sent_display}</div></div>""", unsafe_allow_html=True)
     with k4:
-        tt = tooltip("Середня позиція у списку (якщо бренд знайдено).")
-        st.markdown(f"""<div class="stat-box"><div class="stat-label">Сер. Позиція {tt}</div><div class="stat-value">{display_pos}</div></div>""", unsafe_allow_html=True)
+        tt = tooltip("Average rank position in the list (if found).")
+        st.markdown(f"""<div class="stat-box"><div class="stat-label">Avg. Position {tt}</div><div class="stat-value">{display_pos}</div></div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 4. ГРАФІК ДИНАМІКИ
-    st.markdown("##### 📈 Динаміка показників")
+    # 4. DYNAMICS CHART
+    st.markdown("##### 📈 Metrics Dynamics")
 
-    # 🔥 FIX: ВИКОРИСТОВУЄМО scan_id ДЛЯ ГРУПУВАННЯ
     if not df_full.empty and 'scan_id' in df_full.columns:
         totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
         totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
@@ -1755,30 +1752,29 @@ def show_keyword_details(kw_id):
     with st.container(border=True):
         f_col1, f_col2, f_col3 = st.columns([1.2, 1.2, 2.5])
         with f_col1:
-            metric_choice = st.selectbox("Метрика:", ["Частка голосу (SOV)", "Згадки бренду", "Позиція у списку"])
+            metric_choice = st.selectbox("Metric:", ["Share of Voice (SOV)", "Brand Mentions", "Rank Position"])
         with f_col2:
             if not df_plot_base.empty:
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
-                
-                # 🔥 FIX: ПОМИЛКУ ВИПРАВЛЕНО ТУТ. ВСЕ В ОДИН РЯДОК.
-                date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
+                # 🔥 FIXED SYNTAX ERROR HERE - added 'date_range =' before st.date_input
+                date_range = st.date_input("Date Range:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
-                st.date_input("Діапазон дат:", disabled=True)
+                st.date_input("Date Range:", disabled=True)
         with f_col3:
             col_llm, col_brand = st.columns(2)
             with col_llm:
-                selected_llm_ui = st.multiselect("Фільтр по LLM:", options=ALL_MODELS_UI, default=ALL_MODELS_UI)
+                selected_llm_ui = st.multiselect("Filter by LLM:", options=ALL_MODELS_UI, default=ALL_MODELS_UI)
             with col_brand:
                 if not df_plot_base.empty:
                     all_found_brands = sorted([str(b) for b in df_plot_base['brand_name'].unique() if pd.notna(b)])
                     proj = st.session_state.get("current_project", {})
                     my_brand_name = proj.get("brand_name", "")
                     default_sel = [my_brand_name] if my_brand_name in all_found_brands else ([all_found_brands[0]] if all_found_brands else [])
-                    selected_brands = st.multiselect("Фільтр по Брендах:", options=all_found_brands, default=default_sel)
+                    selected_brands = st.multiselect("Filter by Brand:", options=all_found_brands, default=default_sel)
                 else:
-                    st.multiselect("Фільтр по Брендах:", options=[], disabled=True)
+                    st.multiselect("Filter by Brand:", options=[], disabled=True)
 
     if not df_plot_base.empty and date_range:
         if isinstance(date_range, tuple):
@@ -1798,17 +1794,17 @@ def show_keyword_details(kw_id):
         df_plot_base = df_plot_base.sort_values('created_at')
 
         if not df_plot_base.empty:
-            if metric_choice == "Частка голосу (SOV)":
+            if metric_choice == "Share of Voice (SOV)":
                 y_col = "sov"
                 y_title = "SOV (%)"
                 y_range = [0, 100]
-            elif metric_choice == "Згадки бренду":
+            elif metric_choice == "Brand Mentions":
                 y_col = "mention_count"
-                y_title = "Кількість згадок"
+                y_title = "Mentions"
                 y_range = None
             else:
                 y_col = "rank_position"
-                y_title = "Позиція"
+                y_title = "Position"
                 y_range = None
 
             df_plot_base['legend_label'] = df_plot_base['brand_name'] + " (" + df_plot_base['provider_ui'] + ")"
@@ -1819,24 +1815,24 @@ def show_keyword_details(kw_id):
                 y=y_col, 
                 color="legend_label",
                 markers=True,
-                labels={"created_at": "Час", "legend_label": "Легенда", y_col: y_title}
+                labels={"created_at": "Time", "legend_label": "Legend", y_col: y_title}
             )
             
             if y_range: fig.update_yaxes(range=y_range)
-            if metric_choice == "Позиція у списку": fig.update_yaxes(autorange="reversed")
+            if metric_choice == "Rank Position": fig.update_yaxes(autorange="reversed")
 
-            fig.update_xaxes(showgrid=True, showticklabels=True, tickformat="%d.%m\n%H:%M", title_text="Час")
+            fig.update_xaxes(showgrid=True, showticklabels=True, tickformat="%d.%m\n%H:%M", title_text="Time")
             fig.update_layout(height=350, hovermode="x unified", margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
         else:
-            st.info("Немає даних за обраними критеріями.")
+            st.info("No data for selected filters.")
     else:
-        st.info("Історія сканувань порожня або не обрано дати.")
+        st.info("No scan history or date not selected.")
 
     st.markdown("---")
 
-    # 5. ДЕТАЛІЗАЦІЯ (TABS)
-    st.markdown("##### 📝 Детальний аналіз відповідей")
+    # 5. DETAILS (TABS)
+    st.markdown("##### 📝 Detailed Response Analysis")
     
     tabs = st.tabs(ALL_MODELS_UI)
     
@@ -1850,20 +1846,20 @@ def show_keyword_details(kw_id):
                 model_scans = pd.DataFrame()
             
             if model_scans.empty:
-                st.write(f"📉 Даних від **{ui_model_name}** ще немає.")
+                st.write(f"📉 No data for **{ui_model_name}** yet.")
                 continue
 
             with st.container(border=True):
                 scan_options = {row['date_str']: row['scan_id'] for _, row in model_scans.iterrows()}
-                selected_date = st.selectbox(f"Оберіть дату аналізу ({ui_model_name}):", list(scan_options.keys()), key=f"sel_date_{tech_model_id}")
+                selected_date = st.selectbox(f"Select scan date ({ui_model_name}):", list(scan_options.keys()), key=f"sel_date_{tech_model_id}")
             
             selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS ---
+            # LOCAL METRICS
             loc_sov = 0
             loc_mentions = 0
-            loc_sent = "Не знайдено"
+            loc_sent = "Not Found"
             loc_rank_str = "-"
             
             current_scan_mentions = pd.DataFrame()
@@ -1889,29 +1885,30 @@ def show_keyword_details(kw_id):
             elif loc_sent == "Негативний": sent_color = "#FF4B4B"
             elif loc_sent == "Не знайдено": sent_color = "#999"
 
+            # LOCAL KPI CARDS
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ЧАСТКА ГОЛОСУ (SOV)</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">SHARE OF VOICE (SOV)</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_sov:.1f}%</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ЗГАДОК БРЕНДУ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">BRAND MENTIONS</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_mentions}</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ТОНАЛЬНІСТЬ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">SENTIMENT</div>
                     <div style="font-size:18px; font-weight:600; color:{sent_color}; margin-top:5px;">{loc_sent}</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ПОЗИЦІЯ У СПИСКУ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">POSITION</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_rank_str}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
             raw_text = current_scan_row.get('raw_response', '')
-            st.markdown("##### Відповідь від LLM")
+            st.markdown("##### LLM Response")
             proj = st.session_state.get("current_project", {})
             brand_name = proj.get("brand_name", "")
             
@@ -1922,12 +1919,12 @@ def show_keyword_details(kw_id):
                     final_html = final_html.replace(brand_name, highlight_span)
                 st.markdown(f"""<div style="background-color: #f9fffb; border: 1px solid #bbf7d0; border-radius: 8px; padding: 20px; font-size: 16px; line-height: 1.6; color: #374151;">{final_html}</div>""", unsafe_allow_html=True)
             else:
-                st.info("Текст відповіді не збережено.")
+                st.info("Response text not saved.")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- БРЕНДИ (Center Layout) ---
-            st.markdown(f"**Знайдені бренди:** {tooltip('Бренди, які AI згадав у цій відповіді.')}", unsafe_allow_html=True)
+            # BRANDS
+            st.markdown(f"**Found Brands:** {tooltip('Brands mentioned in this response.')}", unsafe_allow_html=True)
             
             if not current_scan_mentions.empty:
                 scan_mentions_plot = current_scan_mentions[current_scan_mentions['mention_count'] > 0].copy()
@@ -1939,31 +1936,31 @@ def show_keyword_details(kw_id):
                         fig_brands = px.pie(
                             scan_mentions_plot, values='mention_count', names='brand_name', hole=0.5,
                             color_discrete_sequence=px.colors.qualitative.Pastel,
-                            labels={'brand_name': 'Бренд', 'mention_count': 'Згадок'}
+                            labels={'brand_name': 'Brand', 'mention_count': 'Mentions'}
                         )
-                        fig_brands.update_traces(textposition='inside', textinfo='percent+label', hovertemplate='<b>%{label}</b><br>Згадок: %{value}')
+                        fig_brands.update_traces(textposition='inside', textinfo='percent+label', hovertemplate='<b>%{label}</b><br>Mentions: %{value}')
                         fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
                         st.plotly_chart(fig_brands, use_container_width=True, config={'displayModeBar': False})
                     with c_table:
                         st.dataframe(
                             scan_mentions_plot[['brand_name', 'mention_count', 'rank_position', 'sentiment_score']],
                             column_config={
-                                "brand_name": "Бренд",
-                                "mention_count": st.column_config.NumberColumn("Згадок"),
-                                "rank_position": st.column_config.NumberColumn("Позиція"),
-                                "sentiment_score": st.column_config.TextColumn("Тональність")
+                                "brand_name": "Brand",
+                                "mention_count": st.column_config.NumberColumn("Mentions"),
+                                "rank_position": st.column_config.NumberColumn("Position"),
+                                "sentiment_score": st.column_config.TextColumn("Sentiment")
                             },
                             use_container_width=True, hide_index=True
                         )
                 else:
-                     st.info("Брендів не знайдено.")
+                     st.info("No brands found.")
             else:
-                st.info("Брендів не знайдено.")
+                st.info("No brands found.")
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
-            st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
+            # SOURCES
+            st.markdown(f"#### 🔗 Cited Sources {tooltip('References provided by the model.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
                 sources_data = sources_resp.data
@@ -1977,11 +1974,10 @@ def show_keyword_details(kw_id):
                         df_src['url'] = df_src['url'].apply(normalize_url)
                         
                         if 'is_official' in df_src.columns:
-                            df_src['status_text'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
+                            df_src['status_text'] = df_src['is_official'].apply(lambda x: "✅ Official" if x is True else "🔗 External")
                         else:
-                            df_src['status_text'] = "🔗 Зовнішнє"
+                            df_src['status_text'] = "🔗 External"
 
-                        # ГРУПУВАННЯ
                         df_grouped_src = df_src.groupby(['url', 'domain', 'status_text'], as_index=False).size()
                         df_grouped_src = df_grouped_src.rename(columns={'size': 'count'})
                         df_grouped_src = df_grouped_src.sort_values(by='count', ascending=False)
@@ -1992,9 +1988,9 @@ def show_keyword_details(kw_id):
                             domain_counts = df_grouped_src.groupby('domain')['count'].sum().reset_index()
                             fig_src = px.pie(
                                 domain_counts.head(10), values='count', names='domain', hole=0.5,
-                                labels={'domain': 'Домен', 'count': 'Кількість'}
+                                labels={'domain': 'Domain', 'count': 'Count'}
                             )
-                            fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
+                            fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Count: %{value}')
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
                             st.plotly_chart(fig_src, use_container_width=True, config={'displayModeBar': False})
 
@@ -2004,17 +2000,17 @@ def show_keyword_details(kw_id):
                                 use_container_width=True, 
                                 hide_index=True,
                                 column_config={
-                                    "url": st.column_config.LinkColumn("Посилання", width="large", validate="^https?://"),
-                                    "status_text": st.column_config.TextColumn("Тип", width="small"),
-                                    "count": st.column_config.NumberColumn("К-сть", width="small")
+                                    "url": st.column_config.LinkColumn("Link", width="large", validate="^https?://"),
+                                    "status_text": st.column_config.TextColumn("Type", width="small"),
+                                    "count": st.column_config.NumberColumn("Count", width="small")
                                 }
                             )
                     else:
-                        st.info("URL не знайдено.")
+                        st.info("No URLs found.")
                 else:
-                    st.info("ℹ️ Джерел не знайдено.")
+                    st.info("ℹ️ No sources found.")
             except Exception as e:
-                st.error(f"Помилка завантаження джерел: {e}")
+                st.error(f"Error loading sources: {e}")
                 
 def show_keywords_page():
     """
