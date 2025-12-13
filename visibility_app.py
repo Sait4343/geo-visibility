@@ -2709,10 +2709,10 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    Версія 3.0 (Webhook Integration):
-    - Підключено реальний N8N Webhook для генерації.
-    - Додано поле "Опис" для коректної роботи AI-генерації.
-    - Виправлено логіку відображення назв проектів (Fallback to domain).
+    Версія 3.1 (Fixed Webhook Logic):
+    - Використовує точну структуру payload для n8n (brand_name, product_service, location, language).
+    - Додано поле введення опису для генерації.
+    - Всі попередні виправлення UI збережено.
     """
     import pandas as pd
     import streamlit as st
@@ -2721,6 +2721,7 @@ def show_admin_page():
     import json
 
     # --- КОНСТАНТИ ---
+    # URL вашого вебхука
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 
     # --- 0. ПІДКЛЮЧЕННЯ ---
@@ -2750,7 +2751,7 @@ def show_admin_page():
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
-    # --- ЛОГІКА ВЕБХУКА ---
+    # --- ЛОГІКА ВЕБХУКА (ВАШ КОД) ---
     def trigger_keyword_generation(brand, domain, desc):
         """Відправляє дані на n8n для генерації запитів"""
         payload = {
@@ -2763,6 +2764,7 @@ def show_admin_page():
         }
         
         try:
+            # Використовуємо константу N8N_GEN_URL визначену вище
             response = requests.post(N8N_GEN_URL, json=payload, timeout=20)
             
             if response.status_code == 200:
@@ -2862,14 +2864,10 @@ def show_admin_page():
             raw_name = p.get('project_name')
             domain = p.get('domain', '')
             
-            # Якщо назва пуста або "No Name" -> беремо з домену
             if not raw_name or raw_name.strip() == "" or raw_name == "No Name":
                 if domain:
-                    # https://apple.com/ua -> apple
                     clean_domain = domain.replace("https://", "").replace("http://", "").replace("www.", "").split('/')[0]
                     p_name = clean_domain.split('.')[0].capitalize()
-                    # Можна додати індикатор, що назва автозгенерована
-                    # p_name += " (Auto)" 
                 else:
                     p_name = "Без назви"
             else:
@@ -2937,31 +2935,37 @@ def show_admin_page():
     # ========================================================
     with tab_create:
         st.markdown("##### Створення нового проекту")
-        
+        st.info("💡 Заповніть дані, щоб AI міг згенерувати релевантні запити.")
+
         c1, c2 = st.columns(2)
-        new_name_val = c1.text_input("Назва проекту", key="new_proj_name")
-        new_domain_val = c2.text_input("Домен (напр. apple.com)", key="new_proj_domain")
+        new_name_val = c1.text_input("Назва проекту (Бренд)", key="new_proj_name", placeholder="Наприклад: Rozetka")
+        new_domain_val = c2.text_input("Домен", key="new_proj_domain", placeholder="rozetka.com.ua")
         
-        # Додаткове поле для опису, потрібне для AI
-        new_desc_val = st.text_area("Опис продукту / послуги (для генерації запитів)", 
-                                   placeholder="Наприклад: Інтернет-магазин крафтової ковбаси...",
-                                   height=68)
+        # --- ПОЛЕ ОПИСУ (ВАЖЛИВО ДЛЯ PRODUCT_SERVICE) ---
+        new_desc_val = st.text_area(
+            "Опис продукту/послуги (Обов'язково для генерації)", 
+            placeholder="Наприклад: Інтернет-магазин електроніки та побутової техніки. Продаємо смартфони, ноутбуки...",
+            height=100,
+            key="new_proj_desc"
+        )
         
         # Кнопка генерації через WEBHOOK
-        if st.button("✨ Згенерувати 10 запитів (через AI Webhook)"):
-            if new_domain_val and new_desc_val: # Опис важливий для AI
-                brand = new_name_val if new_name_val else new_domain_val.split('.')[0]
+        if st.button("✨ Згенерувати 10 запитів (через AI)"):
+            if new_domain_val and new_desc_val: 
+                # Визначаємо бренд (якщо назва пуста, беремо з домену)
+                brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
                 
-                with st.spinner("Відправляємо дані на n8n..."):
-                    generated_kws = trigger_keyword_generation(brand, new_domain_val, new_desc_val)
+                with st.spinner("Звертаємось до n8n для генерації..."):
+                    # Викликаємо функцію з правильними аргументами
+                    generated_kws = trigger_keyword_generation(brand_for_ai, new_domain_val, new_desc_val)
                 
                 if generated_kws:
                     st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in generated_kws]
                     st.success(f"Успішно згенеровано {len(generated_kws)} запитів!")
                 else:
-                    st.warning("Вебхук не повернув даних. Перевірте n8n.")
+                    st.warning("Вебхук не повернув даних. Перевірте n8n або логи.")
             else:
-                st.warning("Для генерації заповніть Домен та Опис.")
+                st.warning("⚠️ Для генерації обов'язково заповніть 'Домен' та 'Опис продукту'.")
 
         st.markdown("###### 📝 Редагування запитів перед створенням")
         
@@ -2985,7 +2989,6 @@ def show_admin_page():
         new_cron = c4.checkbox("Дозволити автосканування одразу?", value=False, key="new_proj_cron")
 
         if st.button("🚀 Створити проект та зберегти запити", type="primary"):
-            # Назва може бути пустою, тоді візьмемо з домену
             final_name = new_name_val if new_name_val else new_domain_val.split('.')[0].capitalize()
             
             if new_domain_val:
