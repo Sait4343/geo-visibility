@@ -1434,36 +1434,7 @@ def show_dashboard():
 # =========================
 # 7. КЕРУВАННЯ ЗАПИТАМИ
 # =========================
-.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
-            else:
-                date_range = None
-                st.date_input("Діапазон дат:", disabled=True)
-        with f_col3:
-            col_llm, col_brand = st.columns(2)
-            with col_llm:
-                selected_llm_ui = st.multiselect("Фільтр по LLM:", options=ALL_MODELS_UI, default=ALL_MODELS_UI)
-            with col_brand:
-                if not df_plot_base.empty:
-                    all_found_brands = sorted([str(b) for b in df_plot_base['brand_name'].unique() if pd.notna(b)])
-                    default_sel = [target_brand_name] if target_brand_name in all_found_brands else ([all_found_brands[0]] if all_found_brands else [])
-                    selected_brands = st.multiselect("Фільтр по Брендах:", options=all_found_brands, default=default_sel)
-                else:
-                    st.multiselect("Фільтр по Брендах:", options=[], disabled=True)
 
-    if not df_plot_base.empty and date_range:
-        if isinstance(date_range, tuple):
-            if len(date_range) == 2:
-                start_d, end_d = date_range
-                mask_date = (df_plot_base['created_at'].dt.date >= start_d) & (df_plot_base['created_at'].dt.date <= end_d)
-                df_plot_base = df_plot_base[mask_date]
-            elif len(date_range) == 1:
-                start_d = date_range[0]
-                mask_date = (df_plot_base['created_at'].dt.date == start_d)
-                df_plot_base = df_plot_base[mask_date]
-
-        df_plot_base = df_plot_base[df_plot_base['provider_ui'].isin(selected_llm_ui)]
-        if 'selected_brands' in locals() and selected_brands:
-            df_plot_base = df_plot_base[df_plot_base['brand_name'].isin(selected_brands)]
         
 
 def show_keyword_details(kw_id):
