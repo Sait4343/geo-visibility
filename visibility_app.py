@@ -3099,73 +3099,84 @@ def show_admin_page():
 def show_chat_page():
     """
     Сторінка AI-асистента (GPT-Visibility) з реальною інтеграцією n8n.
+    Оновлено: Передача ID користувача/проекту та візуалізація чату.
     """
     import requests
     import streamlit as st
 
     # --- КОНФІГУРАЦІЯ ---
-    # 👇 Вставте сюди ваш реальний URL вебхука для чату з n8n
+    N8N_CHAT_WEBHOOK = "https://virshi.app.n8n.cloud/webhook/webhook/chat-bot" 
 
     st.title("🤖 GPT-Visibility Assistant")
     
-    # Отримуємо контекст поточного проекту (щоб бот знав, про що мова)
+    # 1. Отримуємо контекст (User & Project)
+    user = st.session_state.get("user")
     proj = st.session_state.get("current_project", {})
+    
     if not proj:
         st.warning("⚠️ Будь ласка, оберіть проект у меню зліва, щоб асистент мав контекст.")
-        # Ми не блокуємо чат, але попереджаємо
+        # Не блокуємо, але попереджаємо
 
-    # 1. Ініціалізація історії
+    # 2. Ініціалізація історії чату
     if "messages" not in st.session_state:
+        # Стартове повідомлення від бота
+        welcome_text = f"Привіт! Я аналітик проекту **{proj.get('brand_name', '...')}**. Готовий допомогти з даними."
         st.session_state["messages"] = [
-            {"role": "assistant", "content": f"Привіт! Я аналітик проекту **{proj.get('brand_name', 'вашого бренду')}**. Готовий відповідати на питання по даних."}
+            {"role": "assistant", "content": welcome_text}
         ]
 
-    # 2. Відображення історії
+    # 3. Відображення історії (Рендеринг)
     for msg in st.session_state["messages"]:
-        avatar = "🤖" if msg["role"] == "assistant" else "👤"
-        with st.chat_message(msg["role"], avatar=avatar):
+        # Визначаємо аватар в залежності від ролі
+        if msg["role"] == "user":
+            avatar_icon = "👤" # Або посилання на іконку
+        else:
+            avatar_icon = "🤖" # Або логотип бота
+            
+        with st.chat_message(msg["role"], avatar=avatar_icon):
             st.markdown(msg["content"])
 
-    # 3. Обробка вводу
+    # 4. Обробка нового повідомлення
     if prompt := st.chat_input("Напишіть ваше запитання..."):
         
-        # A. Додаємо питання користувача в історію
+        # A. Показуємо повідомлення користувача одразу
         st.session_state["messages"].append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
-        # B. Відправка на n8n
+        # B. Обробка відповіді від AI
         with st.chat_message("assistant", avatar="🤖"):
             message_placeholder = st.empty()
-            full_response = ""
             
             with st.spinner("Аналізую дані..."):
                 try:
-                    # Формуємо Payload (дані для відправки)
+                    # --- FORM PAYLOAD (Дані для n8n) ---
                     payload = {
                         "query": prompt,
-                        # Передаємо останні 10 повідомлень для контексту (щоб не перевантажити)
-                        "history": st.session_state["messages"][-10:], 
-                        "project_context": {
-                            "project_id": proj.get("id"),
-                            "brand_name": proj.get("brand_name"),
-                            "domain": proj.get("domain"),
-                            "status": proj.get("status")
-                        },
-                        "user_email": st.session_state.get("user").email if st.session_state.get("user") else None
+                        "history": st.session_state["messages"][-10:], # Останні 10 повідомлень
+                        
+                        # 🔥 ВАЖЛИВО: Передаємо ID та імена, як ви просили
+                        "user_id": user.id if user else None,
+                        "user_email": user.email if user else None,
+                        
+                        "project_id": proj.get("id"),
+                        "project_name": proj.get("brand_name"),
+                        
+                        # Додатковий контекст
+                        "domain": proj.get("domain"),
+                        "status": proj.get("status")
                     }
 
                     # Запит до n8n
-                    response = requests.post(N8N_CHAT_WEBHOOK, json=payload, timeout=60) # Таймаут 60 сек, бо AI може думати
+                    response = requests.post(N8N_CHAT_WEBHOOK, json=payload, timeout=60)
 
                     if response.status_code == 200:
                         data = response.json()
-                        # n8n зазвичай повертає відповідь у ключі "output", "text" або "answer"
-                        # Перевіряємо всі варіанти:
+                        # Шукаємо відповідь у різних можливих ключах
                         bot_reply = data.get("output") or data.get("answer") or data.get("text")
                         
                         if not bot_reply:
-                            bot_reply = f"⚠️ Отримана пуста відповідь від сервера. (Raw: {data})"
+                            bot_reply = f"⚠️ Отримана пуста відповідь. (Raw: {data})"
                     else:
                         bot_reply = f"⚠️ Помилка сервера: {response.status_code}"
 
@@ -3175,7 +3186,7 @@ def show_chat_page():
                 # C. Вивід відповіді
                 message_placeholder.markdown(bot_reply)
         
-        # D. Збереження відповіді бота в історію
+        # D. Збереження відповіді в історію
         st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
 
             
