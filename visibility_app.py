@@ -1438,7 +1438,7 @@ def show_dashboard():
  def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL PRODUCTION (SYNTAX & METRICS FIXED).
+    ВЕРСІЯ: FINAL PRODUCTION (INDENTATION & METRICS FIXED).
     """
     import pandas as pd
     import plotly.express as px
@@ -1495,6 +1495,11 @@ def show_dashboard():
         keyword_record = kw_resp.data[0]
         keyword_text = keyword_record["keyword_text"]
         project_id = keyword_record["project_id"]
+        
+        # Отримуємо назву бренду для "розумного пошуку"
+        proj = st.session_state.get("current_project", {})
+        target_brand_name = proj.get("brand_name", "").lower().strip()
+        
     except Exception as e:
         st.error(f"Помилка БД: {e}")
         return
@@ -1588,14 +1593,12 @@ def show_dashboard():
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             
-            # --- 🕒 FIX TIMEZONE (Kyiv) ---
+            # --- 🕒 TIMEZONE FIX (Kyiv) ---
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
             if df_scans['created_at'].dt.tz is None:
                 df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
-            
             df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
             
@@ -1603,7 +1606,6 @@ def show_dashboard():
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
 
-        # B. Mentions
         if not df_scans.empty:
             scan_ids = df_scans['scan_id'].tolist()
             if scan_ids:
@@ -1618,7 +1620,16 @@ def show_dashboard():
         else:
             df_mentions = pd.DataFrame()
 
-        # C. Merge
+        # 🔥 SMART FIX: Якщо в базі не проставлено is_my_brand, ставимо його вручну за назвою
+        if not df_mentions.empty and target_brand_name:
+            # Нормалізація для порівняння
+            df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
+            # Якщо є часткове співпадіння назви бренду з назвою проекту
+            mask_match = df_mentions['brand_clean'].str.contains(target_brand_name, na=False)
+            # Оновлюємо is_my_brand там, де співпало
+            df_mentions.loc[mask_match, 'is_my_brand'] = True
+
+        # Merge
         if not df_mentions.empty:
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
@@ -1641,6 +1652,7 @@ def show_dashboard():
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
         
+        # SOV Calculation
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
@@ -1653,10 +1665,12 @@ def show_dashboard():
         
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
+        # Rank Calculation
         my_ranks = df_mentions[df_mentions['is_my_brand'] == True]['rank_position']
         avg_pos = my_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
+        # Sentiment
         my_sentiment = df_mentions[df_mentions['is_my_brand'] == True]['sentiment_score']
         if not my_sentiment.empty:
             s_counts = my_sentiment.value_counts(normalize=True) * 100
@@ -1733,7 +1747,7 @@ def show_dashboard():
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
                 
-                # 🔥 FIX SYNTAX: Цей рядок був розірваний, тепер він коректний
+                # 🔥 FIX: РЯДОК БЕЗ РОЗРИВІВ
                 date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
@@ -1745,9 +1759,13 @@ def show_dashboard():
             with col_brand:
                 if not df_plot_base.empty:
                     all_found_brands = sorted([str(b) for b in df_plot_base['brand_name'].unique() if pd.notna(b)])
-                    proj = st.session_state.get("current_project", {})
-                    my_brand_name = proj.get("brand_name", "")
-                    default_sel = [my_brand_name] if my_brand_name in all_found_brands else ([all_found_brands[0]] if all_found_brands else [])
+                    # Дефолтний вибір: наш бренд
+                    default_sel = []
+                    if target_brand_name:
+                        # Шукаємо точний або схожий збіг
+                        matches = [b for b in all_found_brands if target_brand_name in b.lower()]
+                        default_sel = matches if matches else ([all_found_brands[0]] if all_found_brands else [])
+                    
                     selected_brands = st.multiselect("Фільтр по Брендах:", options=all_found_brands, default=default_sel)
                 else:
                     st.multiselect("Фільтр по Брендах:", options=[], disabled=True)
@@ -1841,7 +1859,6 @@ def show_dashboard():
                 with c_del:
                     st.write("") 
                     st.write("")
-                    # Логіка видалення
                     confirm_key = f"del_scan_{selected_scan_id}"
                     if confirm_key not in st.session_state: st.session_state[confirm_key] = False
 
@@ -1867,7 +1884,7 @@ def show_dashboard():
 
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS (ВИПРАВЛЕНО #nan та Нулі) ---
+            # --- LOCAL METRICS (FIXED) ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не знайдено"
@@ -1879,17 +1896,8 @@ def show_dashboard():
             
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
-                
-                # 1. Спробуємо знайти бренд за ID (якщо is_my_brand = true)
                 my_brand_row = current_scan_mentions[current_scan_mentions['is_my_brand'] == True]
                 
-                # 2. Якщо не знайшли, спробуємо знайти за назвою (Fallback)
-                if my_brand_row.empty:
-                    proj = st.session_state.get("current_project", {})
-                    target_name = proj.get("brand_name", "").lower()
-                    if target_name:
-                        my_brand_row = current_scan_mentions[current_scan_mentions['brand_name'].str.lower().str.contains(target_name)]
-
                 if not my_brand_row.empty:
                     val_my_mentions = my_brand_row['mention_count'].sum()
                     val_rank = my_brand_row['rank_position'].iloc[0]
@@ -2030,9 +2038,7 @@ def show_dashboard():
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
             except Exception as e:
-                st.error(f"Помилка завантаження джерел: {e}")       
-
-
+                st.error(f"Помилка завантаження джерел: {e}")
 
 def show_keywords_page():
     """
