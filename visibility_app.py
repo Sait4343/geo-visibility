@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time as dt_time # Додано dt_time
 import plotly.express as px 
 import pandas as pd
 import plotly.graph_objects as go
@@ -8,7 +8,8 @@ import streamlit as st
 import extra_streamlit_components as stx
 from streamlit_option_menu import option_menu
 from supabase import create_client, Client
-from datetime import datetime, timedelta
+import numpy as np # Потрібно для адмінки
+import json
 
 
 # =========================
@@ -3091,6 +3092,47 @@ def show_admin_page():
                     st.error(f"Помилка: {e}")
         else:
             st.warning("Користувачів не знайдено.")
+def show_chat_page():
+    """
+    Сторінка AI-асистента (GPT-Visibility).
+    """
+    st.title("🤖 GPT-Visibility Assistant")
+    st.caption("Запитайте про тренди, аналітику або поради щодо вашого бренду.")
+
+    # Ініціалізація історії чату
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = [
+            {"role": "assistant", "content": "Привіт! Я ваш AI-аналітик. Чим можу допомогти по проекту?"}
+        ]
+
+    # Відображення історії
+    for msg in st.session_state["messages"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Поле вводу
+    if prompt := st.chat_input("Ваше запитання..."):
+        # 1. Додаємо повідомлення користувача
+        st.session_state["messages"].append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # 2. Відповідь бота (Тут можна підключити n8n вебхук для чату)
+        with st.chat_message("assistant"):
+            with st.spinner("Думаю..."):
+                # --- ТУТ МОЖНА ПІДКЛЮЧИТИ N8N ---
+                # response = requests.post(N8N_CHAT_URL, json={"query": prompt, "history": st.session_state["messages"]})
+                # bot_reply = response.json().get("answer")
+                
+                # Поки що імітація:
+                time.sleep(1) 
+                bot_reply = f"Це цікаве питання про '{prompt}'. На основі даних вашого проекту, я рекомендую звернути увагу на вкладку 'Конкуренти'."
+                
+                st.markdown(bot_reply)
+        
+        st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
+
+
             
 def main():
     # 1. Session Check
