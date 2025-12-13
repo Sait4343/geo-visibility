@@ -3099,24 +3099,27 @@ def show_admin_page():
 def show_chat_page():
     """
     Сторінка AI-асистента (GPT-Visibility).
-    Оновлено: Історія чату НЕ передається на вебхук (n8n керує пам'яттю самостійно).
+    Оновлено: Додано передачу прав користувача (role) на вебхук.
     """
     import requests
     import streamlit as st
 
     # --- КОНФІГУРАЦІЯ ---
+    N8N_CHAT_WEBHOOK = "https://virshi.app.n8n.cloud/webhook/webhook/chat-bot" 
+
     st.title("🤖 GPT-Visibility Assistant")
     
-    # 1. Отримуємо контекст (User & Project)
+    # 1. Отримуємо контекст
     user = st.session_state.get("user")
+    role = st.session_state.get("role", "user") # <--- Отримуємо роль
     proj = st.session_state.get("current_project", {})
     
     if not proj:
-        st.warning("⚠️ Будь ласка, оберіть проект у меню зліва, щоб асистент мав контекст.")
+        st.warning("⚠️ Будь ласка, оберіть проект у меню зліва.")
 
-    # 2. Ініціалізація локальної історії (тільки для відображення в UI)
+    # 2. Ініціалізація локальної історії
     if "messages" not in st.session_state:
-        welcome_text = f"Привіт! Я аналітик проекту **{proj.get('brand_name', '...')}**. Готовий допомогти з даними."
+        welcome_text = f"Привіт! Я аналітик проекту **{proj.get('brand_name', '...')}**. Готовий допомогти."
         st.session_state["messages"] = [
             {"role": "assistant", "content": welcome_text}
         ]
@@ -3131,7 +3134,7 @@ def show_chat_page():
         with st.chat_message(msg["role"], avatar=avatar_icon):
             st.markdown(msg["content"])
 
-    # 4. Обробка нового повідомлення
+    # 4. Обробка вводу
     if prompt := st.chat_input("Напишіть ваше запитання..."):
         
         # A. Показуємо повідомлення користувача
@@ -3146,18 +3149,17 @@ def show_chat_page():
             with st.spinner("Аналізую дані..."):
                 try:
                     # --- FORM PAYLOAD ---
-                    # Історія (history) видалена, n8n сам пам'ятає контекст по session_id/user_id
                     payload = {
                         "query": prompt,
                         
-                        # Ідентифікатори для пам'яті n8n:
+                        # Дані користувача + РОЛЬ
                         "user_id": user.id if user else "guest",
                         "user_email": user.email if user else None,
+                        "role": role,  # <--- ДОДАНО ПРАВА КОРИСТУВАЧА
                         
+                        # Дані проекту
                         "project_id": proj.get("id"),
                         "project_name": proj.get("brand_name"),
-                        
-                        # Додатковий контекст (метадані)
                         "domain": proj.get("domain"),
                         "status": proj.get("status")
                     }
@@ -3167,7 +3169,6 @@ def show_chat_page():
 
                     if response.status_code == 200:
                         data = response.json()
-                        # Шукаємо відповідь у різних можливих ключах
                         bot_reply = data.get("output") or data.get("answer") or data.get("text")
                         
                         if not bot_reply:
@@ -3181,7 +3182,7 @@ def show_chat_page():
                 # C. Вивід відповіді
                 message_placeholder.markdown(bot_reply)
         
-        # D. Збереження відповіді бота в локальну історію (для UI)
+        # D. Збереження відповіді
         st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
 
             
