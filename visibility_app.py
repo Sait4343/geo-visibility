@@ -228,7 +228,7 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    FIX: Виправлено помилку NoneType при перевірці статусу.
+    Оновлено: Додано авторизацію (virshi-auth).
     """
     
     # 1. Мапінг назв (UI -> Technical)
@@ -241,8 +241,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     # 2. 🔒 ПЕРЕВІРКА СТАТУСУ (БЛОКУВАННЯ)
     current_proj = st.session_state.get("current_project")
     
-    # 🔥 FIX: Якщо проекту немає (None), вважаємо статус 'trial' (для онбордингу), 
-    # або перевіряємо, чи це не перший запуск.
     if current_proj is None:
         status = "trial" 
     else:
@@ -278,6 +276,11 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             print(f"Error fetching assets: {e}")
             official_assets = []
 
+        # 🔥 HEADER AUTH
+        headers = {
+            "virshi-auth": "hi@virshi.ai2025"
+        }
+
         # 4. ЦИКЛ ВІДПРАВКИ
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
@@ -293,7 +296,13 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             }
             
             try:
-                response = requests.post(N8N_ANALYZE_URL, json=payload, timeout=10)
+                # Додано headers=headers
+                response = requests.post(
+                    N8N_ANALYZE_URL, 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=10
+                )
                 
                 if response.status_code == 200:
                     success_count += 1
@@ -2712,10 +2721,8 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    Версія 5.0 (Final UI & Logic):
-    - Webhook: Передає галузь (industry) та продукти.
-    - UI: Таблиця запитів з нумерацією, редагуванням та додаванням.
-    - Navigation: Кнопка '↗️' для переходу на дашборд проекту.
+    Версія 5.1 (Auth Added):
+    - Webhook trigger_keyword_generation тепер має авторизацію.
     """
     import pandas as pd
     import streamlit as st
@@ -2753,9 +2760,9 @@ def show_admin_page():
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
-    # --- ЛОГІКА ВЕБХУКА ---
+    # --- ЛОГІКА ВЕБХУКА З АВТОРИЗАЦІЄЮ ---
     def trigger_keyword_generation(brand, domain, industry, products):
-        """Відправляє повний набір даних на n8n"""
+        """Відправляє повний набір даних на n8n з Auth"""
         payload = {
             "brand": brand,
             "domain": domain,
@@ -2763,8 +2770,19 @@ def show_admin_page():
             "products": products
         }
         
+        # 🔥 HEADER AUTH
+        headers = {
+            "virshi-auth": "hi@virshi.ai2025"
+        }
+        
         try:
-            response = requests.post(N8N_GEN_URL, json=payload, timeout=25)
+            # Додано headers=headers
+            response = requests.post(
+                N8N_GEN_URL, 
+                json=payload, 
+                headers=headers, 
+                timeout=25
+            )
             
             if response.status_code == 200:
                 try:
@@ -2843,7 +2861,6 @@ def show_admin_page():
     with tab_list:
         st.markdown("##### Керування проектами")
         
-        # Заголовки (Кнопка Дашборд вузька і компактна)
         h0, h1, h_dash, h2, h3, h4, h5 = st.columns([0.3, 2, 0.5, 1.5, 1.5, 1, 0.5])
         h0.markdown("**#**")
         h1.markdown("**Проект / Користувач**")
@@ -2862,7 +2879,6 @@ def show_admin_page():
             u_id = p.get('user_id')
             owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            # Назва
             raw_name = p.get('project_name')
             domain = p.get('domain', '')
             if not raw_name or raw_name.strip() == "" or raw_name == "No Name":
@@ -2881,21 +2897,12 @@ def show_admin_page():
                     st.caption(f"🌐 {domain}")
                     st.caption(f"👤 {owner_info['full_name']} ({owner_info['role']})")
 
-                # --- КНОПКА ПЕРЕХОДУ НА ДАШБОРД ---
                 with c_dash:
                     if st.button("↗️", key=f"goto_{p_id}", help=f"Перейти до дашборду '{p_name}'"):
-                        # 1. Встановлюємо активний проект
                         st.session_state["current_project"] = p
                         st.session_state["focus_keyword_id"] = None
-                        
-                        # 2. СПРОБА ПЕРЕМИКАННЯ СТОРІНКИ
-                        # Це спрацює, якщо ваше бічне меню використовує цю змінну
                         if "selected_page" in st.session_state:
                             st.session_state["selected_page"] = "Дашборд"
-                        
-                        # Також оновлюємо query params для надійності (опціонально)
-                        # st.query_params["page"] = "dashboard" 
-                        
                         st.rerun()
 
                 with c2:
@@ -2955,12 +2962,9 @@ def show_admin_page():
         new_domain_val = c2.text_input("Домен", key="new_proj_domain", placeholder="skyup.aero")
         
         c3, c4 = st.columns(2)
-        # НОВЕ ПОЛЕ ГАЛУЗЬ
         new_industry_val = c3.text_input("Галузь (Обов'язково)", key="new_proj_ind", placeholder="напр. авіаперевезення")
-        # ПОЛЕ ОПИСУ
         new_desc_val = c4.text_area("Продукти/Послуги", placeholder="напр. лоукостер, квитки", height=68, key="new_proj_desc")
         
-        # КНОПКА ГЕНЕРАЦІЇ
         if st.button("✨ Згенерувати 10 запитів (AI)"):
             if new_domain_val and new_industry_val and new_desc_val: 
                 brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
@@ -2974,7 +2978,6 @@ def show_admin_page():
                     )
                 
                 if generated_kws:
-                    # Перетворюємо список рядків у список словників для data_editor
                     st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in generated_kws]
                     st.success(f"Успішно згенеровано {len(generated_kws)} запитів!")
                 else:
@@ -2986,16 +2989,13 @@ def show_admin_page():
         st.markdown("###### 📝 Редагування запитів перед створенням")
         st.caption("Ви можете редагувати текст, видаляти рядки (Del) та додавати нові (кнопка + знизу).")
 
-        # --- ТАБЛИЦЯ РЕДАГУВАННЯ ЗАПИТІВ ---
-        # Готуємо DataFrame
         df_initial = pd.DataFrame(st.session_state["new_proj_keywords"])
         if df_initial.empty:
             df_initial = pd.DataFrame(columns=["keyword"])
 
-        # DATA EDITOR (Нумерація + Редагування + Додавання)
         edited_df = st.data_editor(
             df_initial,
-            num_rows="dynamic", # Дозволяє додавати і видаляти рядки
+            num_rows="dynamic",
             column_config={
                 "keyword": st.column_config.TextColumn(
                     "Список запитів",
@@ -3006,7 +3006,7 @@ def show_admin_page():
             },
             use_container_width=True,
             key="editor_new_kws",
-            hide_index=False # Показує нумерацію (0, 1, 2...)
+            hide_index=False
         )
 
         st.write("")
@@ -3019,7 +3019,6 @@ def show_admin_page():
             
             if new_domain_val:
                 try:
-                    # 1. Створення проекту
                     new_proj_data = {
                         "project_name": final_name,
                         "domain": new_domain_val,
@@ -3031,8 +3030,6 @@ def show_admin_page():
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
                         
-                        # 2. Збереження запитів з data_editor
-                        # Отримуємо дані з відредагованої таблиці
                         final_kws_list = edited_df["keyword"].dropna().tolist()
                         final_kws_list = [str(k).strip() for k in final_kws_list if str(k).strip()]
                         
@@ -3047,7 +3044,7 @@ def show_admin_page():
                             supabase.table("keywords").insert(kws_data).execute()
                         
                         st.success(f"Проект '{final_name}' створено! Додано {len(final_kws_list)} запитів.")
-                        st.session_state["new_proj_keywords"] = [] # Очистка
+                        st.session_state["new_proj_keywords"] = [] 
                         st.rerun()
                 except Exception as e:
                     st.error(f"Помилка створення: {e}")
@@ -3094,7 +3091,6 @@ def show_admin_page():
                     st.error(f"Помилка: {e}")
         else:
             st.warning("Користувачів не знайдено.")
-
 
 def show_chat_page():
     """
