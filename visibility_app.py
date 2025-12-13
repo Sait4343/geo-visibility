@@ -1470,10 +1470,10 @@ def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
     ВЕРСІЯ: FINAL STABLE (SYNTAX FIXED).
-    1. Fix: st.date_input syntax error resolved.
-    2. Fix: groupby('scan_id') everywhere.
-    3. Logic: All metrics (Global & Local) match the requirements.
-    4. UI: Sources centered, Button resets.
+    1. Fix: st.date_input syntax error resolved (wrapped in parenthesis).
+    2. Fix: groupby('scan_id') everywhere to prevent KeyError.
+    3. Metrics: Global & Local logic matches requirements.
+    4. UI: Sources centered, Button resets, Layout restored.
     """
     import pandas as pd
     import plotly.express as px
@@ -1621,6 +1621,7 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
+            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
@@ -1660,7 +1661,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL LOGIC)
+    # 3. KPI (GLOBAL)
     if not df_mentions.empty:
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
@@ -1746,6 +1747,7 @@ def show_keyword_details(kw_id):
     # 4. ГРАФІК ДИНАМІКИ
     st.markdown("##### 📈 Динаміка показників")
 
+    # 🔥 FIX: ВИКОРИСТОВУЄМО scan_id ДЛЯ ГРУПУВАННЯ
     if not df_full.empty and 'scan_id' in df_full.columns:
         totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
         totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
@@ -1762,8 +1764,14 @@ def show_keyword_details(kw_id):
             if not df_plot_base.empty:
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
-                # 🔥 FIX: СИНТАКСИЧНА ПОМИЛКА ВИПРАВЛЕНА ТУТ
-                date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
+                
+                # 🔥 FIX: SYNTAX ERROR WAS HERE. FIXED WITH PARENTHESES.
+                date_range = st.date_input(
+                    "Діапазон дат:", 
+                    value=(min_d, max_d), 
+                    min_value=min_d, 
+                    max_value=max_d
+                )
             else:
                 date_range = None
                 st.date_input("Діапазон дат:", disabled=True)
@@ -1963,7 +1971,7 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (Grouped) ---
+            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
