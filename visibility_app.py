@@ -1439,17 +1439,18 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL RESTORED & GROUPED.
-    1. Джерела: Згруповані по URL + Кількість. Вертикальне центрування.
-    2. Відповідь LLM: Повернуто локальні метрики (SOV, Rank, etc) для конкретної відповіді.
-    3. Кнопка: Скидання стану після запуску.
-    4. Вкладки: Виправлено назви моделей для коректного відображення.
+    ВЕРСІЯ: FINAL KPI FIX & GREEN DESIGN.
+    1. Локальні KPI: Виправлено розрахунок (пошук по назві бренду + is_my_brand).
+    2. Локальні KPI: Дизайн змінено на зелений.
+    3. Джерела: Збережено групування та графіки.
+    4. UI: Збережено всі кнопки та логіку.
     """
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
     import streamlit as st
     from datetime import datetime, timedelta
+    import numpy as np # Про всяк випадок
     
     # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
@@ -1461,20 +1462,17 @@ def show_keyword_details(kw_id):
     else:
         supabase = globals()['supabase']
 
-    # --- MAPPING (Повернуто розширені назви, як було раніше) ---
+    # --- MAPPING ---
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
-    # Список для UI
     ALL_MODELS_UI = list(MODEL_CONFIG.keys())
     
     def get_ui_model_name(db_name):
-        # Зворотній пошук по ID
         for ui, db in MODEL_CONFIG.items():
             if db == db_name: return ui
-        # Пошук по входженню
         lower = str(db_name).lower()
         if "perplexity" in lower: return "Perplexity"
         if "gpt" in lower: return "OpenAI GPT"
@@ -1501,6 +1499,11 @@ def show_keyword_details(kw_id):
         keyword_record = kw_resp.data[0]
         keyword_text = keyword_record["keyword_text"]
         project_id = keyword_record["project_id"]
+        
+        # Отримуємо назву бренду проекту для точного пошуку
+        proj = st.session_state.get("current_project", {})
+        target_brand_name = proj.get("brand_name", "").strip()
+
     except Exception as e:
         st.error(f"Помилка БД: {e}")
         return
@@ -1531,7 +1534,6 @@ def show_keyword_details(kw_id):
                 disabled=not st.session_state[edit_key]
             )
             
-            # Кнопки під текстом
             if not st.session_state[edit_key]:
                 if st.button("✏️ Редагувати", key="enable_edit_btn"):
                     st.session_state[edit_key] = True
@@ -1549,7 +1551,7 @@ def show_keyword_details(kw_id):
             selected_models_to_run = st.multiselect(
                 "Оберіть моделі для сканування:", 
                 options=ALL_MODELS_UI, 
-                default=ALL_MODELS_UI, # Всі увімкнені
+                default=ALL_MODELS_UI, 
                 key="rescan_models_select"
             )
             
@@ -1564,16 +1566,14 @@ def show_keyword_details(kw_id):
                 c_conf1, c_conf2 = st.columns(2)
                 with c_conf1:
                     if st.button("✅ Підтвердити", type="primary", key="real_run_btn"):
-                        proj = st.session_state.get("current_project", {})
                         if 'n8n_trigger_analysis' in globals():
                             n8n_trigger_analysis(
                                 project_id, 
                                 [new_text], 
-                                proj.get("brand_name"), 
+                                target_brand_name, 
                                 models=selected_models_to_run
                             )
                             st.success("Задачу відправлено!")
-                            # 🔥 СКИДАННЯ СТАНУ КНОПКИ
                             st.session_state[confirm_run_key] = False
                             st.rerun()
                         else:
@@ -1633,12 +1633,19 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (ЗАГАЛЬНІ)
+    # 3. KPI (ЗАГАЛЬНІ - ФІОЛЕТОВІ)
     if 'scan_id' in df_full.columns and not df_full.empty:
         totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
         totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
-        my_brand_df = df_full[df_full['is_my_brand'] == True].copy()
+        # Визначаємо "мій бренд" більш надійно
+        if target_brand_name:
+             my_brand_df = df_full[
+                (df_full['is_my_brand'] == True) | 
+                (df_full['brand_name'].str.lower() == target_brand_name.lower())
+            ].copy()
+        else:
+             my_brand_df = df_full[df_full['is_my_brand'] == True].copy()
         
         if not my_brand_df.empty:
             kpi_stats = pd.merge(my_brand_df, totals, on='scan_id', how='left')
@@ -1757,9 +1764,7 @@ def show_keyword_details(kw_id):
             with col_brand:
                 if not df_plot_base.empty:
                     all_found_brands = sorted([str(b) for b in df_plot_base['brand_name'].unique() if pd.notna(b)])
-                    proj = st.session_state.get("current_project", {})
-                    my_brand_name = proj.get("brand_name", "")
-                    default_sel = [my_brand_name] if my_brand_name in all_found_brands else ([all_found_brands[0]] if all_found_brands else [])
+                    default_sel = [target_brand_name] if target_brand_name in all_found_brands else ([all_found_brands[0]] if all_found_brands else [])
                     selected_brands = st.multiselect("Фільтр по Брендах:", options=all_found_brands, default=default_sel)
                 else:
                     st.multiselect("Фільтр по Брендах:", options=[], disabled=True)
@@ -1845,9 +1850,8 @@ def show_keyword_details(kw_id):
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
             # ----------------------------------------------------
-            # 🔥 ПОВЕРНУТО ЛОКАЛЬНІ МЕТРИКИ (KPI ДЛЯ ЦЬОГО СКАНУ)
+            # 🔥 LOCAL KPI FIX (РОЗРАХУНОК + ЗЕЛЕНИЙ ДИЗАЙН)
             # ----------------------------------------------------
-            # 1. Рахуємо
             local_total = 0
             local_my = 0
             local_sov = 0
@@ -1855,9 +1859,18 @@ def show_keyword_details(kw_id):
             local_sent = "Не знайдено"
             
             if not df_mentions.empty:
+                # 1. Всі бренди у цьому скані
                 scan_data = df_mentions[df_mentions['scan_result_id'] == selected_scan_id]
                 local_total = scan_data['mention_count'].sum()
-                my_data = scan_data[scan_data['is_my_brand'] == True]
+                
+                # 2. 🔥 FIX: Шукаємо "мій бренд" по галочці АБО по назві
+                if target_brand_name:
+                    my_data = scan_data[
+                        (scan_data['is_my_brand'] == True) | 
+                        (scan_data['brand_name'].str.lower().str.strip() == target_brand_name.lower())
+                    ]
+                else:
+                    my_data = scan_data[scan_data['is_my_brand'] == True]
                 
                 if not my_data.empty:
                     local_my = my_data['mention_count'].sum()
@@ -1865,52 +1878,49 @@ def show_keyword_details(kw_id):
                     local_pos = my_data['rank_position'].mean()
                     local_sent = my_data.iloc[0]['sentiment_score']
             
-            # 2. Відображаємо (Дизайн карток)
             sent_color = "#333"
             if local_sent == "Позитивний": sent_color = "#00C896"
             elif local_sent == "Негативний": sent_color = "#FF4B4B"
             elif local_sent == "Не знайдено": sent_color = "#999"
 
+            # 🔥 GREEN BORDER DESIGN
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
-                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
+                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
                     <div style="font-size:11px; color:#888; font-weight:600;">ЧАСТКА ГОЛОСУ (SOV)</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{local_sov:.1f}%</div>
                 </div>
-                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
+                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
                     <div style="font-size:11px; color:#888; font-weight:600;">ЗГАДОК БРЕНДУ</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{int(local_my)}</div>
                 </div>
-                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
+                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
                     <div style="font-size:11px; color:#888; font-weight:600;">ТОНАЛЬНІСТЬ</div>
                     <div style="font-size:18px; font-weight:600; color:{sent_color}; margin-top:5px;">{local_sent}</div>
                 </div>
-                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
+                <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
                     <div style="font-size:11px; color:#888; font-weight:600;">ПОЗИЦІЯ У СПИСКУ</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{f"#{local_pos:.0f}" if local_pos else "-"}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-
             # ----------------------------------------------------
             
             raw_text = current_scan_row.get('raw_response', '')
             st.markdown("##### Відповідь від LLM")
-            proj = st.session_state.get("current_project", {})
-            brand_name = proj.get("brand_name", "")
             
             if raw_text:
                 final_html = raw_text
-                if brand_name:
-                    highlight_span = f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{brand_name}</span>"
-                    final_html = final_html.replace(brand_name, highlight_span)
+                if target_brand_name:
+                    highlight_span = f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{target_brand_name}</span>"
+                    final_html = final_html.replace(target_brand_name, highlight_span)
                 st.markdown(f"""<div style="background-color: #f9fffb; border: 1px solid #bbf7d0; border-radius: 8px; padding: 20px; font-size: 16px; line-height: 1.6; color: #374151;">{final_html}</div>""", unsafe_allow_html=True)
             else:
                 st.info("Текст відповіді не збережено.")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- БРЕНДИ (Center Layout + 1.3/2 Ratio) ---
+            # --- БРЕНДИ (Center Layout) ---
             st.markdown(f"**Знайдені бренди:** {tooltip('Бренди, які AI згадав у цій відповіді.')}", unsafe_allow_html=True)
             scan_mentions = pd.DataFrame()
             if not df_mentions.empty:
@@ -1921,7 +1931,6 @@ def show_keyword_details(kw_id):
                 scan_mentions = scan_mentions.sort_values('mention_count', ascending=False)
 
                 if not scan_mentions.empty:
-                    # Вертикальне вирівнювання = center
                     c_chart, c_table = st.columns([1.3, 2], vertical_alignment="center")
                     with c_chart:
                         fig_brands = px.pie(
@@ -1950,34 +1959,27 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
+            # --- ДЖЕРЕЛА (Grouped + Center) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
                 sources_data = sources_resp.data
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
-                    
-                    # 1. Domain extraction
                     if 'url' in df_src.columns:
                         if 'domain' not in df_src.columns:
                             df_src['domain'] = df_src['url'].apply(lambda x: str(x).split('/')[2] if x and '//' in str(x) else 'unknown')
                         
                         df_src['url'] = df_src['url'].apply(normalize_url)
-                        
-                        # Status
                         if 'is_official' in df_src.columns:
                             df_src['status_text'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
                         else:
                             df_src['status_text'] = "🔗 Зовнішнє"
 
-                        # 2. 🔥 ГРУПУВАННЯ (Aggregation)
-                        # Рахуємо, скільки разів кожне URL зустрічається
                         df_grouped_src = df_src.groupby(['url', 'domain', 'status_text'], as_index=False).size()
                         df_grouped_src = df_grouped_src.rename(columns={'size': 'count'})
                         df_grouped_src = df_grouped_src.sort_values(by='count', ascending=False)
 
-                        # 3. Графік та Таблиця
                         c_src_chart, c_src_table = st.columns([1.3, 2], vertical_alignment="center")
                         
                         with c_src_chart:
