@@ -1721,7 +1721,7 @@ def show_keywords_page():
     """
     Сторінка списку запитів.
     Дизайн: Картки (Контейнери).
-    Функціонал: Деталі, Крон-перемикач, Масовий запуск, Динамічне додавання.
+    Функціонал: Деталі, Налаштування CRON (Авто-скан + Частота), Масовий запуск.
     """
     import pandas as pd
     import streamlit as st
@@ -1735,6 +1735,16 @@ def show_keywords_page():
         "Google Gemini": "gemini-1.5-pro"
     }
 
+    # Підключення до Supabase
+    if 'supabase' not in globals():
+        if 'supabase' in st.session_state:
+            supabase = st.session_state['supabase']
+        else:
+            st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
+            return
+    else:
+        supabase = globals()['supabase']
+
     # Ініціалізація лічильника інпутів
     if "kw_input_count" not in st.session_state:
         st.session_state["kw_input_count"] = 1
@@ -1746,15 +1756,25 @@ def show_keywords_page():
 
     # Якщо натиснули "Деталі" - показуємо іншу сторінку
     if st.session_state.get("focus_keyword_id"):
+        # Переконайтеся, що ця функція імпортована або доступна
         show_keyword_details(st.session_state["focus_keyword_id"])
         return
 
     st.title("📋 Перелік запитів")
 
     # ========================================================
+    # 0. ХЕЛПЕР ДЛЯ ОНОВЛЕННЯ (CRON)
+    # ========================================================
+    def update_kw_field(kw_id, field, value):
+        try:
+            supabase.table("keywords").update({field: value}).eq("id", kw_id).execute()
+        except Exception as e:
+            st.error(f"Помилка оновлення: {e}")
+
+    # ========================================================
     # 1. БЛОК ДОДАВАННЯ (ЗГОРНУТИЙ ЗА ЗАМОВЧУВАННЯМ)
     # ========================================================
-    with st.expander("➕ Додати нові запити", expanded=False): # <--- Згорнуто
+    with st.expander("➕ Додати нові запити", expanded=False): 
         with st.container(border=True):
             st.markdown("##### 📝 Введіть нові запити")
             
@@ -1792,14 +1812,23 @@ def show_keywords_page():
                     
                     if new_keywords_list:
                         try:
-                            # Вставляємо в базу
-                            insert_data = [{"project_id": proj["id"], "keyword_text": kw, "is_active": True, "is_cron_active": False} for kw in new_keywords_list]
+                            # Вставляємо в базу (з дефолтними налаштуваннями CRON)
+                            insert_data = [{
+                                "project_id": proj["id"], 
+                                "keyword_text": kw, 
+                                "is_active": True, 
+                                "is_auto_scan": False, # За замовчуванням вимкнено
+                                "frequency": "daily"   # За замовчуванням щодня
+                            } for kw in new_keywords_list]
+                            
                             res = supabase.table("keywords").insert(insert_data).execute()
                             
                             if res.data:
                                 # Запускаємо скан
                                 with st.spinner(f"Запускаємо аналіз..."):
-                                    n8n_trigger_analysis(proj["id"], new_keywords_list, proj.get("brand_name"), models=selected_models_add)
+                                    # Переконайтеся, що n8n_trigger_analysis доступна
+                                    if 'n8n_trigger_analysis' in globals():
+                                        n8n_trigger_analysis(proj["id"], new_keywords_list, proj.get("brand_name"), models=selected_models_add)
                                 
                                 st.success(f"Додано {len(new_keywords_list)} запитів!")
                                 # Скидаємо поля
@@ -1820,7 +1849,7 @@ def show_keywords_page():
     # ========================================================
     try:
         # Запити
-        keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).execute().data
+        keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute().data
         
         # Дати останнього скану
         last_scans_resp = supabase.table("scan_results")\
@@ -1870,7 +1899,7 @@ def show_keywords_page():
     elif sort_option == "Давно не скановані":
         keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
-# --- Рядок 2: Масові дії (Container) ---
+    # --- Рядок 2: Масові дії (Container) ---
     with st.container(border=True):
         c_check, c_models, c_btn = st.columns([0.5, 3, 1.5])
         
@@ -1900,11 +1929,9 @@ def show_keywords_page():
                 
                 if selected_kws_text:
                     with st.spinner(f"Відправляємо {len(selected_kws_text)} запитів..."):
-                        n8n_trigger_analysis(proj["id"], selected_kws_text, proj.get("brand_name"), models=bulk_models)
+                        if 'n8n_trigger_analysis' in globals():
+                            n8n_trigger_analysis(proj["id"], selected_kws_text, proj.get("brand_name"), models=bulk_models)
                         st.success("Успішно! Оновіть сторінку за хвилину.")
-                        
-                        # 🔥 FIX: ВИДАЛЕНО РЯДОК, ЩО ВИКЛИКАВ ПОМИЛКУ
-                        # if select_all: st.session_state["select_all_kws"] = False <--- ЦЕ БУЛА ПРИЧИНА
                         
                         time.sleep(2)
                         st.rerun()
@@ -1916,24 +1943,16 @@ def show_keywords_page():
     # ========================================================
     
     # Заголовки стовпчиків (для краси)
-    h1, h2, h3, h4, h5 = st.columns([0.5, 3, 1.5, 1.5, 1.2])
+    h1, h2, h3, h4, h5 = st.columns([0.5, 3, 2.5, 1.5, 1.2]) # Розширив h3 для налаштувань CRON
     h2.markdown("**Запит**")
-    h3.markdown("**⏰ Авто-Скан (CRON)**")
+    h3.markdown("**⏰ Налаштування CRON**")
     h4.markdown("**Останній аналіз**")
     h5.markdown("**Дії**")
-
-    # Функція оновлення крону (Callback)
-    def update_cron_status(kw_id, new_status):
-        try:
-            supabase.table("keywords").update({"is_cron_active": new_status}).eq("id", kw_id).execute()
-            # Можна додати toast повідомлення
-        except Exception as e:
-            st.error(f"Error updating cron: {e}")
 
     # Вивід рядків
     for k in keywords:
         with st.container(border=True):
-            c1, c2, c3, c4, c5 = st.columns([0.5, 3, 1.5, 1.5, 1.2])
+            c1, c2, c3, c4, c5 = st.columns([0.5, 3, 2.5, 1.5, 1.2])
             
             # 1. Чекбокс вибору
             with c1:
@@ -1942,27 +1961,58 @@ def show_keywords_page():
             
             # 2. Текст запиту
             with c2:
+                st.write("") # Вирівнювання
                 st.markdown(f"**{k['keyword_text']}**")
             
-            # 3. CRON Перемикач (Toggle)
+            # 3. CRON (Авто-скан + Частота)
             with c3:
-                # Використовуємо toggle. Ключ унікальний для кожного рядка
-                cron_active = k.get('is_cron_active', False)
-                new_cron = st.toggle(
-                    "Увімк.", 
-                    value=cron_active, 
-                    key=f"cron_{k['id']}",
-                    label_visibility="collapsed"
-                )
+                # Використовуємо 2 колонки всередині
+                cron_col1, cron_col2 = st.columns([1, 1.5])
                 
-                # Якщо значення змінилося в UI, оновлюємо БД
-                if new_cron != cron_active:
-                    update_cron_status(k['id'], new_cron)
-                    # Опціонально: st.rerun() якщо хочемо миттєве оновлення даних, 
-                    # але краще без нього для плавності, дані оновляться при наступній дії.
+                # A. Toggle (Увімк/Вимк)
+                # Перевіряємо, чи є поле в базі, якщо ні - False
+                is_auto = k.get('is_auto_scan', False) 
+                
+                with cron_col1:
+                    new_auto = st.toggle(
+                        "Авто", 
+                        value=is_auto, 
+                        key=f"auto_{k['id']}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    if new_auto != is_auto:
+                        update_kw_field(k['id'], "is_auto_scan", new_auto)
+                        st.rerun()
+
+                # B. Частота (Selectbox) - показуємо тільки якщо авто увімкнено
+                with cron_col2:
+                    if new_auto:
+                        current_freq = k.get('frequency', 'daily')
+                        freq_options = ["daily", "weekly", "monthly"]
+                        
+                        # Знаходимо індекс для дефолтного значення
+                        try:
+                            idx = freq_options.index(current_freq)
+                        except:
+                            idx = 0
+                            
+                        new_freq = st.selectbox(
+                            "Freq",
+                            freq_options,
+                            index=idx,
+                            key=f"freq_{k['id']}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        if new_freq != current_freq:
+                            update_kw_field(k['id'], "frequency", new_freq)
+                    else:
+                        st.caption("Вимкнено")
             
             # 4. Дата
             with c4:
+                st.write("")
                 date_iso = k.get('last_scan_date')
                 if date_iso and date_iso != "1970-01-01T00:00:00+00:00":
                     dt_obj = datetime.fromisoformat(date_iso.replace('Z', '+00:00'))
@@ -1973,6 +2023,7 @@ def show_keywords_page():
             
             # 5. Дії (Деталі + Видалити)
             with c5:
+                st.write("")
                 b1, b2 = st.columns(2)
                 # Кнопка Деталі
                 if b1.button("🔍", key=f"det_{k['id']}", help="Детальний аналіз"):
