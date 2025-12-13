@@ -1438,10 +1438,10 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    Оновлено:
-    - Графік без зайвих кнопок (displayModeBar: False).
-    - Глосарій (Tooltips) видимого кольору (#333).
-    - Повний функціонал збережено.
+    ВЕРСІЯ: FULL RESTORED + FIXES.
+    - Виправлено KeyError.
+    - Повернуто обробку статусів джерел та URL.
+    - Дизайн: Фіолетові KPI, Графік без кнопок, Глосарій #333.
     """
     import pandas as pd
     import plotly.express as px
@@ -1465,10 +1465,16 @@ def show_keyword_details(kw_id):
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # --- HELPER: TOOLTIP (ВИПРАВЛЕНО КОЛІР) ---
+    # --- HELPER: TOOLTIP (ЧОРНИЙ КОЛІР) ---
     def tooltip(text):
-        # Колір змінено на #333 (чорний/темно-сірий), щоб було видно
         return f'<span title="{text}" style="cursor:help; font-size:14px; color:#333; margin-left:4px;">ℹ️</span>'
+
+    # --- HELPER: URL NORMALIZER ---
+    def normalize_url(u):
+        u = str(u).strip()
+        if not u.startswith(('http://', 'https://')):
+            return f"https://{u}"
+        return u
 
     # 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ
     try:
@@ -1486,7 +1492,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка БД: {e}")
         return
 
-    # HEADER
+    # HEADER (ЗМЕНШЕНИЙ ШРИФТ)
     col_back, col_title = st.columns([1, 15])
     with col_back:
         if st.button("⬅", key="back_from_details", help="Назад до списку"):
@@ -1527,6 +1533,7 @@ def show_keyword_details(kw_id):
             return
 
         df_scans = pd.DataFrame(scans_data)
+        # Перейменовуємо ID для безпечного мерджу
         df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
         df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
         df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
@@ -1775,7 +1782,7 @@ def show_keyword_details(kw_id):
         if y_range: fig.update_yaxes(range=y_range)
         if metric_choice == "Позиція у списку": fig.update_yaxes(autorange="reversed")
 
-        # Прибираємо зайві кнопки (displayModeBar: False буде в st.plotly_chart)
+        # Прибираємо зайві кнопки
         fig.update_layout(
             height=350,
             hovermode="x unified",
@@ -1787,14 +1794,14 @@ def show_keyword_details(kw_id):
             dtick="D1" if len(date_range) > 1 and isinstance(date_range, tuple) else None
         )
         
-        # 🔥 FIX: ВИМИКАЄМО ПАНЕЛЬ ІНСТРУМЕНТІВ
+        # 🔥 GRAPH: БЕЗ ІНСТРУМЕНТІВ
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'staticPlot': False})
     else:
         st.info("Немає даних для графіка.")
 
     st.markdown("---")
 
-    # 7. ДЕТАЛІЗАЦІЯ
+    # 7. ДЕТАЛІЗАЦІЯ (TABS)
     st.markdown("##### 📝 Детальний аналіз відповідей")
     
     unique_models = df_scans['provider'].unique().tolist()
@@ -1851,6 +1858,7 @@ def show_keyword_details(kw_id):
                 
                 st.markdown("<br>", unsafe_allow_html=True)
 
+                # --- ДЖЕРЕЛА (ПОВЕРНУТО ПОВНИЙ ФУНКЦІОНАЛ) ---
                 st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
                 try:
                     sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
@@ -1858,20 +1866,36 @@ def show_keyword_details(kw_id):
                     if sources_data:
                         df_src = pd.DataFrame(sources_data)
                         if 'url' in df_src.columns:
+                            # 1. Відновлено обробку URL
+                            df_src['url'] = df_src['url'].apply(normalize_url)
+                            
+                            # 2. Відновлено колонку "Статус"
+                            if 'is_official' in df_src.columns:
+                                df_src['status_text'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
+                            else:
+                                df_src['status_text'] = "🔗 Зовнішнє"
+
+                            # 3. Відновлено сортування (якщо є mention_count, інакше просто показуємо)
+                            if 'mention_count' in df_src.columns:
+                                df_src = df_src.sort_values(by='mention_count', ascending=False)
+
                             st.dataframe(
-                                df_src[['url', 'domain', 'is_official']], 
+                                df_src[['url', 'status_text']], 
                                 use_container_width=True, 
                                 hide_index=True,
                                 column_config={
-                                    "url": st.column_config.LinkColumn("Посилання"),
-                                    "domain": "Домен",
-                                    "is_official": st.column_config.CheckboxColumn("Офіційне?")
+                                    "url": st.column_config.LinkColumn(
+                                        "Посилання", 
+                                        width="large",
+                                        validate="^https?://"
+                                    ),
+                                    "status_text": st.column_config.TextColumn("Тип", width="medium")
                                 }
                             )
                     else:
                         st.info("ℹ️ Джерел не знайдено.")
-                except:
-                    st.error("Помилка завантаження джерел.")
+                except Exception as e:
+                    st.error(f"Помилка завантаження джерел: {e}")
 
 def show_keywords_page():
     """
