@@ -1438,11 +1438,11 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL & CORRECTED.
-    1. Syntax/Indentation Fixed.
-    2. Metrics: Smart brand detection (Name matching fallback).
-    3. Sentiment: 100% distribution logic strictly for target brand.
-    4. UI: Green borders for local metrics.
+    ВЕРСІЯ: FINAL FIX (LOGIC REWRITE).
+    1. Fix IndentationError.
+    2. Fix Metrics: Тепер код сумує дані з УСІХ рядків, де назва бренду співпадає з вашим проектом (SkyUp),
+       ігноруючи помилкові прапорці is_my_brand.
+    3. Fix Delete: Після видалення сторінка перезавантажується коректно.
     """
     import pandas as pd
     import plotly.express as px
@@ -1500,9 +1500,9 @@ def show_keyword_details(kw_id):
         keyword_text = keyword_record["keyword_text"]
         project_id = keyword_record["project_id"]
         
-        # Отримуємо назву бренду для пошуку
+        # Назва бренду для розумного пошуку
         proj = st.session_state.get("current_project", {})
-        target_brand_name = proj.get("brand_name", "").strip()
+        target_brand_name = proj.get("brand_name", "").strip().lower()
         
     except Exception as e:
         st.error(f"Помилка БД: {e}")
@@ -1597,7 +1597,7 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # Перейменовуємо ID в scan_id
+            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             
             # --- 🕒 TIMEZONE FIX (Kyiv) ---
@@ -1612,7 +1612,6 @@ def show_keyword_details(kw_id):
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
 
-        # B. Mentions
         if not df_scans.empty:
             scan_ids = df_scans['scan_id'].tolist()
             if scan_ids:
@@ -1627,19 +1626,7 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # 🔥 ВАЖЛИВО: Визначаємо "Мій Бренд" (Fallback search)
-        if not df_mentions.empty:
-            # 1. Створюємо колонку для нормалізованого порівняння
-            df_mentions['brand_norm'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
-            target_norm = target_brand_name.lower().strip()
-            
-            # 2. Якщо в базі is_my_brand = False, але назва співпадає -> ставимо True
-            if target_norm:
-                mask_match = df_mentions['brand_norm'].str.contains(target_norm, na=False)
-                # Оновлюємо локально в DataFrame
-                df_mentions.loc[mask_match, 'is_my_brand'] = True
-
-        # C. Merge
+        # Merge
         if not df_mentions.empty:
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
@@ -1657,19 +1644,22 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL) - СТРОГО ПО ТЗ (100% розподіл)
+    # 3. KPI (GLOBAL)
     if not df_mentions.empty:
-        # Дані ТІЛЬКИ нашого бренду
-        my_brand_data = df_mentions[df_mentions['is_my_brand'] == True]
+        # 🔥 РОЗУМНИЙ ФІЛЬТР (не тільки is_my_brand, а й по назві)
+        if target_brand_name:
+            mask_my_brand = (df_mentions['is_my_brand'] == True) | (df_mentions['brand_name'].astype(str).str.lower().str.contains(target_brand_name))
+        else:
+            mask_my_brand = (df_mentions['is_my_brand'] == True)
+
+        total_my_mentions = df_mentions[mask_my_brand]['mention_count'].sum()
+        unique_competitors = df_mentions[~mask_my_brand]['brand_name'].nunique()
         
-        total_my_mentions = my_brand_data['mention_count'].sum()
-        unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
-        
-        # SOV
+        # SOV Calculation
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
-        my_mentions_per_scan = my_brand_data.groupby('scan_result_id')['mention_count'].sum().reset_index()
+        my_mentions_per_scan = df_mentions[mask_my_brand].groupby('scan_result_id')['mention_count'].sum().reset_index()
         my_mentions_per_scan.rename(columns={'mention_count': 'my_count'}, inplace=True)
         
         sov_df = pd.merge(scan_totals, my_mentions_per_scan, on='scan_result_id', how='left')
@@ -1678,21 +1668,18 @@ def show_keyword_details(kw_id):
         
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
-        # Rank
-        avg_pos = my_brand_data['rank_position'].mean()
+        # Rank Calculation
+        my_ranks = df_mentions[mask_my_brand & (df_mentions['rank_position'].notna())]['rank_position']
+        avg_pos = my_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # Sentiment (Тільки мій бренд, сума 100%)
-        if not my_brand_data.empty:
-            s_counts = my_brand_data['sentiment_score'].value_counts()
-            total_sent_count = s_counts.sum() # Сума згадок з тональністю
-            
-            if total_sent_count > 0:
-                pos_pct = (s_counts.get("Позитивний", 0) / total_sent_count) * 100
-                neg_pct = (s_counts.get("Негативний", 0) / total_sent_count) * 100
-                neu_pct = (s_counts.get("Нейтральний", 0) / total_sent_count) * 100
-            else:
-                pos_pct, neg_pct, neu_pct = 0, 0, 0
+        # Sentiment
+        my_sentiment = df_mentions[mask_my_brand]['sentiment_score']
+        if not my_sentiment.empty:
+            s_counts = my_sentiment.value_counts(normalize=True) * 100
+            pos_pct = s_counts.get("Позитивний", 0.0)
+            neg_pct = s_counts.get("Негативний", 0.0)
+            neu_pct = s_counts.get("Нейтральний", 0.0)
         else:
             pos_pct, neg_pct, neu_pct = 0, 0, 0
             
@@ -1720,15 +1707,12 @@ def show_keyword_details(kw_id):
     </style>
     """, unsafe_allow_html=True)
 
-    # Логіка тексту тональності
-    if total_my_mentions > 0:
-        sent_display = f"""
-        <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;
-        <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp;
-        <span style='color:#FF4B4B'>😡 {neg_pct:.0f}%</span>
-        """
-    else:
-        sent_display = "<span style='color:#999'>Не згадано</span>"
+    sent_display = f"""
+    <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;
+    <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp;
+    <span style='color:#FF4B4B'>😡 {neg_pct:.0f}%</span>
+    """
+    if total_my_mentions == 0: sent_display = "<span style='color:#999'>Не знайдено</span>"
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
@@ -1765,7 +1749,6 @@ def show_keyword_details(kw_id):
             if not df_plot_base.empty:
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
-                # ВИПРАВЛЕНО СИНТАКСИС (Один рядок)
                 date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
@@ -1898,12 +1881,13 @@ def show_keyword_details(kw_id):
 
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS (FIXED: Smart Search + Green Border) ---
+            # --- LOCAL METRICS (ВИПРАВЛЕНО: СУМУЄМО ВСІ ЗБІГИ) ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не згадано"
             loc_rank_str = "-"
             
+            # 1. Беремо всі згадки для цього скану
             current_scan_mentions = pd.DataFrame()
             if not df_mentions.empty:
                 current_scan_mentions = df_mentions[df_mentions['scan_result_id'] == selected_scan_id]
@@ -1911,17 +1895,25 @@ def show_keyword_details(kw_id):
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
                 
-                # 1. Пошук за ID (is_my_brand)
-                my_brand_row = current_scan_mentions[current_scan_mentions['is_my_brand'] == True]
+                # 2. Фільтруємо ВСІ рядки, які відносяться до нашого бренду
+                #    (і за галочкою is_my_brand, і за назвою SkyUp)
+                mask_target = (current_scan_mentions['is_my_brand'] == True)
+                if target_brand_name:
+                    mask_name = current_scan_mentions['brand_name'].astype(str).str.lower().str.contains(target_brand_name)
+                    mask_target = mask_target | mask_name
                 
-                # 2. Fallback за назвою (якщо база не розмітила)
-                if my_brand_row.empty and target_brand_name:
-                    my_brand_row = current_scan_mentions[current_scan_mentions['brand_name'].astype(str).str.lower().str.contains(target_brand_name.lower())]
+                my_brand_rows = current_scan_mentions[mask_target]
 
-                if not my_brand_row.empty:
-                    val_my_mentions = my_brand_row['mention_count'].sum()
-                    val_rank = my_brand_row['rank_position'].iloc[0]
-                    val_sentiment = my_brand_row['sentiment_score'].iloc[0]
+                if not my_brand_rows.empty:
+                    # Сумуємо згадки (9 + 0 = 9)
+                    val_my_mentions = my_brand_rows['mention_count'].sum()
+                    
+                    # Беремо найкращу (мінімальну) позицію, ігноруючи NaN
+                    val_rank = my_brand_rows['rank_position'].min()
+                    
+                    # Беремо тональність з рядка, де найбільше згадок (головний рядок)
+                    main_row = my_brand_rows.sort_values('mention_count', ascending=False).iloc[0]
+                    val_sentiment = main_row['sentiment_score']
                     
                     loc_mentions = int(val_my_mentions)
                     loc_sov = (val_my_mentions / total_in_scan * 100) if total_in_scan > 0 else 0
@@ -1933,7 +1925,6 @@ def show_keyword_details(kw_id):
             elif loc_sent == "Негативний": sent_color = "#FF4B4B"
             elif loc_sent == "Не згадано": sent_color = "#999"
 
-            # ВІЗУАЛІЗАЦІЯ (ЗЕЛЕНИЙ БОРДЕР)
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
