@@ -3099,17 +3099,25 @@ def show_admin_page():
 def show_chat_page():
     """
     Сторінка AI-асистента (GPT-Visibility).
-    Оновлено: Додано передачу прав користувача (role) на вебхук.
+    Оновлено: 
+    - Додано авторизацію Header Auth для n8n.
+    - Передача прав (role) та контексту проекту.
+    - Історія не передається (керується n8n).
     """
     import requests
     import streamlit as st
 
-    # --- КОНФІГУРАЦІЯ ---
+    # --- КОНФІГУРАЦІЯ ---    
+    # 🔥 АВТОРИЗАЦІЯ (HEADER AUTH)
+    headers = {
+        "hi@virshi.ai": "hi@virshi.ai2025"
+    }
+
     st.title("🤖 GPT-Visibility Assistant")
     
     # 1. Отримуємо контекст
     user = st.session_state.get("user")
-    role = st.session_state.get("role", "user") # <--- Отримуємо роль
+    role = st.session_state.get("role", "user") 
     proj = st.session_state.get("current_project", {})
     
     if not proj:
@@ -3117,7 +3125,9 @@ def show_chat_page():
 
     # 2. Ініціалізація локальної історії
     if "messages" not in st.session_state:
-        welcome_text = f"Привіт! Я аналітик проекту **{proj.get('brand_name', '...')}**. Готовий допомогти."
+        # Безпечне отримання назви бренду
+        brand_name = proj.get('brand_name', 'вашого бренду') if proj else 'вашого бренду'
+        welcome_text = f"Привіт! Я аналітик проекту **{brand_name}**. Готовий допомогти."
         st.session_state["messages"] = [
             {"role": "assistant", "content": welcome_text}
         ]
@@ -3153,7 +3163,7 @@ def show_chat_page():
                         # Дані користувача + РОЛЬ
                         "user_id": user.id if user else "guest",
                         "user_email": user.email if user else None,
-                        "role": role,  # <--- ДОДАНО ПРАВА КОРИСТУВАЧА
+                        "role": role,
                         
                         # Дані проекту
                         "project_id": proj.get("id"),
@@ -3162,8 +3172,13 @@ def show_chat_page():
                         "status": proj.get("status")
                     }
 
-                    # Запит до n8n
-                    response = requests.post(N8N_CHAT_WEBHOOK, json=payload, timeout=60)
+                    # 🔥 ЗАПИТ З АВТОРИЗАЦІЄЮ
+                    response = requests.post(
+                        N8N_CHAT_WEBHOOK, 
+                        json=payload, 
+                        headers=headers, # <--- Додано сюди
+                        timeout=60
+                    )
 
                     if response.status_code == 200:
                         data = response.json()
@@ -3182,7 +3197,7 @@ def show_chat_page():
         
         # D. Збереження відповіді
         st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
-
+        
             
 def main():
     # 1. Session Check
