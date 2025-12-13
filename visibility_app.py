@@ -2709,10 +2709,9 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    Версія 4.0 (Final Webhook & Navigation):
-    - Webhook payload fixed: {brand, domain, industry, products}.
-    - Added 'Industry' input field in Create Project tab.
-    - Added 'Dashboard' navigation button in Project List.
+    Версія 4.1 (FIXED):
+    - Fix Webhook: Обробка ключа 'prompts' у відповіді n8n.
+    - Fix Button: Кнопка переходу змінена на стрілочку "↗️".
     """
     import pandas as pd
     import streamlit as st
@@ -2750,11 +2749,12 @@ def show_admin_page():
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
-    # --- ЛОГІКА ВЕБХУКА (ВИПРАВЛЕНО ПІД ВАШ JSON) ---
+    # --- ЛОГІКА ВЕБХУКА (ВИПРАВЛЕНО 'prompts') ---
     def trigger_keyword_generation(brand, domain, industry, products):
         """
-        Відправляє дані на n8n для генерації запитів.
-        Payload matches specific requirement: {brand, domain, industry, products}
+        Відправляє дані на n8n.
+        Payload: {brand, domain, industry, products}
+        Очікує: { "prompts": [...] } або { "keywords": [...] }
         """
         payload = {
             "brand": brand,
@@ -2769,13 +2769,22 @@ def show_admin_page():
             if response.status_code == 200:
                 try:
                     data = response.json()
-                    # Обробка відповіді (список або словник з ключем keywords)
-                    if isinstance(data, dict) and "keywords" in data:
-                        return data["keywords"]
+                    
+                    # 🔥 ВИПРАВЛЕННЯ ТУТ: Шукаємо 'prompts' або 'keywords'
+                    if isinstance(data, dict):
+                        if "prompts" in data:
+                            return data["prompts"]
+                        elif "keywords" in data:
+                            return data["keywords"]
+                        else:
+                            st.warning(f"Нестандартна відповідь (ключі: {list(data.keys())}): {data}")
+                            # Спробуємо повернути values, якщо це плоский dict
+                            return list(data.values()) if data else []
+                            
                     elif isinstance(data, list):
                         return data
                     else:
-                        st.warning(f"Нестандартна відповідь від n8n: {data}")
+                        st.warning(f"Невідомий формат відповіді: {type(data)}")
                         return []
                 except ValueError:
                     st.error("N8N повернув не JSON.")
@@ -2836,16 +2845,16 @@ def show_admin_page():
     tab_list, tab_create, tab_users = st.tabs(["📂 Список проектів", "➕ Створити проект", "👥 Користувачі & Права"])
 
     # ========================================================
-    # TAB 1: СПИСОК ПРОЕКТІВ (З КНОПКОЮ ДАШБОРДУ)
+    # TAB 1: СПИСОК ПРОЕКТІВ
     # ========================================================
     with tab_list:
         st.markdown("##### Керування проектами")
         
-        # Заголовки (Додано стовпець Дашборд)
-        h0, h1, h_dash, h2, h3, h4, h5 = st.columns([0.3, 2, 0.8, 1.5, 1.5, 1, 0.5])
+        # Заголовки (Кнопка Дашборд вужча - 0.5)
+        h0, h1, h_dash, h2, h3, h4, h5 = st.columns([0.3, 2, 0.5, 1.5, 1.5, 1, 0.5])
         h0.markdown("**#**")
         h1.markdown("**Проект / Користувач**")
-        h_dash.markdown("**Дашборд**") # <--- НОВЕ
+        h_dash.markdown("") # Пустий заголовок для кнопки
         h2.markdown("**Статус**")
         h3.markdown("**Авто сканування**")
         h4.markdown("**Дата**")
@@ -2874,7 +2883,7 @@ def show_admin_page():
                 p_name = raw_name
 
             with st.container():
-                c0, c1, c_dash, c2, c3, c4, c5 = st.columns([0.3, 2, 0.8, 1.5, 1.5, 1, 0.5])
+                c0, c1, c_dash, c2, c3, c4, c5 = st.columns([0.3, 2, 0.5, 1.5, 1.5, 1, 0.5])
 
                 with c0: st.caption(f"{idx}")
 
@@ -2886,11 +2895,13 @@ def show_admin_page():
 
                 # --- КНОПКА ПЕРЕХОДУ НА ДАШБОРД ---
                 with c_dash:
-                    # При натисканні ми змінюємо current_project в сесії
-                    # Це змусить додаток показати дашборд саме цього проекту
-                    if st.button("📊 Перейти", key=f"goto_{p_id}", help="Відкрити дашборд цього проекту"):
+                    # ВИКОРИСТОВУЄМО ІКОНКУ ЗАМІСТЬ ТЕКСТУ
+                    if st.button("↗️", key=f"goto_{p_id}", help=f"Перейти до дашборду '{p_name}'"):
                         st.session_state["current_project"] = p
-                        st.session_state["focus_keyword_id"] = None # Скидаємо фокус
+                        st.session_state["focus_keyword_id"] = None
+                        
+                        # Спроба переключити сторінку (залежить від вашої навігації в main())
+                        # Зазвичай це працює через оновлення current_project
                         st.rerun()
 
                 with c2:
@@ -2940,7 +2951,7 @@ def show_admin_page():
                 st.divider()
 
     # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ (REAL WEBHOOK + ГАЛУЗЬ)
+    # TAB 2: СТВОРИТИ ПРОЕКТ
     # ========================================================
     with tab_create:
         st.markdown("##### Створення нового проекту")
@@ -2951,31 +2962,19 @@ def show_admin_page():
         new_domain_val = c2.text_input("Домен", key="new_proj_domain", placeholder="skyup.aero")
         
         c3, c4 = st.columns(2)
-        # --- НОВЕ ПОЛЕ: ГАЛУЗЬ (INDUSTRY) ---
         new_industry_val = c3.text_input("Галузь (Обов'язково)", key="new_proj_ind", placeholder="напр. авіаперевезення")
+        new_desc_val = c4.text_area("Продукти/Послуги", placeholder="напр. лоукостер, квитки", height=68, key="new_proj_desc")
         
-        # --- ПОЛЕ: ПРОДУКТИ (ОПИС) ---
-        new_desc_val = c4.text_area(
-            "Продукти/Послуги (Опис)", 
-            placeholder="напр. лоукостер, квитки",
-            height=68,
-            key="new_proj_desc"
-        )
-        
-        # Кнопка генерації через WEBHOOK
         if st.button("✨ Згенерувати 10 запитів (AI)"):
-            # Перевірка обов'язкових полів для вебхука
             if new_domain_val and new_industry_val and new_desc_val: 
-                
                 brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
                 
                 with st.spinner("Звертаємось до n8n для генерації..."):
-                    # ПЕРЕДАЄМО ПРАВИЛЬНІ ДАНІ У ВЕБХУК
                     generated_kws = trigger_keyword_generation(
                         brand=brand_for_ai,
                         domain=new_domain_val,
-                        industry=new_industry_val, # Галузь
-                        products=new_desc_val      # Опис продуктів
+                        industry=new_industry_val,
+                        products=new_desc_val
                     )
                 
                 if generated_kws:
@@ -3012,7 +3011,6 @@ def show_admin_page():
             
             if new_domain_val:
                 try:
-                    # 1. Створення проекту
                     new_proj_data = {
                         "project_name": final_name,
                         "domain": new_domain_val,
@@ -3023,23 +3021,15 @@ def show_admin_page():
                     
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
-                        
-                        # 2. Збереження запитів
                         final_kws = edited_df["keyword"].dropna().tolist()
                         final_kws = [k.strip() for k in final_kws if k.strip()]
                         
                         if final_kws:
-                            kws_data = [
-                                {
-                                    "project_id": new_proj_id, 
-                                    "keyword_text": kw,
-                                    "is_active": True
-                                } for kw in final_kws
-                            ]
+                            kws_data = [{"project_id": new_proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws]
                             supabase.table("keywords").insert(kws_data).execute()
                         
                         st.success(f"Проект '{final_name}' створено! Додано {len(final_kws)} запитів.")
-                        st.session_state["new_proj_keywords"] = [] # Очистка
+                        st.session_state["new_proj_keywords"] = []
                         st.rerun()
                 except Exception as e:
                     st.error(f"Помилка створення: {e}")
@@ -3065,11 +3055,7 @@ def show_admin_page():
                     "email": st.column_config.TextColumn("Email", disabled=True),
                     "first_name": "Ім'я",
                     "last_name": "Прізвище",
-                    "role": st.column_config.SelectboxColumn(
-                        "Роль",
-                        options=["user", "admin", "super_admin"],
-                        required=True
-                    )
+                    "role": st.column_config.SelectboxColumn("Роль", options=["user", "admin", "super_admin"], required=True)
                 },
                 hide_index=True,
                 use_container_width=True,
