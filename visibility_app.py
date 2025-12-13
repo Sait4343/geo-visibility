@@ -2709,14 +2709,20 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    Оновлено:
-    - Tab "Створити проект": Додано генерацію та редагування запитів.
-    - Tab "Список проектів": Виправлено назви та заголовки (Авто сканування).
-    - Всі поля ID заблоковані для редагування.
+    Версія 2.1:
+    - Webhook для генерації запитів (замість імітації).
+    - Виправлено відображення назв проектів (Fallback to domain).
+    - Нумерація списку проектів.
+    - ID проектів дрібним шрифтом.
+    - Українська локалізація заголовків.
     """
     import pandas as pd
     import streamlit as st
     import numpy as np
+    import requests # Потрібно для вебхука
+
+    # --- КОНФІГУРАЦІЯ WEBHOOK (Вставте ваш реальний URL з n8n) ---
+    N8N_GEN_WEBHOOK_URL = "https://primary.n8n.com/webhook/..." # <--- ЗАМІНІТЬ НА ВАШ URL
 
     # --- 0. ПІДКЛЮЧЕННЯ ---
     if 'supabase' not in globals():
@@ -2730,19 +2736,12 @@ def show_admin_page():
 
     # --- ХЕЛПЕРИ ---
     def clean_data_for_json(data):
-        """Виправляє помилку int64 is not JSON serializable"""
-        if isinstance(data, dict):
-            return {k: clean_data_for_json(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [clean_data_for_json(v) for v in data]
-        elif isinstance(data, (np.int64, np.int32, np.integer)):
-            return int(data)
-        elif isinstance(data, (np.float64, np.float32, np.floating)):
-            return float(data)
-        elif isinstance(data, (np.bool_, bool)):
-            return bool(data)
-        elif pd.isna(data):
-            return None
+        if isinstance(data, dict): return {k: clean_data_for_json(v) for k, v in data.items()}
+        elif isinstance(data, list): return [clean_data_for_json(v) for v in data]
+        elif isinstance(data, (np.int64, np.int32, np.integer)): return int(data)
+        elif isinstance(data, (np.float64, np.float32, np.floating)): return float(data)
+        elif isinstance(data, (np.bool_, bool)): return bool(data)
+        elif pd.isna(data): return None
         return data
 
     def update_project_field(proj_id, field, value):
@@ -2752,7 +2751,28 @@ def show_admin_page():
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
-    # Ініціалізація стану для створення проекту
+    # Функція для виклику вебхука генерації
+    def trigger_keyword_generation(brand, domain):
+        try:
+            payload = {"brand": brand, "domain": domain, "mode": "generate_initial"}
+            # Якщо URL не налаштований, повертаємо помилку (або тестові дані для перевірки)
+            if "..." in N8N_GEN_WEBHOOK_URL:
+                st.warning("⚠️ URL вебхука не налаштований у коді (N8N_GEN_WEBHOOK_URL).")
+                return []
+            
+            response = requests.post(N8N_GEN_WEBHOOK_URL, json=payload, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                # Очікуємо формат: {"keywords": ["kw1", "kw2"]}
+                return data.get("keywords", [])
+            else:
+                st.error(f"Помилка вебхука: {response.status_code}")
+                return []
+        except Exception as e:
+            st.error(f"Помилка з'єднання: {e}")
+            return []
+
+    # Ініціалізація стану
     if "new_proj_keywords" not in st.session_state:
         st.session_state["new_proj_keywords"] = []
 
@@ -2768,7 +2788,6 @@ def show_admin_page():
         users_resp = supabase.table("profiles").select("*").execute()
         users_data = users_resp.data if users_resp.data else []
         
-        # Мапа користувачів
         user_map = {}
         for u in users_data:
             f_name = u.get('first_name', '') or ''
@@ -2809,11 +2828,12 @@ def show_admin_page():
     with tab_list:
         st.markdown("##### Керування проектами та користувачами")
         
-        # Заголовки (ОНОВЛЕНО)
-        h1, h2, h3, h4, h5 = st.columns([2, 1.5, 1.5, 1, 0.5])
+        # Заголовки (Оновлені)
+        h0, h1, h2, h3, h4, h5 = st.columns([0.3, 2, 1.5, 1.5, 1, 0.5])
+        h0.markdown("**#**")
         h1.markdown("**Проект / Користувач**")
         h2.markdown("**Статус**")
-        h3.markdown("**Авто сканування**") # <--- Змінено назву
+        h3.markdown("**Авто сканування**")
         h4.markdown("**Дата**")
         h5.markdown("**Дії**")
         st.divider()
@@ -2821,42 +2841,56 @@ def show_admin_page():
         if not projects_data:
             st.info("Проектів немає.")
 
-        for p in projects_data:
+        # Цикл з нумерацією (enumerate, start=1)
+        for idx, p in enumerate(projects_data, 1):
             p_id = p['id']
             u_id = p.get('user_id')
             
             owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            # Визначаємо назву проекту (FIX No Name)
-            p_name = p.get('project_name')
-            if not p_name or p_name == "No Name":
-                p_name = "Без назви"
+            # Логіка назви: Якщо "No Name" або пуста -> беремо домен
+            raw_name = p.get('project_name')
+            domain = p.get('domain', '')
+            
+            if not raw_name or raw_name.strip() == "" or raw_name == "No Name":
+                # Робимо з домену назву (apple.com -> Apple)
+                if domain:
+                    p_name = domain.split('.')[0].capitalize()
+                else:
+                    p_name = "Без назви"
+            else:
+                p_name = raw_name
 
             with st.container():
-                c1, c2, c3, c4, c5 = st.columns([2, 1.5, 1.5, 1, 0.5])
+                c0, c1, c2, c3, c4, c5 = st.columns([0.3, 2, 1.5, 1.5, 1, 0.5])
 
-                # 1. Інфо
+                # 0. Номер
+                with c0:
+                    st.caption(f"{idx}")
+
+                # 1. Інфо (Назва + ID)
                 with c1:
                     st.markdown(f"**{p_name}**")
-                    st.caption(f"🌐 {p.get('domain', '-')}")
+                    st.caption(f"ID: `{p_id}`") # ID дрібним шрифтом
+                    st.caption(f"🌐 {domain}")
                     st.caption(f"👤 {owner_info['full_name']} ({owner_info['role']})")
 
                 # 2. Статус
                 with c2:
                     curr_status = p.get('status', 'trial')
                     opts = ["trial", "active", "blocked"]
-                    try: idx = opts.index(curr_status)
-                    except: idx = 0
+                    try: idx_s = opts.index(curr_status)
+                    except: idx_s = 0
                     
-                    new_status = st.selectbox("St", opts, index=idx, key=f"st_{p_id}", label_visibility="collapsed")
+                    new_status = st.selectbox("St", opts, index=idx_s, key=f"st_{p_id}", label_visibility="collapsed")
                     if new_status != curr_status:
                         update_project_field(p_id, "status", new_status)
                         st.rerun()
 
-                # 3. CRON (ОНОВЛЕНО)
+                # 3. CRON
                 with c3:
                     allow_cron = p.get('allow_cron', False)
-                    # Змінено лейбл на "Дозволити"
+                    # Лейбл "Дозволити"
                     new_cron = st.checkbox("Дозволити", value=allow_cron, key=f"cr_{p_id}")
                     if new_cron != allow_cron:
                         update_project_field(p_id, "allow_cron", new_cron)
@@ -2894,48 +2928,42 @@ def show_admin_page():
                 st.divider()
 
     # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ (З ГЕНЕРАЦІЄЮ)
+    # TAB 2: СТВОРИТИ ПРОЕКТ (З Webhook генерацією)
     # ========================================================
     with tab_create:
         st.markdown("##### Створення нового проекту")
         
-        # Використовуємо контейнер, щоб не закривати форму при оновленні таблиці
         c1, c2 = st.columns(2)
         new_name_val = c1.text_input("Назва проекту", key="new_proj_name")
         new_domain_val = c2.text_input("Домен (напр. apple.com)", key="new_proj_domain")
         
-        # Кнопка генерації (імітація або виклик функції)
-        if st.button("✨ Згенерувати 10 запитів"):
+        # Кнопка генерації через WEBHOOK
+        if st.button("✨ Згенерувати 10 запитів (через AI)"):
             if new_domain_val or new_name_val:
                 brand = new_name_val if new_name_val else new_domain_val.split('.')[0]
-                # Проста логіка генерації (можна замінити на виклик n8n)
-                gen_list = [
-                    f"купити {brand}",
-                    f"{brand} відгуки",
-                    f"{brand} ціна",
-                    f"як обрати {brand}",
-                    f"{brand} характеристики",
-                    f"{brand} vs конкуренти",
-                    f"магазин {brand} київ",
-                    f"замовити {brand} онлайн",
-                    f"{brand} акції",
-                    f"найкращі моделі {brand}"
-                ]
-                st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in gen_list]
-                st.success("Запити згенеровано! Ви можете редагувати їх нижче.")
+                with st.spinner("Звертаємось до n8n для генерації..."):
+                    generated_kws = trigger_keyword_generation(brand, new_domain_val)
+                
+                if generated_kws:
+                    st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in generated_kws]
+                    st.success(f"Отримано {len(generated_kws)} запитів!")
+                else:
+                    # Фоллбек, якщо вебхук не повернув даних (щоб не блокувати роботу)
+                    st.warning("Вебхук не повернув даних. Використано локальний шаблон.")
+                    local_list = [f"купити {brand}", f"{brand} ціна", f"{brand} відгуки"]
+                    st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in local_list]
             else:
-                st.warning("Введіть назву або домен для генерації.")
+                st.warning("Введіть назву або домен.")
 
-        st.markdown("###### 📝 Список запитів (Можна редагувати та додавати)")
+        st.markdown("###### 📝 Редагування запитів перед створенням")
         
-        # Редактор таблиці для запитів
         df_initial = pd.DataFrame(st.session_state["new_proj_keywords"])
         if df_initial.empty:
             df_initial = pd.DataFrame(columns=["keyword"])
 
         edited_df = st.data_editor(
             df_initial,
-            num_rows="dynamic", # Дозволяє додавати/видаляти рядки
+            num_rows="dynamic",
             column_config={
                 "keyword": st.column_config.TextColumn("Запит", width="large", required=True)
             },
@@ -2951,7 +2979,7 @@ def show_admin_page():
         if st.button("🚀 Створити проект та зберегти запити", type="primary"):
             if new_name_val and new_domain_val:
                 try:
-                    # 1. Створюємо проект
+                    # 1. Проект
                     new_proj_data = {
                         "project_name": new_name_val,
                         "domain": new_domain_val,
@@ -2963,7 +2991,7 @@ def show_admin_page():
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
                         
-                        # 2. Зберігаємо запити
+                        # 2. Запити
                         final_kws = edited_df["keyword"].dropna().tolist()
                         final_kws = [k.strip() for k in final_kws if k.strip()]
                         
@@ -2978,8 +3006,7 @@ def show_admin_page():
                             supabase.table("keywords").insert(kws_data).execute()
                         
                         st.success(f"Проект '{new_name_val}' створено! Додано {len(final_kws)} запитів.")
-                        # Очистка
-                        st.session_state["new_proj_keywords"] = []
+                        st.session_state["new_proj_keywords"] = [] # Очистка
                         st.rerun()
                 except Exception as e:
                     st.error(f"Помилка створення: {e}")
@@ -3001,8 +3028,8 @@ def show_admin_page():
             edited_users = st.data_editor(
                 df_users[required_cols],
                 column_config={
-                    "id": st.column_config.TextColumn("User ID", disabled=True, width="small"), # ЗАБОРОНЕНО РЕДАГУВАННЯ
-                    "email": st.column_config.TextColumn("Email", disabled=True),
+                    "id": st.column_config.TextColumn("User ID", disabled=True, width="small"), # ЗАБЛОКОВАНО
+                    "email": st.column_config.TextColumn("Email", disabled=True), # ЗАБЛОКОВАНО
                     "first_name": "Ім'я",
                     "last_name": "Прізвище",
                     "role": st.column_config.SelectboxColumn(
@@ -3031,7 +3058,7 @@ def show_admin_page():
                     st.error(f"Помилка: {e}")
         else:
             st.warning("Користувачів не знайдено.")
-
+            
 def main():
     # 1. Session Check
     check_session()
