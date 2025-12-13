@@ -1438,7 +1438,7 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL FIXED (LINKS, METRICS AGGREGATION, DELETE).
+    ВЕРСІЯ: FINAL STABLE (NO DELETE BTN, FIXED METRICS & LINKS).
     """
     import pandas as pd
     import plotly.express as px
@@ -1447,7 +1447,7 @@ def show_keyword_details(kw_id):
     from datetime import datetime, timedelta
     import numpy as np
     import time
-    import re  # Для чистки посилань
+    import re
     
     # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
@@ -1479,12 +1479,14 @@ def show_keyword_details(kw_id):
     def tooltip(text):
         return f'<span title="{text}" style="cursor:help; font-size:14px; color:#333; margin-left:4px;">ℹ️</span>'
 
-    # 🔥 FIX: Покращена нормалізація URL (видаляє Markdown артефакти)
+    # 🔥 FIX: Нормалізація URL (видаляє Markdown артефакти)
     def normalize_url(u):
+        if not u: return ""
         u = str(u).strip()
-        # Видаляємо все, що йде після закриваючої дужки Markdown або пробілу
-        u = re.split(r'[)\]\s]', u)[0]
-        if not u.startswith(('http://', 'https://')): return f"https://{u}"
+        # Видаляємо все після закриваючої дужки Markdown ')' або ']'
+        u = re.split(r'[)\]]', u)[0]
+        if not u.startswith(('http://', 'https://')): 
+            return f"https://{u}"
         return u
 
     # 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ
@@ -1502,7 +1504,7 @@ def show_keyword_details(kw_id):
         
         # Отримуємо назву бренду для агрегації
         proj = st.session_state.get("current_project", {})
-        target_brand_name = proj.get("brand_name", "").strip()
+        target_brand_name = proj.get("brand_name", "").strip().lower()
         
     except Exception as e:
         st.error(f"Помилка БД: {e}")
@@ -1627,19 +1629,17 @@ def show_keyword_details(kw_id):
             df_mentions = pd.DataFrame()
 
         # 🔥 FIX: Нормалізація та визначення "Мого Бренду" (Агрегація)
-        if not df_mentions.empty and target_brand_name:
-            # Створюємо колонку для пошуку (lowercase)
-            df_mentions['brand_norm'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
-            t_norm = target_brand_name.lower().strip()
-            
-            # Позначаємо як "мій бренд", якщо назва схожа АБО вже стоїть прапорець
-            # Це вирішує проблему дублікатів з JSON (один True/0, інший False/9)
-            df_mentions['is_real_target'] = df_mentions.apply(
-                lambda x: x['is_my_brand'] or (t_norm in x['brand_norm']), axis=1
-            )
-        elif not df_mentions.empty:
-            df_mentions['is_real_target'] = df_mentions['is_my_brand']
-
+        if not df_mentions.empty:
+            # Створюємо маску для нашого бренду (включаючи дублікати)
+            # 1. За прапорцем is_my_brand
+            mask_flag = (df_mentions['is_my_brand'] == True)
+            # 2. За назвою (якщо прапорець не спрацював або для агрегації)
+            if target_brand_name:
+                mask_name = df_mentions['brand_name'].astype(str).str.lower().str.contains(target_brand_name)
+                df_mentions['is_real_target'] = mask_flag | mask_name
+            else:
+                df_mentions['is_real_target'] = mask_flag
+        
         # C. Merge
         if not df_mentions.empty:
             df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
@@ -1665,8 +1665,7 @@ def show_keyword_details(kw_id):
         total_my_mentions = my_brand_data['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_real_target'] == False]['brand_name'].nunique()
         
-        # SOV: (Сума моїх згадок / Сума всіх згадок в тих самих сканах) * 100
-        # Групуємо по скан-ID, щоб отримати загальні суми
+        # SOV Calculation
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
@@ -1676,23 +1675,19 @@ def show_keyword_details(kw_id):
         sov_df = pd.merge(scan_totals, my_scan_totals, on='scan_result_id', how='left')
         sov_df['my_count'] = sov_df['my_count'].fillna(0)
         
-        # Уникаємо ділення на нуль
         sov_df['sov'] = 0.0
         mask_nonzero = sov_df['scan_total'] > 0
         sov_df.loc[mask_nonzero, 'sov'] = (sov_df.loc[mask_nonzero, 'my_count'] / sov_df.loc[mask_nonzero, 'scan_total']) * 100
         
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
-        # Rank (середнє по всіх знайдених позиціях)
+        # Rank
         valid_ranks = my_brand_data[my_brand_data['rank_position'] > 0]['rank_position']
         avg_pos = valid_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # Sentiment (Тільки по моєму бренду)
-        # Важливо: враховуємо вагу (кількість згадок) або просто кількість записів? 
-        # Зазвичай сентимент прив'язаний до запису. Беремо розподіл записів.
+        # Sentiment
         if not my_brand_data.empty:
-            # Фільтруємо рядки, де count > 0, щоб не рахувати пусті "not found" записи
             sentiment_rows = my_brand_data[my_brand_data['mention_count'] > 0]
             if not sentiment_rows.empty:
                 s_counts = sentiment_rows['sentiment_score'].value_counts()
@@ -1729,7 +1724,6 @@ def show_keyword_details(kw_id):
     </style>
     """, unsafe_allow_html=True)
 
-    # Логіка тексту тональності
     if total_my_mentions > 0:
         sent_display = f"""
         <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;
@@ -1867,43 +1861,9 @@ def show_keyword_details(kw_id):
 
             with st.container(border=True):
                 scan_options = {row['date_str']: row['scan_id'] for _, row in model_scans.iterrows()}
-                
-                c_sel, c_del = st.columns([3, 1])
-                with c_sel:
-                    selected_date = st.selectbox(
-                        f"Оберіть дату аналізу ({ui_model_name}):", 
-                        list(scan_options.keys()), 
-                        key=f"sel_date_{tech_model_id}"
-                    )
-                
-                selected_scan_id = scan_options[selected_date]
-                
-                with c_del:
-                    st.write("") 
-                    st.write("")
-                    confirm_key = f"del_scan_{selected_scan_id}"
-                    if confirm_key not in st.session_state: st.session_state[confirm_key] = False
-
-                    if not st.session_state[confirm_key]:
-                        if st.button("🗑️ Видалити", key=f"btn_del_{selected_scan_id}"):
-                            st.session_state[confirm_key] = True
-                            st.rerun()
-                    else:
-                        c_y, c_n = st.columns(2)
-                        if c_y.button("✅", key=f"yes_{selected_scan_id}"):
-                            try:
-                                supabase.table("scan_results").delete().eq("id", selected_scan_id).execute()
-                                st.success("Видалено!")
-                                st.session_state[confirm_key] = False
-                                time.sleep(1)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Помилка: {e}")
-                        
-                        if c_n.button("❌", key=f"no_{selected_scan_id}"):
-                            st.session_state[confirm_key] = False
-                            st.rerun()
-
+                selected_date = st.selectbox(f"Оберіть дату аналізу ({ui_model_name}):", list(scan_options.keys()), key=f"sel_date_{tech_model_id}")
+            
+            selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
             # --- LOCAL METRICS (FIXED AGGREGATION) ---
@@ -2074,6 +2034,7 @@ def show_keyword_details(kw_id):
                     st.info("ℹ️ Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка завантаження джерел: {e}")
+
 
 
 def show_keywords_page():
