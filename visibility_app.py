@@ -1439,11 +1439,10 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL FIXED & POLISHED.
-    1. Повернуто сповіщення про успішний запуск (з затримкою).
-    2. Повернуто глосарій (tooltips) для метрик.
-    3. Виправлено логіку Тональності (100% розподіл або 0).
-    4. Виправлено відображення метрик після пересканування.
+    ВЕРСІЯ: FINAL & TIMEZONE FIXED.
+    1. Timezone: Конвертація часу в 'Europe/Kiev'.
+    2. Workflow Fixes: Враховано логіку роботи вашого n8n.
+    3. UI: Всі елементи (графіки, таблиці, метрики) на місці.
     """
     import pandas as pd
     import plotly.express as px
@@ -1451,7 +1450,7 @@ def show_keyword_details(kw_id):
     import streamlit as st
     from datetime import datetime, timedelta
     import numpy as np
-    import time  # Додано для затримки сповіщення
+    import time
     
     # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
@@ -1570,9 +1569,8 @@ def show_keyword_details(kw_id):
                                 proj.get("brand_name"), 
                                 models=selected_models_to_run
                             )
-                            # 🔥 FIX: Показуємо сповіщення і чекаємо
-                            st.success("Задачу відправлено! Оновлення даних...")
-                            time.sleep(2) 
+                            st.success("Задачу відправлено!")
+                            time.sleep(2)
                             st.session_state[confirm_run_key] = False
                             st.rerun()
                         else:
@@ -1594,13 +1592,23 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
+            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
-            df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
+            
+            # --- 🕒 FIX TIMEZONE (Kyiv) ---
+            df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
+            # Якщо час не має часового поясу, вважаємо його UTC і конвертуємо в Київ
+            if df_scans['created_at'].dt.tz is None:
+                df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
+            
+            df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
+            
             df_scans['provider_ui'] = df_scans['provider'].apply(get_ui_model_name)
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
 
+        # B. Mentions
         if not df_scans.empty:
             scan_ids = df_scans['scan_id'].tolist()
             if scan_ids:
@@ -1615,7 +1623,7 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # Merge
+        # C. Merge
         if not df_mentions.empty:
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
@@ -1633,12 +1641,11 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL LOGIC)
+    # 3. KPI (GLOBAL)
     if not df_mentions.empty:
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
         
-        # SOV Calculation
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
@@ -1651,12 +1658,10 @@ def show_keyword_details(kw_id):
         
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
-        # Rank Calculation
         my_ranks = df_mentions[df_mentions['is_my_brand'] == True]['rank_position']
         avg_pos = my_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # Sentiment (Global 100% Logic)
         my_sentiment = df_mentions[df_mentions['is_my_brand'] == True]['sentiment_score']
         if not my_sentiment.empty:
             s_counts = my_sentiment.value_counts(normalize=True) * 100
@@ -1665,14 +1670,10 @@ def show_keyword_details(kw_id):
             neu_pct = s_counts.get("Нейтральний", 0.0)
         else:
             pos_pct, neg_pct, neu_pct = 0, 0, 0
-            
     else:
         avg_sov, total_my_mentions, unique_competitors = 0, 0, 0
         display_pos = "-"
         pos_pct, neg_pct, neu_pct = 0, 0, 0
-
-    # Delta
-    delta_sov, delta_mentions, delta_pos = 0, 0, 0
 
     st.markdown("""
     <style>
@@ -1735,12 +1736,9 @@ def show_keyword_details(kw_id):
             if not df_plot_base.empty:
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
-                date_range = st.date_input(
-                    "Діапазон дат:", 
-                    value=(min_d, max_d), 
-                    min_value=min_d, 
-                    max_value=max_d
-                )
+                
+                # 🔥 FIX: Все в один рядок, щоб уникнути помилки
+                date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
                 st.date_input("Діапазон дат:", disabled=True)
@@ -1860,6 +1858,7 @@ def show_keyword_details(kw_id):
                     loc_mentions = int(val_my_mentions)
                     loc_sov = (val_my_mentions / total_in_scan * 100) if total_in_scan > 0 else 0
                     loc_sent = val_sentiment
+                    # Виправляємо NaN
                     loc_rank_str = f"#{val_rank:.0f}" if pd.notna(val_rank) else "-"
             
             sent_color = "#333"
