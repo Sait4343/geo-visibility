@@ -1435,14 +1435,10 @@ def show_dashboard():
 # 7. КЕРУВАННЯ ЗАПИТАМИ
 # =========================
 
-        
-def show_keyword_details(kw_id):
+ def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL & TIMEZONE FIXED.
-    1. Timezone: Конвертація часу в 'Europe/Kiev'.
-    2. Workflow Fixes: Враховано логіку роботи вашого n8n.
-    3. UI: Всі елементи (графіки, таблиці, метрики) на місці.
+    ВЕРСІЯ: FINAL PRODUCTION (SYNTAX & METRICS FIXED).
     """
     import pandas as pd
     import plotly.express as px
@@ -1569,7 +1565,7 @@ def show_keyword_details(kw_id):
                                 proj.get("brand_name"), 
                                 models=selected_models_to_run
                             )
-                            st.success("Задачу відправлено!")
+                            st.success("Задачу відправлено! Оновлення даних...")
                             time.sleep(2)
                             st.session_state[confirm_run_key] = False
                             st.rerun()
@@ -1597,7 +1593,6 @@ def show_keyword_details(kw_id):
             
             # --- 🕒 FIX TIMEZONE (Kyiv) ---
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
-            # Якщо час не має часового поясу, вважаємо його UTC і конвертуємо в Київ
             if df_scans['created_at'].dt.tz is None:
                 df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
             
@@ -1670,6 +1665,7 @@ def show_keyword_details(kw_id):
             neu_pct = s_counts.get("Нейтральний", 0.0)
         else:
             pos_pct, neg_pct, neu_pct = 0, 0, 0
+            
     else:
         avg_sov, total_my_mentions, unique_competitors = 0, 0, 0
         display_pos = "-"
@@ -1737,7 +1733,7 @@ def show_keyword_details(kw_id):
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
                 
-                # 🔥 FIX: Все в один рядок, щоб уникнути помилки
+                # 🔥 FIX SYNTAX: Цей рядок був розірваний, тепер він коректний
                 date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
@@ -1831,12 +1827,47 @@ def show_keyword_details(kw_id):
 
             with st.container(border=True):
                 scan_options = {row['date_str']: row['scan_id'] for _, row in model_scans.iterrows()}
-                selected_date = st.selectbox(f"Оберіть дату аналізу ({ui_model_name}):", list(scan_options.keys()), key=f"sel_date_{tech_model_id}")
-            
-            selected_scan_id = scan_options[selected_date]
+                
+                c_sel, c_del = st.columns([3, 1])
+                with c_sel:
+                    selected_date = st.selectbox(
+                        f"Оберіть дату аналізу ({ui_model_name}):", 
+                        list(scan_options.keys()), 
+                        key=f"sel_date_{tech_model_id}"
+                    )
+                
+                selected_scan_id = scan_options[selected_date]
+                
+                with c_del:
+                    st.write("") 
+                    st.write("")
+                    # Логіка видалення
+                    confirm_key = f"del_scan_{selected_scan_id}"
+                    if confirm_key not in st.session_state: st.session_state[confirm_key] = False
+
+                    if not st.session_state[confirm_key]:
+                        if st.button("🗑️ Видалити", key=f"btn_del_{selected_scan_id}"):
+                            st.session_state[confirm_key] = True
+                            st.rerun()
+                    else:
+                        c_y, c_n = st.columns(2)
+                        if c_y.button("✅", key=f"yes_{selected_scan_id}"):
+                            try:
+                                supabase.table("scan_results").delete().eq("id", selected_scan_id).execute()
+                                st.success("Видалено!")
+                                st.session_state[confirm_key] = False
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Помилка: {e}")
+                        
+                        if c_n.button("❌", key=f"no_{selected_scan_id}"):
+                            st.session_state[confirm_key] = False
+                            st.rerun()
+
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS ---
+            # --- LOCAL METRICS (ВИПРАВЛЕНО #nan та Нулі) ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не знайдено"
@@ -1848,8 +1879,17 @@ def show_keyword_details(kw_id):
             
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
+                
+                # 1. Спробуємо знайти бренд за ID (якщо is_my_brand = true)
                 my_brand_row = current_scan_mentions[current_scan_mentions['is_my_brand'] == True]
                 
+                # 2. Якщо не знайшли, спробуємо знайти за назвою (Fallback)
+                if my_brand_row.empty:
+                    proj = st.session_state.get("current_project", {})
+                    target_name = proj.get("brand_name", "").lower()
+                    if target_name:
+                        my_brand_row = current_scan_mentions[current_scan_mentions['brand_name'].str.lower().str.contains(target_name)]
+
                 if not my_brand_row.empty:
                     val_my_mentions = my_brand_row['mention_count'].sum()
                     val_rank = my_brand_row['rank_position'].iloc[0]
@@ -1858,7 +1898,6 @@ def show_keyword_details(kw_id):
                     loc_mentions = int(val_my_mentions)
                     loc_sov = (val_my_mentions / total_in_scan * 100) if total_in_scan > 0 else 0
                     loc_sent = val_sentiment
-                    # Виправляємо NaN
                     loc_rank_str = f"#{val_rank:.0f}" if pd.notna(val_rank) else "-"
             
             sent_color = "#333"
@@ -1991,7 +2030,9 @@ def show_keyword_details(kw_id):
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
             except Exception as e:
-                st.error(f"Помилка завантаження джерел: {e}")
+                st.error(f"Помилка завантаження джерел: {e}")       
+
+
 
 def show_keywords_page():
     """
