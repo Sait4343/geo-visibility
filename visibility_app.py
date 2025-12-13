@@ -1436,15 +1436,14 @@ def show_dashboard():
 # =========================
 
         
-
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL PRODUCTION (ALL FIXES INCLUDED).
-    1. Графік: Логіка фільтрації (яку ви видалили) відновлена всередині функції коректно.
-    2. Метрики: Глобальні та Локальні розраховуються правильно.
-    3. Джерела: Згруповані та відцентровані.
-    4. Стабільність: Використовується scan_id для уникнення помилок.
+    ВЕРСІЯ: FINAL FIXED.
+    1. ВИПРАВЛЕНО: SyntaxError у st.date_input (код в один рядок).
+    2. ВИПРАВЛЕНО: KeyError (всюди використовується scan_id).
+    3. ПОВЕРНУТО: Назви "OpenAI", "Gemini", "Perplexity".
+    4. ДИЗАЙН: Фіолетові KPI, Зелена відповідь, Центровані джерела.
     """
     import pandas as pd
     import plotly.express as px
@@ -1463,21 +1462,22 @@ def show_keyword_details(kw_id):
     else:
         supabase = globals()['supabase']
 
-    # --- MAPPING ---
+    # --- MAPPING (Назви як ви просили) ---
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
-        "OpenAI GPT": "gpt-4o",
-        "Google Gemini": "gemini-1.5-pro"
+        "OpenAI": "gpt-4o",
+        "Gemini": "gemini-1.5-pro"
     }
     ALL_MODELS_UI = list(MODEL_CONFIG.keys())
     
     def get_ui_model_name(db_name):
         for ui, db in MODEL_CONFIG.items():
             if db == db_name: return ui
+        # Пошук, якщо ID не співпадає точно
         lower = str(db_name).lower()
         if "perplexity" in lower: return "Perplexity"
-        if "gpt" in lower: return "OpenAI GPT"
-        if "gemini" in lower: return "Google Gemini"
+        if "gpt" in lower: return "OpenAI"
+        if "gemini" in lower: return "Gemini"
         return db_name
 
     def tooltip(text):
@@ -1530,6 +1530,7 @@ def show_keyword_details(kw_id):
                 disabled=not st.session_state[edit_key]
             )
             
+            # Кнопка редагування під полем
             if not st.session_state[edit_key]:
                 if st.button("✏️ Редагувати", key="enable_edit_btn"):
                     st.session_state[edit_key] = True
@@ -1592,7 +1593,7 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
+            # 🔥 ВАЖЛИВО: Перейменування ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
@@ -1632,12 +1633,12 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL)
+    # 3. KPI (ГЛОБАЛЬНА СТАТИСТИКА)
     if not df_mentions.empty:
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
         
-        # SOV Calculation
+        # SOV
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
@@ -1664,12 +1665,12 @@ def show_keyword_details(kw_id):
             neu_pct = s_counts.get("Нейтральний", 0.0)
         else:
             pos_pct, neg_pct, neu_pct = 0, 0, 0
-            
     else:
         avg_sov, total_my_mentions, unique_competitors = 0, 0, 0
         display_pos = "-"
         pos_pct, neg_pct, neu_pct = 0, 0, 0
 
+    # ВІДОБРАЖЕННЯ KPI (ФІОЛЕТОВІ БЛОКИ)
     st.markdown("""
     <style>
         .stat-box {
@@ -1715,7 +1716,7 @@ def show_keyword_details(kw_id):
     # 4. ГРАФІК ДИНАМІКИ
     st.markdown("##### 📈 Динаміка показників")
 
-    # 🔥 FIX: ВИКОРИСТОВУЄМО scan_id ДЛЯ ГРУПУВАННЯ (замість id)
+    # 🔥 FIX KEYERROR: Використовуємо 'scan_id'
     if not df_full.empty and 'scan_id' in df_full.columns:
         totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
         totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
@@ -1733,13 +1734,8 @@ def show_keyword_details(kw_id):
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
                 
-                # 🔥 FIX: СИНТАКСИС ВИПРАВЛЕНО (ОДИН РЯДОК)
-                date_range = st.date_input(
-                    "Діапазон дат:", 
-                    value=(min_d, max_d), 
-                    min_value=min_d, 
-                    max_value=max_d
-                )
+                # 🔥 FIX SYNTAX ERROR: Один рядок коду
+                date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
                 st.date_input("Діапазон дат:", disabled=True)
@@ -1837,7 +1833,7 @@ def show_keyword_details(kw_id):
             selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS ---
+            # --- LOCAL METRICS (ВИПРАВЛЕНО #nan) ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не знайдено"
@@ -1859,7 +1855,6 @@ def show_keyword_details(kw_id):
                     loc_mentions = int(val_my_mentions)
                     loc_sov = (val_my_mentions / total_in_scan * 100) if total_in_scan > 0 else 0
                     loc_sent = val_sentiment
-                    # FIX #nan:
                     loc_rank_str = f"#{val_rank:.0f}" if pd.notna(val_rank) else "-"
             
             sent_color = "#333"
@@ -1867,6 +1862,7 @@ def show_keyword_details(kw_id):
             elif loc_sent == "Негативний": sent_color = "#FF4B4B"
             elif loc_sent == "Не знайдено": sent_color = "#999"
 
+            # Картки локальних метрик
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #8041F6; border-radius:8px; padding:15px; text-align:center;">
@@ -1888,6 +1884,7 @@ def show_keyword_details(kw_id):
             </div>
             """, unsafe_allow_html=True)
             
+            # Відповідь LLM (Зелена заливка)
             raw_text = current_scan_row.get('raw_response', '')
             st.markdown("##### Відповідь від LLM")
             proj = st.session_state.get("current_project", {})
@@ -1940,7 +1937,7 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
+            # --- ДЖЕРЕЛА (Grouped + Center + Count) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
