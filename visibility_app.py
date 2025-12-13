@@ -27,6 +27,8 @@ st.set_page_config(
 N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook/webhook/run-analysis_prod"
 N8N_RECO_URL = "https://virshi.app.n8n.cloud/webhook/recommendations"  # за потреби заміниш
+N8N_CHAT_WEBHOOK = "https://virshi.app.n8n.cloud/webhook-test/webhook/chat-bot" 
+
 
 # Custom CSS
 st.markdown(
@@ -3092,46 +3094,89 @@ def show_admin_page():
                     st.error(f"Помилка: {e}")
         else:
             st.warning("Користувачів не знайдено.")
+
+
 def show_chat_page():
     """
-    Сторінка AI-асистента (GPT-Visibility).
+    Сторінка AI-асистента (GPT-Visibility) з реальною інтеграцією n8n.
     """
-    st.title("🤖 GPT-Visibility Assistant")
-    st.caption("Запитайте про тренди, аналітику або поради щодо вашого бренду.")
+    import requests
+    import streamlit as st
 
-    # Ініціалізація історії чату
+    # --- КОНФІГУРАЦІЯ ---
+    # 👇 Вставте сюди ваш реальний URL вебхука для чату з n8n
+
+    st.title("🤖 GPT-Visibility Assistant")
+    
+    # Отримуємо контекст поточного проекту (щоб бот знав, про що мова)
+    proj = st.session_state.get("current_project", {})
+    if not proj:
+        st.warning("⚠️ Будь ласка, оберіть проект у меню зліва, щоб асистент мав контекст.")
+        # Ми не блокуємо чат, але попереджаємо
+
+    # 1. Ініціалізація історії
     if "messages" not in st.session_state:
         st.session_state["messages"] = [
-            {"role": "assistant", "content": "Привіт! Я ваш AI-аналітик. Чим можу допомогти по проекту?"}
+            {"role": "assistant", "content": f"Привіт! Я аналітик проекту **{proj.get('brand_name', 'вашого бренду')}**. Готовий відповідати на питання по даних."}
         ]
 
-    # Відображення історії
+    # 2. Відображення історії
     for msg in st.session_state["messages"]:
-        with st.chat_message(msg["role"]):
+        avatar = "🤖" if msg["role"] == "assistant" else "👤"
+        with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
-    # Поле вводу
-    if prompt := st.chat_input("Ваше запитання..."):
-        # 1. Додаємо повідомлення користувача
+    # 3. Обробка вводу
+    if prompt := st.chat_input("Напишіть ваше запитання..."):
+        
+        # A. Додаємо питання користувача в історію
         st.session_state["messages"].append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
-        # 2. Відповідь бота (Тут можна підключити n8n вебхук для чату)
-        with st.chat_message("assistant"):
-            with st.spinner("Думаю..."):
-                # --- ТУТ МОЖНА ПІДКЛЮЧИТИ N8N ---
-                # response = requests.post(N8N_CHAT_URL, json={"query": prompt, "history": st.session_state["messages"]})
-                # bot_reply = response.json().get("answer")
-                
-                # Поки що імітація:
-                time.sleep(1) 
-                bot_reply = f"Це цікаве питання про '{prompt}'. На основі даних вашого проекту, я рекомендую звернути увагу на вкладку 'Конкуренти'."
-                
-                st.markdown(bot_reply)
-        
-        st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
+        # B. Відправка на n8n
+        with st.chat_message("assistant", avatar="🤖"):
+            message_placeholder = st.empty()
+            full_response = ""
+            
+            with st.spinner("Аналізую дані..."):
+                try:
+                    # Формуємо Payload (дані для відправки)
+                    payload = {
+                        "query": prompt,
+                        # Передаємо останні 10 повідомлень для контексту (щоб не перевантажити)
+                        "history": st.session_state["messages"][-10:], 
+                        "project_context": {
+                            "project_id": proj.get("id"),
+                            "brand_name": proj.get("brand_name"),
+                            "domain": proj.get("domain"),
+                            "status": proj.get("status")
+                        },
+                        "user_email": st.session_state.get("user").email if st.session_state.get("user") else None
+                    }
 
+                    # Запит до n8n
+                    response = requests.post(N8N_CHAT_WEBHOOK, json=payload, timeout=60) # Таймаут 60 сек, бо AI може думати
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        # n8n зазвичай повертає відповідь у ключі "output", "text" або "answer"
+                        # Перевіряємо всі варіанти:
+                        bot_reply = data.get("output") or data.get("answer") or data.get("text")
+                        
+                        if not bot_reply:
+                            bot_reply = f"⚠️ Отримана пуста відповідь від сервера. (Raw: {data})"
+                    else:
+                        bot_reply = f"⚠️ Помилка сервера: {response.status_code}"
+
+                except Exception as e:
+                    bot_reply = f"⚠️ Помилка з'єднання: {e}"
+
+                # C. Вивід відповіді
+                message_placeholder.markdown(bot_reply)
+        
+        # D. Збереження відповіді бота в історію
+        st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
 
             
 def main():
