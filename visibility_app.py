@@ -1469,11 +1469,10 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL FIXED (KEYERROR RESOLVED).
-    1. Fix: Groupby використовує 'scan_id' замість 'id'.
-    2. Global Metrics: Збережено логіку (Згадки + Конкуренти).
-    3. Local Metrics: Збережено логіку (Конкретна відповідь).
-    4. Sources: Збережено групування та графік.
+    ВЕРСІЯ: FINAL STABLE (FIXED KEYERROR).
+    1. CRITICAL FIX: df_full.groupby('scan_id') замість 'id'.
+    2. Metrics: Local & Global logic restored.
+    3. UX: Launch button resets, inputs locked by default.
     """
     import pandas as pd
     import plotly.express as px
@@ -1621,7 +1620,7 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # 🔥 RENAME ID TO SCAN_ID
+            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
@@ -1629,7 +1628,6 @@ def show_keyword_details(kw_id):
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
 
-        # B. Згадки
         if not df_scans.empty:
             scan_ids = df_scans['scan_id'].tolist()
             if scan_ids:
@@ -1644,11 +1642,10 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # C. Об'єднання
+        # Merge
         if not df_mentions.empty:
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
-            # Merge on scan_id == scan_result_id
             df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
         else:
             df_full = df_scans.copy()
@@ -1663,38 +1660,27 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL LOGIC)
-    
-    # 1. Total Mentions Calculation
+    # 3. KPI (GLOBAL)
     if not df_mentions.empty:
-        # Всього згадок мого бренду (сума по всіх сканах)
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
-        
-        # Кількість унікальних БРЕНДІВ конкурентів
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
         
-        # 2. SOV Calculation (Average SOV per scan)
-        # Спочатку рахуємо тотали по кожному скану
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
-        # Додаємо мої згадки по сканах
         my_mentions_per_scan = df_mentions[df_mentions['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index()
         my_mentions_per_scan.rename(columns={'mention_count': 'my_count'}, inplace=True)
         
-        # Об'єднуємо
         sov_df = pd.merge(scan_totals, my_mentions_per_scan, on='scan_result_id', how='left')
         sov_df['my_count'] = sov_df['my_count'].fillna(0)
         sov_df['sov'] = (sov_df['my_count'] / sov_df['scan_total'] * 100).fillna(0)
         
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
-        # 3. Rank Calculation (Average Rank where present)
         my_ranks = df_mentions[df_mentions['is_my_brand'] == True]['rank_position']
         avg_pos = my_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # 4. Sentiment Calculation (Distribution)
         my_sentiment = df_mentions[df_mentions['is_my_brand'] == True]['sentiment_score']
         if not my_sentiment.empty:
             s_counts = my_sentiment.value_counts(normalize=True) * 100
@@ -1712,7 +1698,12 @@ def show_keyword_details(kw_id):
     # Delta (Placeholder)
     delta_sov, delta_mentions, delta_pos = 0, 0, 0
 
-    # VISUALIZATION GLOBAL KPI
+    def get_delta_html(val, suffix="", inverse=False):
+        if val == 0: return f"<span style='color:#999; font-size:12px;'>без змін</span>"
+        color = "#00C896" if val > 0 else "#FF4B4B" 
+        arrow = "↑" if val > 0 else "↓"
+        return f"<span style='color:{color}; font-size:12px; font-weight:600;'>{arrow} {abs(val):.1f}{suffix}</span>"
+
     st.markdown("""
     <style>
         .stat-box {
@@ -1758,7 +1749,7 @@ def show_keyword_details(kw_id):
     # 4. ГРАФІК ДИНАМІКИ
     st.markdown("##### 📈 Динаміка показників")
 
-    # 🔥 FIX: USE SCAN_ID HERE
+    # 🔥 FIX: ВИКОРИСТОВУЄМО scan_id ДЛЯ ГРУПУВАННЯ
     if not df_full.empty and 'scan_id' in df_full.columns:
         totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
         totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
@@ -1873,7 +1864,7 @@ def show_keyword_details(kw_id):
             selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # LOCAL METRICS
+            # --- LOCAL METRICS (FIXED) ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не знайдено"
