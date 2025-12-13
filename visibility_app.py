@@ -1438,7 +1438,11 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL FIXED (GREEN METRICS & STRICT SENTIMENT).
+    ВЕРСІЯ: FINAL & CORRECTED.
+    1. Syntax/Indentation Fixed.
+    2. Metrics: Smart brand detection (Name matching fallback).
+    3. Sentiment: 100% distribution logic strictly for target brand.
+    4. UI: Green borders for local metrics.
     """
     import pandas as pd
     import plotly.express as px
@@ -1581,7 +1585,7 @@ def show_keyword_details(kw_id):
                         st.session_state[confirm_run_key] = False
                         st.rerun()
 
-    # 2. ОТРИМАННЯ ДАНИХ (Всі скани та згадки)
+    # 2. ОТРИМАННЯ ДАНИХ
     try:
         scans_resp = supabase.table("scan_results")\
             .select("id, created_at, provider, raw_response")\
@@ -1596,7 +1600,7 @@ def show_keyword_details(kw_id):
             # Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             
-            # Час (Kyiv)
+            # --- 🕒 TIMEZONE FIX (Kyiv) ---
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
             if df_scans['created_at'].dt.tz is None:
                 df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
@@ -1608,6 +1612,7 @@ def show_keyword_details(kw_id):
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
 
+        # B. Mentions
         if not df_scans.empty:
             scan_ids = df_scans['scan_id'].tolist()
             if scan_ids:
@@ -1622,15 +1627,19 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # 🔥 SMART FIX: Ставимо is_my_brand, якщо база не проставила
-        if not df_mentions.empty and target_brand_name:
-            df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
-            target_clean = target_brand_name.lower()
-            # Шукаємо входження
-            mask_match = df_mentions['brand_clean'].str.contains(target_clean, na=False)
-            df_mentions.loc[mask_match, 'is_my_brand'] = True
+        # 🔥 ВАЖЛИВО: Визначаємо "Мій Бренд" (Fallback search)
+        if not df_mentions.empty:
+            # 1. Створюємо колонку для нормалізованого порівняння
+            df_mentions['brand_norm'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
+            target_norm = target_brand_name.lower().strip()
+            
+            # 2. Якщо в базі is_my_brand = False, але назва співпадає -> ставимо True
+            if target_norm:
+                mask_match = df_mentions['brand_norm'].str.contains(target_norm, na=False)
+                # Оновлюємо локально в DataFrame
+                df_mentions.loc[mask_match, 'is_my_brand'] = True
 
-        # Merge
+        # C. Merge
         if not df_mentions.empty:
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
@@ -1648,19 +1657,19 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (ГЛОБАЛЬНА СТАТИСТИКА)
+    # 3. KPI (GLOBAL) - СТРОГО ПО ТЗ (100% розподіл)
     if not df_mentions.empty:
-        # Дані тільки по моєму бренду
-        df_my_global = df_mentions[df_mentions['is_my_brand'] == True]
+        # Дані ТІЛЬКИ нашого бренду
+        my_brand_data = df_mentions[df_mentions['is_my_brand'] == True]
         
-        total_my_mentions = df_my_global['mention_count'].sum()
+        total_my_mentions = my_brand_data['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
         
         # SOV
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
-        my_mentions_per_scan = df_my_global.groupby('scan_result_id')['mention_count'].sum().reset_index()
+        my_mentions_per_scan = my_brand_data.groupby('scan_result_id')['mention_count'].sum().reset_index()
         my_mentions_per_scan.rename(columns={'mention_count': 'my_count'}, inplace=True)
         
         sov_df = pd.merge(scan_totals, my_mentions_per_scan, on='scan_result_id', how='left')
@@ -1670,13 +1679,13 @@ def show_keyword_details(kw_id):
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
         # Rank
-        avg_pos = df_my_global['rank_position'].mean()
+        avg_pos = my_brand_data['rank_position'].mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # 🔥 СУВОРА ЛОГІКА ТОНАЛЬНОСТІ (100% distribution)
-        if not df_my_global.empty:
-            s_counts = df_my_global['sentiment_score'].value_counts()
-            total_sent_count = s_counts.sum()
+        # Sentiment (Тільки мій бренд, сума 100%)
+        if not my_brand_data.empty:
+            s_counts = my_brand_data['sentiment_score'].value_counts()
+            total_sent_count = s_counts.sum() # Сума згадок з тональністю
             
             if total_sent_count > 0:
                 pos_pct = (s_counts.get("Позитивний", 0) / total_sent_count) * 100
@@ -1691,15 +1700,6 @@ def show_keyword_details(kw_id):
         avg_sov, total_my_mentions, unique_competitors = 0, 0, 0
         display_pos = "-"
         pos_pct, neg_pct, neu_pct = 0, 0, 0
-
-    # Delta (Placeholder)
-    delta_sov, delta_mentions, delta_pos = 0, 0, 0
-
-    def get_delta_html(val, suffix=""):
-        if val == 0: return f"<span style='color:#999; font-size:12px;'>без змін</span>"
-        color = "#00C896" if val > 0 else "#FF4B4B" 
-        arrow = "↑" if val > 0 else "↓"
-        return f"<span style='color:{color}; font-size:12px; font-weight:600;'>{arrow} {abs(val):.1f}{suffix}</span>"
 
     st.markdown("""
     <style>
@@ -1720,12 +1720,15 @@ def show_keyword_details(kw_id):
     </style>
     """, unsafe_allow_html=True)
 
-    sent_display = f"""
-    <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;
-    <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp;
-    <span style='color:#FF4B4B'>😡 {neg_pct:.0f}%</span>
-    """
-    if total_my_mentions == 0: sent_display = "<span style='color:#999'>Не згадано</span>"
+    # Логіка тексту тональності
+    if total_my_mentions > 0:
+        sent_display = f"""
+        <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;
+        <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp;
+        <span style='color:#FF4B4B'>😡 {neg_pct:.0f}%</span>
+        """
+    else:
+        sent_display = "<span style='color:#999'>Не згадано</span>"
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
@@ -1762,7 +1765,7 @@ def show_keyword_details(kw_id):
             if not df_plot_base.empty:
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
-                # FIX Syntax
+                # ВИПРАВЛЕНО СИНТАКСИС (Один рядок)
                 date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
@@ -1774,10 +1777,9 @@ def show_keyword_details(kw_id):
             with col_brand:
                 if not df_plot_base.empty:
                     all_found_brands = sorted([str(b) for b in df_plot_base['brand_name'].unique() if pd.notna(b)])
-                    default_sel = []
-                    if target_brand_name:
-                        matches = [b for b in all_found_brands if target_brand_name.lower() in str(b).lower()]
-                        default_sel = matches if matches else ([all_found_brands[0]] if all_found_brands else [])
+                    proj = st.session_state.get("current_project", {})
+                    my_brand_name = proj.get("brand_name", "")
+                    default_sel = [my_brand_name] if my_brand_name in all_found_brands else ([all_found_brands[0]] if all_found_brands else [])
                     selected_brands = st.multiselect("Фільтр по Брендах:", options=all_found_brands, default=default_sel)
                 else:
                     st.multiselect("Фільтр по Брендах:", options=[], disabled=True)
@@ -1896,13 +1898,12 @@ def show_keyword_details(kw_id):
 
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS ---
+            # --- LOCAL METRICS (FIXED: Smart Search + Green Border) ---
             loc_sov = 0
             loc_mentions = 0
-            loc_sent = "Не знайдено"
+            loc_sent = "Не згадано"
             loc_rank_str = "-"
             
-            # Отримуємо згадки КОНКРЕТНОГО скану
             current_scan_mentions = pd.DataFrame()
             if not df_mentions.empty:
                 current_scan_mentions = df_mentions[df_mentions['scan_result_id'] == selected_scan_id]
@@ -1910,10 +1911,10 @@ def show_keyword_details(kw_id):
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
                 
-                # 1. Спроба знайти мій бренд
+                # 1. Пошук за ID (is_my_brand)
                 my_brand_row = current_scan_mentions[current_scan_mentions['is_my_brand'] == True]
                 
-                # 2. Якщо пусто - шукаємо за назвою
+                # 2. Fallback за назвою (якщо база не розмітила)
                 if my_brand_row.empty and target_brand_name:
                     my_brand_row = current_scan_mentions[current_scan_mentions['brand_name'].astype(str).str.lower().str.contains(target_brand_name.lower())]
 
@@ -1930,25 +1931,25 @@ def show_keyword_details(kw_id):
             sent_color = "#333"
             if loc_sent == "Позитивний": sent_color = "#00C896"
             elif loc_sent == "Негативний": sent_color = "#FF4B4B"
-            elif loc_sent == "Не знайдено": sent_color = "#999"
+            elif loc_sent == "Не згадано": sent_color = "#999"
 
-            # 🔥 ЗЕЛЕНИЙ БОРДЕР ДЛЯ ЛОКАЛЬНИХ МЕТРИК
+            # ВІЗУАЛІЗАЦІЯ (ЗЕЛЕНИЙ БОРДЕР)
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ЧАСТКА ГОЛОСУ (SOV)</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ЧАСТКА ГОЛОСУ (SOV) {tooltip('Відсоток згадок вашого бренду в цій конкретній відповіді.')}</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_sov:.1f}%</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ЗГАДОК БРЕНДУ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ЗГАДОК БРЕНДУ {tooltip('Кількість разів, коли бренд був згаданий.')}</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_mentions}</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ТОНАЛЬНІСТЬ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ТОНАЛЬНІСТЬ {tooltip('Емоційне забарвлення згадки в цій відповіді.')}</div>
                     <div style="font-size:18px; font-weight:600; color:{sent_color}; margin-top:5px;">{loc_sent}</div>
                 </div>
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
-                    <div style="font-size:11px; color:#888; font-weight:600;">ПОЗИЦІЯ У СПИСКУ</div>
+                    <div style="font-size:11px; color:#888; font-weight:600;">ПОЗИЦІЯ У СПИСКУ {tooltip('Порядковий номер першої згадки бренду.')}</div>
                     <div style="font-size:24px; font-weight:700; color:#333;">{loc_rank_str}</div>
                 </div>
             </div>
@@ -1956,13 +1957,14 @@ def show_keyword_details(kw_id):
             
             raw_text = current_scan_row.get('raw_response', '')
             st.markdown("##### Відповідь від LLM")
+            proj = st.session_state.get("current_project", {})
+            brand_name = proj.get("brand_name", "")
+            
             if raw_text:
                 final_html = raw_text
-                if target_brand_name:
-                    # Підсвітка незалежно від регістру
-                    import re
-                    pattern = re.compile(re.escape(target_brand_name), re.IGNORECASE)
-                    final_html = pattern.sub(f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{target_brand_name}</span>", final_html)
+                if brand_name:
+                    highlight_span = f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{brand_name}</span>"
+                    final_html = final_html.replace(brand_name, highlight_span)
                 st.markdown(f"""<div style="background-color: #f9fffb; border: 1px solid #bbf7d0; border-radius: 8px; padding: 20px; font-size: 16px; line-height: 1.6; color: #374151;">{final_html}</div>""", unsafe_allow_html=True)
             else:
                 st.info("Текст відповіді не збережено.")
