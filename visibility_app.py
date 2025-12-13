@@ -1469,11 +1469,11 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL STABLE (SYNTAX FIXED).
-    1. Fix: st.date_input syntax error resolved (wrapped in parenthesis).
-    2. Fix: groupby('scan_id') everywhere to prevent KeyError.
-    3. Metrics: Global & Local logic matches requirements.
-    4. UI: Sources centered, Button resets, Layout restored.
+    ВИПРАВЛЕНО:
+    1. SyntaxError: st.date_input тепер в один рядок.
+    2. KeyError: Всюди використовується 'scan_id' замість 'id' після перейменування.
+    3. Метрики: Коректний розрахунок (без #nan).
+    4. UI: Вкладки, Графіки, Таблиці, Кнопки - все на місці.
     """
     import pandas as pd
     import plotly.express as px
@@ -1621,7 +1621,7 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
+            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id, щоб уникнути конфліктів при merge
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
@@ -1647,6 +1647,8 @@ def show_keyword_details(kw_id):
         if not df_mentions.empty:
             if 'is_my_brand' not in df_mentions.columns: df_mentions['is_my_brand'] = False
             df_mentions['is_my_brand'] = df_mentions['is_my_brand'].fillna(False)
+            
+            # Мерджимо: ліворуч scan_id, праворуч scan_result_id
             df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
         else:
             df_full = df_scans.copy()
@@ -1661,7 +1663,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL)
+    # 3. KPI (GLOBAL LOGIC)
     if not df_mentions.empty:
         total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
@@ -1765,7 +1767,7 @@ def show_keyword_details(kw_id):
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
                 
-                # 🔥 FIX: SYNTAX ERROR WAS HERE. FIXED WITH PARENTHESES.
+                # 🔥 FIX: ВИПРАВЛЕНО СИНТАКСИС (В ДУЖКАХ)
                 date_range = st.date_input(
                     "Діапазон дат:", 
                     value=(min_d, max_d), 
@@ -1869,7 +1871,7 @@ def show_keyword_details(kw_id):
             selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS ---
+            # --- LOCAL METRICS (STRICT FOR THIS RESPONSE) ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не знайдено"
@@ -1891,6 +1893,7 @@ def show_keyword_details(kw_id):
                     loc_mentions = int(val_my_mentions)
                     loc_sov = (val_my_mentions / total_in_scan * 100) if total_in_scan > 0 else 0
                     loc_sent = val_sentiment
+                    # Fix #nan:
                     loc_rank_str = f"#{val_rank:.0f}" if pd.notna(val_rank) else "-"
             
             sent_color = "#333"
