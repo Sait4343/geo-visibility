@@ -2709,10 +2709,10 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    Версія 3.1 (Fixed Webhook Logic):
-    - Використовує точну структуру payload для n8n (brand_name, product_service, location, language).
-    - Додано поле введення опису для генерації.
-    - Всі попередні виправлення UI збережено.
+    Версія 4.0 (Final Webhook & Navigation):
+    - Webhook payload fixed: {brand, domain, industry, products}.
+    - Added 'Industry' input field in Create Project tab.
+    - Added 'Dashboard' navigation button in Project List.
     """
     import pandas as pd
     import streamlit as st
@@ -2721,7 +2721,6 @@ def show_admin_page():
     import json
 
     # --- КОНСТАНТИ ---
-    # URL вашого вебхука
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 
     # --- 0. ПІДКЛЮЧЕННЯ ---
@@ -2751,26 +2750,26 @@ def show_admin_page():
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
-    # --- ЛОГІКА ВЕБХУКА (ВАШ КОД) ---
-    def trigger_keyword_generation(brand, domain, desc):
-        """Відправляє дані на n8n для генерації запитів"""
+    # --- ЛОГІКА ВЕБХУКА (ВИПРАВЛЕНО ПІД ВАШ JSON) ---
+    def trigger_keyword_generation(brand, domain, industry, products):
+        """
+        Відправляє дані на n8n для генерації запитів.
+        Payload matches specific requirement: {brand, domain, industry, products}
+        """
         payload = {
-            "brand_name": brand,
+            "brand": brand,
             "domain": domain,
-            "product_service": desc, # Важливо для контексту AI
-            "competitors": "",       # Поки пусте, можна додати поле якщо треба
-            "location": "Ukraine",
-            "language": "uk"
+            "industry": industry,
+            "products": products
         }
         
         try:
-            # Використовуємо константу N8N_GEN_URL визначену вище
-            response = requests.post(N8N_GEN_URL, json=payload, timeout=20)
+            response = requests.post(N8N_GEN_URL, json=payload, timeout=25)
             
             if response.status_code == 200:
                 try:
                     data = response.json()
-                    # n8n може повернути структуру { "keywords": [...] } або просто список
+                    # Обробка відповіді (список або словник з ключем keywords)
                     if isinstance(data, dict) and "keywords" in data:
                         return data["keywords"]
                     elif isinstance(data, list):
@@ -2837,14 +2836,16 @@ def show_admin_page():
     tab_list, tab_create, tab_users = st.tabs(["📂 Список проектів", "➕ Створити проект", "👥 Користувачі & Права"])
 
     # ========================================================
-    # TAB 1: СПИСОК ПРОЕКТІВ
+    # TAB 1: СПИСОК ПРОЕКТІВ (З КНОПКОЮ ДАШБОРДУ)
     # ========================================================
     with tab_list:
         st.markdown("##### Керування проектами")
         
-        h0, h1, h2, h3, h4, h5 = st.columns([0.3, 2, 1.5, 1.5, 1, 0.5])
+        # Заголовки (Додано стовпець Дашборд)
+        h0, h1, h_dash, h2, h3, h4, h5 = st.columns([0.3, 2, 0.8, 1.5, 1.5, 1, 0.5])
         h0.markdown("**#**")
         h1.markdown("**Проект / Користувач**")
+        h_dash.markdown("**Дашборд**") # <--- НОВЕ
         h2.markdown("**Статус**")
         h3.markdown("**Авто сканування**")
         h4.markdown("**Дата**")
@@ -2860,10 +2861,9 @@ def show_admin_page():
             
             owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            # --- ЛОГІКА НАЗВИ ПРОЕКТУ ---
+            # Назва
             raw_name = p.get('project_name')
             domain = p.get('domain', '')
-            
             if not raw_name or raw_name.strip() == "" or raw_name == "No Name":
                 if domain:
                     clean_domain = domain.replace("https://", "").replace("http://", "").replace("www.", "").split('/')[0]
@@ -2874,7 +2874,7 @@ def show_admin_page():
                 p_name = raw_name
 
             with st.container():
-                c0, c1, c2, c3, c4, c5 = st.columns([0.3, 2, 1.5, 1.5, 1, 0.5])
+                c0, c1, c_dash, c2, c3, c4, c5 = st.columns([0.3, 2, 0.8, 1.5, 1.5, 1, 0.5])
 
                 with c0: st.caption(f"{idx}")
 
@@ -2883,6 +2883,15 @@ def show_admin_page():
                     st.caption(f"ID: `{p_id}`")
                     st.caption(f"🌐 {domain}")
                     st.caption(f"👤 {owner_info['full_name']} ({owner_info['role']})")
+
+                # --- КНОПКА ПЕРЕХОДУ НА ДАШБОРД ---
+                with c_dash:
+                    # При натисканні ми змінюємо current_project в сесії
+                    # Це змусить додаток показати дашборд саме цього проекту
+                    if st.button("📊 Перейти", key=f"goto_{p_id}", help="Відкрити дашборд цього проекту"):
+                        st.session_state["current_project"] = p
+                        st.session_state["focus_keyword_id"] = None # Скидаємо фокус
+                        st.rerun()
 
                 with c2:
                     curr_status = p.get('status', 'trial')
@@ -2931,41 +2940,51 @@ def show_admin_page():
                 st.divider()
 
     # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ (REAL WEBHOOK)
+    # TAB 2: СТВОРИТИ ПРОЕКТ (REAL WEBHOOK + ГАЛУЗЬ)
     # ========================================================
     with tab_create:
         st.markdown("##### Створення нового проекту")
         st.info("💡 Заповніть дані, щоб AI міг згенерувати релевантні запити.")
 
         c1, c2 = st.columns(2)
-        new_name_val = c1.text_input("Назва проекту (Бренд)", key="new_proj_name", placeholder="Наприклад: Rozetka")
-        new_domain_val = c2.text_input("Домен", key="new_proj_domain", placeholder="rozetka.com.ua")
+        new_name_val = c1.text_input("Назва проекту (Бренд)", key="new_proj_name", placeholder="Наприклад: SkyUp")
+        new_domain_val = c2.text_input("Домен", key="new_proj_domain", placeholder="skyup.aero")
         
-        # --- ПОЛЕ ОПИСУ (ВАЖЛИВО ДЛЯ PRODUCT_SERVICE) ---
-        new_desc_val = st.text_area(
-            "Опис продукту/послуги (Обов'язково для генерації)", 
-            placeholder="Наприклад: Інтернет-магазин електроніки та побутової техніки. Продаємо смартфони, ноутбуки...",
-            height=100,
+        c3, c4 = st.columns(2)
+        # --- НОВЕ ПОЛЕ: ГАЛУЗЬ (INDUSTRY) ---
+        new_industry_val = c3.text_input("Галузь (Обов'язково)", key="new_proj_ind", placeholder="напр. авіаперевезення")
+        
+        # --- ПОЛЕ: ПРОДУКТИ (ОПИС) ---
+        new_desc_val = c4.text_area(
+            "Продукти/Послуги (Опис)", 
+            placeholder="напр. лоукостер, квитки",
+            height=68,
             key="new_proj_desc"
         )
         
         # Кнопка генерації через WEBHOOK
-        if st.button("✨ Згенерувати 10 запитів (через AI)"):
-            if new_domain_val and new_desc_val: 
-                # Визначаємо бренд (якщо назва пуста, беремо з домену)
+        if st.button("✨ Згенерувати 10 запитів (AI)"):
+            # Перевірка обов'язкових полів для вебхука
+            if new_domain_val and new_industry_val and new_desc_val: 
+                
                 brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
                 
                 with st.spinner("Звертаємось до n8n для генерації..."):
-                    # Викликаємо функцію з правильними аргументами
-                    generated_kws = trigger_keyword_generation(brand_for_ai, new_domain_val, new_desc_val)
+                    # ПЕРЕДАЄМО ПРАВИЛЬНІ ДАНІ У ВЕБХУК
+                    generated_kws = trigger_keyword_generation(
+                        brand=brand_for_ai,
+                        domain=new_domain_val,
+                        industry=new_industry_val, # Галузь
+                        products=new_desc_val      # Опис продуктів
+                    )
                 
                 if generated_kws:
                     st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in generated_kws]
                     st.success(f"Успішно згенеровано {len(generated_kws)} запитів!")
                 else:
-                    st.warning("Вебхук не повернув даних. Перевірте n8n або логи.")
+                    st.warning("Вебхук не повернув даних. Перевірте логи.")
             else:
-                st.warning("⚠️ Для генерації обов'язково заповніть 'Домен' та 'Опис продукту'.")
+                st.warning("⚠️ Для генерації заповніть: Домен, Галузь та Продукти.")
 
         st.markdown("###### 📝 Редагування запитів перед створенням")
         
@@ -2984,9 +3003,9 @@ def show_admin_page():
         )
 
         st.write("")
-        c3, c4 = st.columns(2)
-        new_status = c3.selectbox("Початковий статус", ["trial", "active", "blocked"], key="new_proj_status")
-        new_cron = c4.checkbox("Дозволити автосканування одразу?", value=False, key="new_proj_cron")
+        c_st, c_cr = st.columns(2)
+        new_status = c_st.selectbox("Початковий статус", ["trial", "active", "blocked"], key="new_proj_status")
+        new_cron = c_cr.checkbox("Дозволити автосканування одразу?", value=False, key="new_proj_cron")
 
         if st.button("🚀 Створити проект та зберегти запити", type="primary"):
             final_name = new_name_val if new_name_val else new_domain_val.split('.')[0].capitalize()
