@@ -1438,10 +1438,10 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    Оновлено:
+    Виправлено: 
+    - KeyError при розрахунку SOV (використано векторизований підхід).
     - Зменшено шрифт заголовка.
-    - Додано зведену таблицю (SOV, Згадки, Детальна тональність, Позиція).
-    - Додано часовий графік з фільтрами по LLM.
+    - Статистика та графіки.
     """
     import pandas as pd
     import plotly.express as px
@@ -1474,7 +1474,7 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка БД: {e}")
         return
 
-    # 2. HEADER (ЗМЕНШЕНИЙ ШРИФТ)
+    # 2. HEADER
     col_back, col_title = st.columns([1, 10])
     with col_back:
         if st.button("⬅", key="back_from_details", help="Назад до списку"):
@@ -1482,12 +1482,11 @@ def show_keyword_details(kw_id):
             st.rerun()
     
     with col_title:
-        # Використовуємо h3 для меншого розміру
         st.markdown(f"<h3 style='margin-top: -5px;'>🔍 {keyword_text}</h3>", unsafe_allow_html=True)
 
-    # 3. ОТРИМАННЯ ІСТОРИЧНИХ ДАНИХ (Для статистики та графіків)
+    # 3. ОТРИМАННЯ ІСТОРИЧНИХ ДАНИХ
     try:
-        # A. Всі сканування для цього слова
+        # A. Сканування
         scans_resp = supabase.table("scan_results")\
             .select("id, created_at, provider")\
             .eq("keyword_id", kw_id)\
@@ -1501,11 +1500,10 @@ def show_keyword_details(kw_id):
             return
 
         df_scans = pd.DataFrame(scans_data)
-        # Перетворення дати
-        df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None) # Прибираємо таймзону для спрощення
+        df_scans['created_at'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(None)
         df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
 
-        # B. Всі згадки (Brand Mentions) для цих сканувань
+        # B. Згадки
         scan_ids = df_scans['id'].tolist()
         if scan_ids:
             mentions_resp = supabase.table("brand_mentions")\
@@ -1517,31 +1515,48 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # C. Об'єднання даних (Master DataFrame)
+        # C. Об'єднання
         if not df_mentions.empty:
-            # Лише згадки НАШОГО бренду
             df_my_brand = df_mentions[df_mentions['is_my_brand'] == True].copy()
-            # Повний мердж для розрахунку SOV (всі згадки в скані)
             df_full = pd.merge(df_scans, df_mentions, left_on='id', right_on='scan_result_id', how='left')
         else:
             df_my_brand = pd.DataFrame()
             df_full = df_scans.copy()
-            df_full['mention_count'] = 0 # Заглушка
+            df_full['mention_count'] = 0 
 
     except Exception as e:
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 4. РОЗРАХУНОК ЗАГАЛЬНОЇ СТАТИСТИКИ (Агрегація)
+    # 4. РОЗРАХУНОК СТАТИСТИКИ (ВИПРАВЛЕНО ЛОГІКУ)
     
-    # -- SOV (Середня частка голосу по всіх сканах)
-    # SOV скану = (згадок мого бренду / всі згадки) * 100
+    # --- FIX: Безпечний розрахунок SOV ---
     if not df_full.empty:
+        # 1. Заповнюємо пропуски, щоб уникнути помилок
+        if 'mention_count' not in df_full.columns:
+            df_full['mention_count'] = 0
+        if 'is_my_brand' not in df_full.columns:
+            df_full['is_my_brand'] = False
+            
+        df_full['mention_count'] = df_full['mention_count'].fillna(0)
+        df_full['is_my_brand'] = df_full['is_my_brand'].fillna(False)
+
+        # 2. Створюємо допоміжну колонку для "Моїх згадок"
+        # Це замінює складну lambda, яка викликала KeyError
+        df_full['calc_my_mentions'] = df_full['mention_count'] * df_full['is_my_brand'].astype(int)
+
+        # 3. Групуємо і сумуємо
         scan_stats = df_full.groupby('id').agg(
             total_mentions=('mention_count', 'sum'),
-            my_mentions=('mention_count', lambda x: x[df_full.loc[x.index, 'is_my_brand'] == True].sum())
+            my_mentions=('calc_my_mentions', 'sum')
         ).reset_index()
-        scan_stats['sov'] = (scan_stats['my_mentions'] / scan_stats['total_mentions']).fillna(0) * 100
+
+        # 4. Рахуємо % SOV
+        # Захист від ділення на нуль
+        scan_stats['sov'] = scan_stats.apply(
+            lambda x: (x['my_mentions'] / x['total_mentions'] * 100) if x['total_mentions'] > 0 else 0, 
+            axis=1
+        )
         avg_sov = scan_stats['sov'].mean()
     else:
         avg_sov = 0.0
@@ -1549,21 +1564,20 @@ def show_keyword_details(kw_id):
     # -- Згадки (Сума)
     total_my_mentions = df_my_brand['mention_count'].sum() if not df_my_brand.empty else 0
 
-    # -- Позиція (Середня, ігноруючи None)
-    if not df_my_brand.empty:
+    # -- Позиція
+    if not df_my_brand.empty and 'rank_position' in df_my_brand.columns:
         avg_pos = df_my_brand['rank_position'].mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
     else:
         display_pos = "-"
 
-    # -- Тональність (Розбивка)
-    if not df_my_brand.empty:
+    # -- Тональність
+    if not df_my_brand.empty and 'sentiment_score' in df_my_brand.columns:
         sent_counts = df_my_brand['sentiment_score'].value_counts(normalize=True) * 100
         pos_pct = sent_counts.get("Позитивний", 0.0)
         neg_pct = sent_counts.get("Негативний", 0.0)
         neu_pct = sent_counts.get("Нейтральний", 0.0)
         
-        # Форматування для відображення
         sent_display = f"""
         <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;|&nbsp; 
         <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp;|&nbsp; 
@@ -1572,7 +1586,7 @@ def show_keyword_details(kw_id):
     else:
         sent_display = "<span style='color:#999'>Не згадано</span>"
 
-    # 5. ВІДОБРАЖЕННЯ БЛОКУ СТАТИСТИКИ
+    # 5. ВІДОБРАЖЕННЯ
     st.markdown("""
     <style>
         .stat-box {
@@ -1594,85 +1608,65 @@ def show_keyword_details(kw_id):
     with c2:
         st.markdown(f"""<div class="stat-box"><div class="stat-label">Згадок бренду</div><div class="stat-value">{int(total_my_mentions)}</div></div>""", unsafe_allow_html=True)
     with c3:
-        # Для тональності використовуємо HTML всередині значення
         st.markdown(f"""<div class="stat-box"><div class="stat-label">Тональність</div><div style="font-size: 16px; font-weight:600; margin-top:8px;">{sent_display}</div></div>""", unsafe_allow_html=True)
     with c4:
         st.markdown(f"""<div class="stat-box"><div class="stat-label">Сер. Позиція</div><div class="stat-value">{display_pos}</div></div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 6. ГРАФІК ДИНАМІКИ (ЧАСОВИЙ РЯД)
-    
-    # -- Підготовка даних для графіка --
-    # Нам треба для кожного скану (по id) мати: date, provider, sov, mentions, rank
-    
-    # Об'єднуємо stats сканів з метаданими сканів (провайдер, дата)
+    # 6. ГРАФІК ДИНАМІКИ
     if not df_full.empty:
-        # Беремо базові дані сканів
+        # Підготовка даних для графіка
         df_chart = df_scans[['id', 'created_at', 'date_str', 'provider']].copy()
         
-        # Додаємо SOV
+        # Додаємо SOV з розрахованого вище scan_stats
         df_chart = pd.merge(df_chart, scan_stats[['id', 'sov', 'my_mentions']], on='id', how='left')
         
-        # Додаємо Rank (середній по скану, якщо було кілька згадок)
+        # Додаємо Rank
         if not df_my_brand.empty:
             rank_stats = df_my_brand.groupby('scan_result_id')['rank_position'].mean().reset_index()
             df_chart = pd.merge(df_chart, rank_stats, left_on='id', right_on='scan_result_id', how='left')
         else:
             df_chart['rank_position'] = None
             
-        # Заповнюємо пропуски
         df_chart['sov'] = df_chart['sov'].fillna(0)
         df_chart['my_mentions'] = df_chart['my_mentions'].fillna(0)
         
-        # -- Фільтри для графіка --
         st.markdown("##### 📈 Динаміка показників")
         
         col_f1, col_f2 = st.columns([1, 2])
         with col_f1:
-            metric_choice = st.selectbox(
-                "Оберіть метрику:", 
-                ["Частка голосу (SOV)", "Згадки бренду", "Позиція у списку"]
-            )
+            metric_choice = st.selectbox("Оберіть метрику:", ["Частка голосу (SOV)", "Згадки бренду", "Позиція у списку"])
         with col_f2:
             available_providers = df_chart['provider'].unique().tolist()
-            selected_providers = st.multiselect(
-                "Фільтр по LLM:", 
-                options=available_providers, 
-                default=available_providers
-            )
+            selected_providers = st.multiselect("Фільтр по LLM:", options=available_providers, default=available_providers)
 
-        # Фільтрація DF
+        # Фільтрація
         df_chart_filtered = df_chart[df_chart['provider'].isin(selected_providers)].sort_values('created_at')
 
         if not df_chart_filtered.empty:
-            # Налаштування змінних для Plotly
             if metric_choice == "Частка голосу (SOV)":
                 y_col = "sov"
                 y_title = "SOV (%)"
-                color_seq = ["#00C896"] # Зелений
+                color_seq = ["#00C896"]
             elif metric_choice == "Згадки бренду":
                 y_col = "my_mentions"
                 y_title = "Кількість згадок"
-                color_seq = ["#36A2EB"] # Синій
-            else: # Позиція
+                color_seq = ["#36A2EB"]
+            else: 
                 y_col = "rank_position"
-                y_title = "Позиція (менше = краще)"
-                color_seq = ["#FF9F40"] # Помаранчевий
-                # Для позиції важливо: перевертаємо вісь Y (1 зверху) або просто відображаємо як є
+                y_title = "Позиція"
+                color_seq = ["#FF9F40"]
             
-            # Будуємо графік
             fig = px.line(
                 df_chart_filtered, 
                 x="date_str", 
                 y=y_col, 
                 color="provider",
                 markers=True,
-                title=None,
                 labels={"date_str": "Дата", "provider": "Модель"}
             )
             
-            # Якщо це позиція, інвертуємо вісь Y (щоб 1 місце було зверху)
             if metric_choice == "Позиція у списку":
                 fig.update_yaxes(autorange="reversed")
 
@@ -1684,22 +1678,27 @@ def show_keyword_details(kw_id):
                 height=350,
                 margin=dict(l=0, r=0, t=0, b=0)
             )
-            
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Немає даних для відображення за обраними фільтрами.")
-            
+            st.info("Немає даних для відображення.")
     else:
-        st.info("Недостатньо даних для побудови графіка.")
+        st.info("Недостатньо даних для графіка.")
 
     st.markdown("---")
     
-    # 7. ДЕТАЛІЗАЦІЯ ПО СКАНУВАННЯХ (Таблиця знизу - як було раніше, або скорочена)
+    # 7. ТАБЛИЦЯ ІСТОРІЇ
     with st.expander("📋 Детальна історія сканувань"):
-        # Тут відображаємо таблицю, схожу на ту, що була в `show_dashboard` або попередній версії
-        # Але спрощену
         if not df_full.empty:
-            display_df = df_full.sort_values('created_at', ascending=False)[['created_at', 'provider', 'sov', 'my_mentions', 'rank_position']]
+            display_df = df_full.sort_values('created_at', ascending=False)[
+                ['created_at', 'provider', 'mention_count', 'calc_my_mentions']
+            ].copy()
+            
+            # Додаємо Rank/Score якщо є
+            if 'rank_position' in df_full.columns:
+                display_df['rank_position'] = df_full['rank_position']
+            else:
+                display_df['rank_position'] = None
+
             display_df['created_at'] = display_df['created_at'].dt.strftime('%Y-%m-%d %H:%M')
             
             st.dataframe(
@@ -1707,8 +1706,8 @@ def show_keyword_details(kw_id):
                 column_config={
                     "created_at": "Дата",
                     "provider": "LLM",
-                    "sov": st.column_config.NumberColumn("SOV %", format="%.1f"),
-                    "my_mentions": "Згадок",
+                    "mention_count": "Всього згадок",
+                    "calc_my_mentions": "Моїх згадок",
                     "rank_position": "Позиція"
                 },
                 use_container_width=True,
@@ -3226,18 +3225,6 @@ def main():
         # Меню
         page = sidebar_menu()
 
-        # 🔥 ЛОГІКА НАВІГАЦІЇ (ВИПРАВЛЕНО):
-        # Якщо користувач натиснув на "Перелік запитів" у меню,
-        # перевіряємо, чи він прийшов з іншої сторінки. 
-        # Якщо так — скидаємо focus_keyword_id, щоб відкрився список, а не деталі.
-        if page == "Перелік запитів":
-            if st.session_state.get("last_page") != "Перелік запитів":
-                st.session_state["focus_keyword_id"] = None
-        
-        # Запам'ятовуємо поточну сторінку для наступної перевірки
-        st.session_state["last_page"] = page
-
-        # --- РОУТИНГ ---
         if page == "Дашборд":
             show_dashboard()
         elif page == "Перелік запитів":
