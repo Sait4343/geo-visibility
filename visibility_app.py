@@ -2710,15 +2710,15 @@ def show_admin_page():
     """
     Адмін-панель (CRM).
     Функціонал:
-    - Керування проектами (Trial -> Active).
-    - Надання дозволу на CRON.
-    - Керування правами користувачів (Super Admin).
-    - Створення проектів вручну.
-    FIX: Виправлено помилку 'int64 is not JSON serializable'.
+    - Список карток проектів з редагуванням статусів (Trial/Active/Blocked).
+    - Керування CRON.
+    - Видалення Проекту + Користувача (з подвійним підтвердженням).
+    - Захист Супер-адмінів від видалення.
+    - Відображення імен користувачів.
     """
     import pandas as pd
     import streamlit as st
-    import numpy as np # Потрібно для перевірки типів
+    import numpy as np
 
     # --- 0. ПІДКЛЮЧЕННЯ ---
     if 'supabase' not in globals():
@@ -2730,8 +2730,9 @@ def show_admin_page():
     else:
         supabase = globals()['supabase']
 
-    # --- Хелпер для очищення даних перед відправкою в JSON (FIX int64 error) ---
+    # --- ХЕЛПЕРИ ---
     def clean_data_for_json(data):
+        """Виправляє помилку int64 is not JSON serializable"""
         if isinstance(data, dict):
             return {k: clean_data_for_json(v) for k, v in data.items()}
         elif isinstance(data, list):
@@ -2746,36 +2747,57 @@ def show_admin_page():
             return None
         return data
 
+    def update_project_field(proj_id, field, value):
+        try:
+            val = clean_data_for_json(value)
+            supabase.table("projects").update({field: val}).eq("id", proj_id).execute()
+        except Exception as e:
+            st.error(f"Помилка оновлення: {e}")
+
     st.title("🛡️ Admin Panel (CRM)")
 
     # --- 1. ОТРИМАННЯ ДАНИХ ---
     try:
-        # Проекти
+        # 1. Проекти
         projects_resp = supabase.table("projects").select("*").order("created_at", desc=True).execute()
-        df_projects = pd.DataFrame(projects_resp.data) if projects_resp.data else pd.DataFrame()
+        projects_data = projects_resp.data if projects_resp.data else []
 
-        # Користувачі (Profiles) - для прав доступу
-        # Припускаємо, що є таблиця profiles або users_meta
-        try:
-            users_resp = supabase.table("profiles").select("*").execute() # Або ваша таблиця користувачів
-            df_users = pd.DataFrame(users_resp.data) if users_resp.data else pd.DataFrame()
-        except:
-            df_users = pd.DataFrame()
+        # 2. Користувачі (Profiles)
+        # Припускаємо наявність колонок first_name, last_name, role
+        users_resp = supabase.table("profiles").select("*").execute()
+        users_data = users_resp.data if users_resp.data else []
+        
+        # Створюємо мапу користувачів для швидкого пошуку: id -> {name, role, email}
+        user_map = {}
+        for u in users_data:
+            f_name = u.get('first_name', '') or ''
+            l_name = u.get('last_name', '') or ''
+            full_name = f"{f_name} {l_name}".strip() or u.get('email', 'Unknown')
+            user_map[u['id']] = {
+                "full_name": full_name,
+                "email": u.get('email', '-'),
+                "role": u.get('role', 'user'), # user, admin, super_admin
+                "first_name": f_name,
+                "last_name": l_name
+            }
 
     except Exception as e:
         st.error(f"Помилка завантаження даних: {e}")
         return
 
     # --- 2. KPI ---
-    if not df_projects.empty:
-        total = len(df_projects)
-        active = len(df_projects[df_projects['status'] == 'active'])
-        trial = len(df_projects[df_projects['status'] == 'trial'])
+    if projects_data:
+        df_stats = pd.DataFrame(projects_data)
+        total = len(df_stats)
+        active = len(df_stats[df_stats['status'] == 'active'])
+        blocked = len(df_stats[df_stats['status'] == 'blocked'])
+        trial = len(df_stats[df_stats['status'] == 'trial'])
         
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Всього проектів", total)
-        k2.metric("Активних (Paid)", active)
-        k3.metric("Тріал (Trial)", trial)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Всього", total)
+        k2.metric("Active (Paid)", active)
+        k3.metric("Trial", trial)
+        k4.metric("Blocked", blocked)
 
     st.write("")
 
@@ -2783,159 +2805,221 @@ def show_admin_page():
     tab_list, tab_create, tab_users = st.tabs(["📂 Список проектів", "➕ Створити проект", "👥 Користувачі & Права"])
 
     # ========================================================
-    # TAB 1: СПИСОК ПРОЕКТІВ (РЕДАГУВАННЯ СТАТУСІВ)
+    # TAB 1: СПИСОК ПРОЕКТІВ (КАРТКИ)
     # ========================================================
     with tab_list:
-        st.markdown("##### Керування проектами")
-        st.caption("Змінюйте статус на 'active' та вмикайте 'allow_cron', щоб дати доступ до автосканування.")
+        st.markdown("##### Керування проектами та користувачами")
+        
+        # Заголовки
+        h1, h2, h3, h4, h5 = st.columns([2, 1.5, 1.5, 1, 1])
+        h1.markdown("**Проект / Користувач**")
+        h2.markdown("**Статус**")
+        h3.markdown("**CRON**")
+        h4.markdown("**Дата**")
+        h5.markdown("**Видалення**")
+        st.divider()
 
-        if not df_projects.empty:
-            # Підготовка даних для редактора
-            # Переконаємось, що колонки існують
-            if 'status' not in df_projects.columns: df_projects['status'] = 'trial'
-            if 'allow_cron' not in df_projects.columns: df_projects['allow_cron'] = False
+        if not projects_data:
+            st.info("Проектів немає.")
+
+        for p in projects_data:
+            p_id = p['id']
+            u_id = p.get('user_id')
             
-            # Сортування колонок
-            cols_to_show = ['id', 'project_name', 'domain', 'status', 'allow_cron', 'created_at']
-            # Додаємо ті, що є в наявності
-            existing_cols = [c for c in cols_to_show if c in df_projects.columns]
-            
-            edited_projects = st.data_editor(
-                df_projects[existing_cols],
-                column_config={
-                    "id": st.column_config.TextColumn("ID", disabled=True, width="small"),
-                    "project_name": "Назва",
-                    "domain": "Домен",
-                    "status": st.column_config.SelectboxColumn(
-                        "Статус",
-                        options=["trial", "active"],
-                        help="Active = Платний, повний доступ. Trial = Обмежений.",
-                        required=True,
-                        width="medium"
-                    ),
-                    "allow_cron": st.column_config.CheckboxColumn(
-                        "CRON Дозвіл",
-                        help="Чи дозволено цьому проекту вмикати автосканування?",
-                        default=False
-                    ),
-                    "created_at": st.column_config.DatetimeColumn("Створено", disabled=True, format="D.M.Y H:m")
-                },
-                hide_index=True,
-                use_container_width=True,
-                key="admin_projects_editor"
-            )
+            # Інформація про власника
+            owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
+            owner_name = owner_info['full_name']
+            owner_role = owner_info['role']
 
-            # Кнопка збереження змін
-            if st.button("💾 Зберегти зміни в проектах", type="primary"):
-                try:
-                    # Порівнюємо оригінал і редаговане, щоб знайти зміни
-                    # (Для простоти просто оновлюємо всі змінені рядки, або ітеруємось)
-                    
-                    # Перетворюємо в dict для ітерації
-                    data_to_update = edited_projects.to_dict('records')
-                    
-                    count_updated = 0
-                    with st.spinner("Оновлення бази даних..."):
-                        for row in data_to_update:
-                            # Очищаємо від int64 перед відправкою
-                            clean_row = clean_data_for_json(row)
-                            project_id = clean_row.pop('id') # ID не оновлюємо, а використовуємо для пошуку
-                            
-                            # Видаляємо created_at з апдейту (він незмінний)
-                            if 'created_at' in clean_row: del clean_row['created_at']
+            with st.container():
+                c1, c2, c3, c4, c5 = st.columns([2, 1.5, 1.5, 1, 1])
 
-                            # Виконуємо апдейт
-                            supabase.table("projects").update(clean_row).eq("id", project_id).execute()
-                            count_updated += 1
-                    
-                    st.success(f"Оновлено {count_updated} проектів!")
-                    st.rerun()
+                # 1. Інфо
+                with c1:
+                    st.markdown(f"**{p.get('project_name', 'No Name')}**")
+                    st.caption(f"🌐 {p.get('domain', '-')}")
+                    st.caption(f"👤 {owner_name} ({owner_role})")
 
-                except Exception as e:
-                    st.error(f"Помилка збереження: {e}")
-        else:
-            st.info("Проектів ще немає.")
+                # 2. Статус (Active / Trial / Blocked)
+                with c2:
+                    current_status = p.get('status', 'trial')
+                    # Список статусів
+                    status_options = ["trial", "active", "blocked"]
+                    
+                    try: 
+                        idx = status_options.index(current_status)
+                    except: 
+                        idx = 0
+                    
+                    new_status = st.selectbox(
+                        "Status", 
+                        status_options, 
+                        index=idx, 
+                        key=f"st_{p_id}", 
+                        label_visibility="collapsed"
+                    )
+                    
+                    if new_status != current_status:
+                        update_project_field(p_id, "status", new_status)
+                        st.rerun()
+
+                # 3. CRON Дозвіл
+                with c3:
+                    allow_cron = p.get('allow_cron', False)
+                    new_cron = st.checkbox("Allow Auto", value=allow_cron, key=f"cr_{p_id}")
+                    if new_cron != allow_cron:
+                        update_project_field(p_id, "allow_cron", new_cron)
+                        st.rerun()
+
+                # 4. Дата
+                with c4:
+                    raw_date = p.get('created_at', '')
+                    if raw_date:
+                        st.caption(raw_date[:10])
+
+                # 5. ВИДАЛЕННЯ (Подвійне підтвердження)
+                with c5:
+                    # Логіка видалення
+                    confirm_key = f"confirm_del_{p_id}"
+                    
+                    if not st.session_state.get(confirm_key, False):
+                        # Крок 1: Кнопка "Видалити"
+                        if st.button("🗑", key=f"del_btn_{p_id}", help="Видалити проект і користувача"):
+                            st.session_state[confirm_key] = True
+                            st.rerun()
+                    else:
+                        # Крок 2: Підтвердження
+                        st.markdown("⚠️ **Видалити все?**")
+                        col_yes, col_no = st.columns(2)
+                        
+                        with col_yes:
+                            if st.button("✅", key=f"yes_{p_id}", help="Підтвердити видалення"):
+                                # Перевірка прав (Супер-адміна не можна видалити тут)
+                                if owner_role == 'super_admin':
+                                    st.error("Super Admin!")
+                                    st.session_state[confirm_key] = False
+                                else:
+                                    try:
+                                        # 1. Видаляємо Проект
+                                        supabase.table("projects").delete().eq("id", p_id).execute()
+                                        
+                                        # 2. Видаляємо Користувача (якщо є прив'язка)
+                                        if u_id:
+                                            supabase.table("profiles").delete().eq("id", u_id).execute()
+                                        
+                                        st.success("Видалено!")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Помилка: {e}")
+                        
+                        with col_no:
+                            if st.button("❌", key=f"no_{p_id}", help="Скасувати"):
+                                st.session_state[confirm_key] = False
+                                st.rerun()
+                
+                st.divider()
 
     # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ
+    # TAB 2: СТВОРИТИ ПРОЕКТ (Суперадмін може багато)
     # ========================================================
     with tab_create:
+        st.markdown("##### Створення нового проекту")
+        st.caption("Ви можете створювати необмежену кількість проектів під своїм акаунтом.")
+        
         with st.form("new_project_form"):
             c1, c2 = st.columns(2)
             new_name = c1.text_input("Назва проекту")
             new_domain = c2.text_input("Домен (напр. apple.com)")
-            new_status = st.selectbox("Початковий статус", ["trial", "active"])
-            new_cron = st.checkbox("Дозволити CRON одразу?")
             
-            # Прив'язка до користувача (опціонально, якщо адмін створює для когось)
-            # Можна додати селектбокс з email користувачів
+            c3, c4 = st.columns(2)
+            new_status = c3.selectbox("Початковий статус", ["trial", "active", "blocked"])
+            new_cron = c4.checkbox("Дозволити CRON одразу?", value=False)
+            
+            # Якщо ми хочемо прив'язати проект до конкретного юзера (опціонально)
+            # Можна додати вибір юзера, якщо створюємо "комусь"
             
             if st.form_submit_button("Створити"):
                 if new_name and new_domain:
                     try:
+                        # Отримуємо ID поточного адміна для прив'язки (якщо створює собі)
+                        # Або можна залишити user_id пустим, якщо це системний проект
+                        # Але краще прив'язати до admin user
+                        current_user_id = None
+                        # Тут треба логіку отримання ID з auth, але ми в streamlit...
+                        # Спробуємо знайти юзера, який є супер-адміном
+                        # (Спрощена логіка для прикладу)
+                        
                         new_data = {
                             "project_name": new_name,
                             "domain": new_domain,
                             "status": new_status,
                             "allow_cron": new_cron,
-                            # "user_id": ... (якщо треба прив'язати)
+                            # "user_id": ... 
                         }
                         supabase.table("projects").insert(new_data).execute()
-                        st.success("Проект створено!")
+                        st.success("Проект успішно створено!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Помилка: {e}")
+                        st.error(f"Помилка створення: {e}")
                 else:
                     st.warning("Заповніть назву та домен.")
 
     # ========================================================
-    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА (SUPER ADMIN)
+    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА
     # ========================================================
     with tab_users:
-        st.markdown("##### 👮 Керування правами доступу")
-        st.caption("Тут можна призначити користувача Супер-Адміном.")
+        st.markdown("##### 👥 База користувачів")
+        st.caption("Тут можна змінювати імена та права доступу. Супер-адміна видалити неможливо.")
 
-        if not df_users.empty:
-            # Перевіряємо наявність колонки role або is_super_admin
-            col_role = 'role' if 'role' in df_users.columns else 'is_super_admin'
+        if users_data:
+            df_users = pd.DataFrame(users_data)
             
-            # Якщо колонки немає, імітуємо для відображення (або треба створити в БД)
-            if col_role not in df_users.columns:
-                st.warning("У таблиці користувачів немає колонки 'role' або 'is_super_admin'.")
-            else:
-                edited_users = st.data_editor(
-                    df_users[['id', 'email', col_role]], # Показуємо тільки важливе
-                    column_config={
-                        "id": st.column_config.TextColumn("User ID", disabled=True),
-                        "email": st.column_config.TextColumn("Email", disabled=True),
-                        col_role: st.column_config.SelectboxColumn(
-                            "Роль",
-                            options=["user", "admin", "super_admin"] if col_role == 'role' else [True, False],
-                            required=True
-                        )
-                    },
-                    hide_index=True,
-                    use_container_width=True,
-                    key="admin_users_editor"
-                )
+            # Переконаємось, що є потрібні колонки
+            required_cols = ['id', 'email', 'first_name', 'last_name', 'role']
+            for col in required_cols:
+                if col not in df_users.columns:
+                    df_users[col] = None
 
-                if st.button("💾 Оновити права користувачів"):
-                    try:
-                        user_data = edited_users.to_dict('records')
-                        for u_row in user_data:
-                            clean_u = clean_data_for_json(u_row)
-                            uid = clean_u.pop('id')
-                            if 'email' in clean_u: del clean_u['email'] # Email не міняємо тут
-                            
-                            # Апдейт профілю
-                            supabase.table("profiles").update(clean_u).eq("id", uid).execute()
-                        
-                        st.success("Права оновлено!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Помилка оновлення прав: {e}")
+            edited_users = st.data_editor(
+                df_users[required_cols],
+                column_config={
+                    "id": st.column_config.TextColumn("User ID", disabled=True, width="small"),
+                    "email": st.column_config.TextColumn("Email", disabled=True),
+                    "first_name": "Ім'я",
+                    "last_name": "Прізвище",
+                    "role": st.column_config.SelectboxColumn(
+                        "Роль",
+                        options=["user", "admin", "super_admin"],
+                        required=True,
+                        width="medium",
+                        help="super_admin має повний доступ і не може бути видалений."
+                    )
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="admin_users_editor_v2"
+            )
+
+            if st.button("💾 Зберегти зміни користувачів"):
+                try:
+                    updated_rows = edited_users.to_dict('records')
+                    count = 0
+                    for row in updated_rows:
+                        # Чистка
+                        clean_row = clean_data_for_json(row)
+                        uid = clean_row.pop('id')
+                        # Email зазвичай не змінюють через цей редактор, приберемо для безпеки
+                        if 'email' in clean_row: del clean_row['email']
+
+                        supabase.table("profiles").update(clean_row).eq("id", uid).execute()
+                        count += 1
+                    
+                    st.success(f"Оновлено {count} користувачів!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Помилка оновлення: {e}")
         else:
-            st.info("Користувачів не знайдено (або немає доступу до таблиці profiles).")
+            st.warning("Користувачів не знайдено.")
 
 
 def main():
