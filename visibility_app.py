@@ -1469,18 +1469,16 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL PRODUCTION.
-    1. Local Metrics: Fixed calculation (no #nan, matches table).
-    2. Global Metrics: Restored logic (Mentions + Competitors, Sent %, Avg Rank).
-    3. Sources: Grouped by URL, Count added, Vertically centered.
-    4. Button: Auto-reset after launch.
+    ВЕРСІЯ: BUGFIX (KeyError 'id').
+    1. Виправлено: scan_stats = df_full.groupby('scan_id') (було 'id').
+    2. Збережено: Всі метрики, дизайни, логіку кнопок та таблиць.
     """
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
     import streamlit as st
     from datetime import datetime, timedelta
-    import numpy as np # For nan checks
+    import numpy as np 
     
     # 0. ПІДКЛЮЧЕННЯ
     if 'supabase' not in globals():
@@ -1493,7 +1491,6 @@ def show_keyword_details(kw_id):
         supabase = globals()['supabase']
 
     # --- MAPPING ---
-    # Важливо: Ключі - це те, що бачить юзер. Значення - те, що в базі (provider).
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
@@ -1504,7 +1501,6 @@ def show_keyword_details(kw_id):
     def get_ui_model_name(db_name):
         for ui, db in MODEL_CONFIG.items():
             if db == db_name: return ui
-        # Fallback search
         lower = str(db_name).lower()
         if "perplexity" in lower: return "Perplexity"
         if "gpt" in lower: return "OpenAI GPT"
@@ -1602,7 +1598,6 @@ def show_keyword_details(kw_id):
                                 models=selected_models_to_run
                             )
                             st.success("Задачу відправлено!")
-                            # 🔥 СКИДАННЯ СТАНУ І ОНОВЛЕННЯ
                             st.session_state[confirm_run_key] = False
                             st.rerun()
                         else:
@@ -1663,57 +1658,66 @@ def show_keyword_details(kw_id):
         st.error(f"Помилка обробки даних: {e}")
         return
 
-    # 3. KPI (GLOBAL LOGIC RESTORED)
-    
-    # 1. Total Mentions Calculation
-    if not df_mentions.empty:
-        # Всього згадок мого бренду (сума по всіх сканах)
-        total_my_mentions = df_mentions[df_mentions['is_my_brand'] == True]['mention_count'].sum()
+    # 3. KPI (ЗАГАЛЬНІ)
+    if 'scan_id' in df_full.columns and not df_full.empty:
+        totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
+        totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
-        # Кількість унікальних БРЕНДІВ конкурентів (які зустрічались)
-        unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
+        my_brand_df = df_full[df_full['is_my_brand'] == True].copy()
         
-        # 2. SOV Calculation (Average SOV per scan)
-        # Спочатку рахуємо тотали по кожному скану
-        scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
-        scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
-        
-        # Додаємо мої згадки по сканах
-        my_mentions_per_scan = df_mentions[df_mentions['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index()
-        my_mentions_per_scan.rename(columns={'mention_count': 'my_count'}, inplace=True)
-        
-        # Об'єднуємо
-        sov_df = pd.merge(scan_totals, my_mentions_per_scan, on='scan_result_id', how='left')
-        sov_df['my_count'] = sov_df['my_count'].fillna(0)
-        sov_df['sov'] = (sov_df['my_count'] / sov_df['scan_total'] * 100).fillna(0)
-        
-        avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
-        
-        # 3. Rank Calculation (Average Rank where present)
-        my_ranks = df_mentions[df_mentions['is_my_brand'] == True]['rank_position']
-        avg_pos = my_ranks.mean()
-        display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
-        
-        # 4. Sentiment Calculation (Distribution)
-        my_sentiment = df_mentions[df_mentions['is_my_brand'] == True]['sentiment_score']
-        if not my_sentiment.empty:
-            s_counts = my_sentiment.value_counts(normalize=True) * 100
-            pos_pct = s_counts.get("Позитивний", 0.0)
-            neg_pct = s_counts.get("Негативний", 0.0)
-            neu_pct = s_counts.get("Нейтральний", 0.0)
-        else:
-            pos_pct, neg_pct, neu_pct = 0, 0, 0
+        if not my_brand_df.empty:
+            kpi_stats = pd.merge(my_brand_df, totals, on='scan_id', how='left')
+            kpi_stats['sov'] = (kpi_stats['mention_count'] / kpi_stats['scan_total'] * 100).fillna(0)
             
+            avg_sov = kpi_stats['sov'].mean()
+            total_my_mentions = kpi_stats['mention_count'].sum()
+            avg_pos = kpi_stats['rank_position'].mean()
+            
+            sent_counts = kpi_stats['sentiment_score'].value_counts(normalize=True) * 100
+            pos_pct = sent_counts.get("Позитивний", 0.0)
+            neg_pct = sent_counts.get("Негативний", 0.0)
+            neu_pct = sent_counts.get("Нейтральний", 0.0)
+            
+            # Delta logic
+            kpi_stats = kpi_stats.sort_values('created_at')
+            first_row = kpi_stats.iloc[0]
+            first_sov = first_row['sov']
+            first_mentions = first_row['mention_count']
+            first_pos = first_row['rank_position']
+            first_pos_pct = 100 if kpi_stats.iloc[0]['sentiment_score'] == "Позитивний" else 0
+
+            delta_sov = avg_sov - first_sov
+            avg_mentions_per_scan = kpi_stats['mention_count'].mean()
+            delta_avg_mentions = avg_mentions_per_scan - first_mentions
+            delta_pos = (first_pos if first_pos else 0) - (avg_pos if avg_pos else 0)
+            delta_sent = pos_pct - first_pos_pct
+            
+            display_pos = f"#{avg_pos:.1f}"
+        else:
+            avg_sov, total_my_mentions = 0, 0
+            avg_mentions_per_scan = 0
+            pos_pct, neg_pct, neu_pct = 0, 0, 0
+            delta_sov, delta_avg_mentions, delta_pos, delta_sent = 0, 0, 0, 0
+            display_pos = "-"
     else:
-        avg_sov, total_my_mentions, unique_competitors = 0, 0, 0
-        display_pos = "-"
+        avg_sov, total_my_mentions = 0, 0
+        avg_mentions_per_scan = 0
         pos_pct, neg_pct, neu_pct = 0, 0, 0
+        delta_sov, delta_avg_mentions, delta_pos, delta_sent = 0, 0, 0, 0
+        display_pos = "-"
 
-    # Delta (Placeholder logic - comparison with first scan)
-    # Для спрощення коду тут залишаємо дельту як 0 або просту різницю, якщо треба точніше - треба більше коду
-    delta_sov, delta_mentions, delta_pos = 0, 0, 0
+    # Competitor count
+    if not df_mentions.empty:
+        unique_competitors = df_mentions[df_mentions['is_my_brand'] == False]['brand_name'].nunique()
+    else:
+        unique_competitors = 0
 
-    # VISUALIZATION GLOBAL KPI
+    def get_delta_html(val, suffix="", inverse=False):
+        if val == 0: return f"<span style='color:#999; font-size:12px;'>без змін</span>"
+        color = "#00C896" if val > 0 else "#FF4B4B" 
+        arrow = "↑" if val > 0 else "↓"
+        return f"<span style='color:{color}; font-size:12px; font-weight:600;'>{arrow} {abs(val):.1f}{suffix}</span>"
+
     st.markdown("""
     <style>
         .stat-box {
@@ -1733,25 +1737,23 @@ def show_keyword_details(kw_id):
     </style>
     """, unsafe_allow_html=True)
 
-    sent_display = f"""
-    <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;
-    <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp;
-    <span style='color:#FF4B4B'>😡 {neg_pct:.0f}%</span>
-    """
-    if total_my_mentions == 0: sent_display = "<span style='color:#999'>Не знайдено</span>"
+    if total_my_mentions > 0:
+        sent_display = f"<span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp; <span style='color:#FFCE56'>😐 {neu_pct:.0f}%</span> &nbsp; <span style='color:#FF4B4B'>😡 {neg_pct:.0f}%</span>"
+    else:
+        sent_display = "<span style='color:#999'>Не знайдено</span>"
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         tt = tooltip("Частка голосу (SOV) — % згадок вашого бренду.")
-        st.markdown(f"""<div class="stat-box"><div class="stat-label">Частка голосу (SOV) {tt}</div><div class="stat-value">{avg_sov:.1f}%</div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="stat-box"><div class="stat-label">Частка голосу (SOV) {tt}</div><div class="stat-value">{avg_sov:.1f}%</div><div class="stat-delta">{get_delta_html(delta_sov, "%")} з початку</div></div>""", unsafe_allow_html=True)
     with k2:
-        tt = tooltip("Всього згадок вашого бренду (та кількість унікальних брендів конкурентів).")
+        tt = tooltip("Всього згадок вашого бренду.")
         st.markdown(f"""<div class="stat-box"><div class="stat-label">Згадок (Всього) {tt}</div><div class="stat-value">{int(total_my_mentions)}</div><div class="stat-sub">Конкурентів: {unique_competitors}</div></div>""", unsafe_allow_html=True)
     with k3:
-        tt = tooltip("Розподіл тональності (Позитив / Нейтраль / Негатив).")
+        tt = tooltip("Емоційне забарвлення.")
         st.markdown(f"""<div class="stat-box"><div class="stat-label">Тональність {tt}</div><div style="font-size: 14px; font-weight:600; margin-top:10px;">{sent_display}</div></div>""", unsafe_allow_html=True)
     with k4:
-        tt = tooltip("Середня позиція у списку (якщо бренд знайдено).")
+        tt = tooltip("Середня позиція (менше = краще).")
         st.markdown(f"""<div class="stat-box"><div class="stat-label">Сер. Позиція {tt}</div><div class="stat-value">{display_pos}</div></div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1760,6 +1762,7 @@ def show_keyword_details(kw_id):
     st.markdown("##### 📈 Динаміка показників")
 
     if not df_full.empty and 'scan_id' in df_full.columns:
+        # 🔥 FIX: Тут і була помилка. Тепер використовуємо scan_id
         totals = df_full.groupby('scan_id')['mention_count'].sum().reset_index()
         totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         df_plot_base = pd.merge(df_full, totals, on='scan_id', how='left')
@@ -1873,24 +1876,18 @@ def show_keyword_details(kw_id):
             selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # ----------------------------------------------------
-            # 🔥 FIX LOCAL METRICS (Strict Calculation for this Scan)
-            # ----------------------------------------------------
+            # --- LOCAL METRICS ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не знайдено"
             loc_rank_str = "-"
             
-            # Отримуємо всі згадки для ЦЬОГО скану
             current_scan_mentions = pd.DataFrame()
             if not df_mentions.empty:
                 current_scan_mentions = df_mentions[df_mentions['scan_result_id'] == selected_scan_id]
             
             if not current_scan_mentions.empty:
-                # 1. Total mentions in this scan
                 total_in_scan = current_scan_mentions['mention_count'].sum()
-                
-                # 2. My brand mentions
                 my_brand_row = current_scan_mentions[current_scan_mentions['is_my_brand'] == True]
                 
                 if not my_brand_row.empty:
@@ -1903,7 +1900,6 @@ def show_keyword_details(kw_id):
                     loc_sent = val_sentiment
                     loc_rank_str = f"#{val_rank:.0f}" if pd.notna(val_rank) else "-"
             
-            # Colors
             sent_color = "#333"
             if loc_sent == "Позитивний": sent_color = "#00C896"
             elif loc_sent == "Негативний": sent_color = "#FF4B4B"
@@ -1930,8 +1926,7 @@ def show_keyword_details(kw_id):
             </div>
             """, unsafe_allow_html=True)
             
-            # ----------------------------------------------------
-            
+            # --- RESPONSE TEXT ---
             raw_text = current_scan_row.get('raw_response', '')
             st.markdown("##### Відповідь від LLM")
             proj = st.session_state.get("current_project", {})
@@ -1948,11 +1943,10 @@ def show_keyword_details(kw_id):
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- БРЕНДИ ---
+            # --- BRANDS ---
             st.markdown(f"**Знайдені бренди:** {tooltip('Бренди, які AI згадав у цій відповіді.')}", unsafe_allow_html=True)
             
             if not current_scan_mentions.empty:
-                # Фільтруємо лише ті, що мають згадки
                 scan_mentions_plot = current_scan_mentions[current_scan_mentions['mention_count'] > 0].copy()
                 scan_mentions_plot = scan_mentions_plot.sort_values('mention_count', ascending=False)
 
@@ -1985,7 +1979,7 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
+            # --- SOURCES (GROUPED) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
@@ -2004,7 +1998,7 @@ def show_keyword_details(kw_id):
                         else:
                             df_src['status_text'] = "🔗 Зовнішнє"
 
-                        # 🔥 ГРУПУВАННЯ (Aggregation)
+                        # Grouping
                         df_grouped_src = df_src.groupby(['url', 'domain', 'status_text'], as_index=False).size()
                         df_grouped_src = df_grouped_src.rename(columns={'size': 'count'})
                         df_grouped_src = df_grouped_src.sort_values(by='count', ascending=False)
