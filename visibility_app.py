@@ -3105,8 +3105,6 @@ def show_chat_page():
     import streamlit as st
 
     # --- КОНФІГУРАЦІЯ ---
-    N8N_CHAT_WEBHOOK = "https://virshi.app.n8n.cloud/webhook/webhook/chat-bot" 
-
     st.title("🤖 GPT-Visibility Assistant")
     
     # 1. Отримуємо контекст (User & Project)
