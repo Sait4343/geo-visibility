@@ -1435,13 +1435,14 @@ def show_dashboard():
 # 7. КЕРУВАННЯ ЗАПИТАМИ
 # =========================
 
+
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FULLY RESTORED & CHECKED.
-    1. Джерела: Відновлено логіку extraction доменів (щоб графік завжди був).
-    2. UI: Всі елементи (кнопки, графіки, таблиці) на місці.
-    3. Layout: Симетричне відображення брендів та джерел.
+    ВЕРСІЯ: SOURCES GROUPED + VERTICAL CENTER + WEBHOOK FIX.
+    1. Джерела: Групування URL, лічильник кількості, вертикальне центрування графіка.
+    2. Webhook: Передача правильних technical_ids (gpt-4o, etc.) замість назв.
+    3. UI: Скидання кнопки запуску після підтвердження.
     """
     import pandas as pd
     import plotly.express as px
@@ -1460,6 +1461,7 @@ def show_keyword_details(kw_id):
         supabase = globals()['supabase']
 
     # --- MAPPING ---
+    # UI Назва : Технічний ID (як в базі/n8n)
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
         "OpenAI": "gpt-4o",
@@ -1468,7 +1470,9 @@ def show_keyword_details(kw_id):
     DB_TO_UI_MAP = {v: k for k, v in MODEL_CONFIG.items()}
     
     def get_ui_model_name(db_name):
+        # Спочатку шукаємо точний збіг
         if db_name in DB_TO_UI_MAP: return DB_TO_UI_MAP[db_name]
+        # Якщо ні, евристичний пошук
         lower = str(db_name).lower()
         if "perplexity" in lower: return "Perplexity"
         if "gpt" in lower: return "OpenAI"
@@ -1513,11 +1517,12 @@ def show_keyword_details(kw_id):
     with st.expander("⚙️ Налаштування та Нове сканування", expanded=False):
         c1, c2 = st.columns(2)
         
-        # ЛІВА: РЕДАГУВАННЯ
+        # --- ЛІВА КОЛОНКА: РЕДАГУВАННЯ ЗАПИТУ ---
         with c1:
             edit_key = f"edit_mode_{kw_id}"
             if edit_key not in st.session_state: st.session_state[edit_key] = False
             
+            # Текст
             new_text = st.text_input(
                 "Текст запиту", 
                 value=keyword_text, 
@@ -1525,6 +1530,7 @@ def show_keyword_details(kw_id):
                 disabled=not st.session_state[edit_key]
             )
             
+            # Кнопка ПІД текстом
             if not st.session_state[edit_key]:
                 if st.button("✏️ Редагувати", key="enable_edit_btn"):
                     st.session_state[edit_key] = True
@@ -1539,13 +1545,13 @@ def show_keyword_details(kw_id):
                         st.session_state[edit_key] = False
                         st.rerun()
 
-        # ПРАВА: ЗАПУСК
+        # --- ПРАВА КОЛОНКА: ЗАПУСК СКАНУВАННЯ ---
         with c2:
-            all_models = list(MODEL_CONFIG.keys())
-            selected_models_to_run = st.multiselect(
+            all_models_ui = list(MODEL_CONFIG.keys())
+            selected_models_ui = st.multiselect(
                 "Оберіть моделі для сканування:", 
-                options=all_models, 
-                default=all_models, 
+                options=all_models_ui, 
+                default=all_models_ui, # Всі обрані по дефолту
                 key="rescan_models_select"
             )
             
@@ -1562,14 +1568,20 @@ def show_keyword_details(kw_id):
                     if st.button("✅ Підтвердити", type="primary", key="real_run_btn"):
                         proj = st.session_state.get("current_project", {})
                         if 'n8n_trigger_analysis' in globals():
+                            # 🔥 FIX: Перетворюємо UI назви в Technical IDs для вебхука
+                            # n8n чекає ['perplexity', 'gpt-4o', 'gemini-1.5-pro']
+                            models_payload = [MODEL_CONFIG[m] for m in selected_models_ui]
+                            
                             n8n_trigger_analysis(
                                 project_id, 
                                 [new_text], 
                                 proj.get("brand_name"), 
-                                models=selected_models_to_run
+                                models=models_payload 
                             )
                             st.success("Задачу відправлено!")
+                            # 🔥 FIX: Скидаємо стан кнопки після успішного запуску
                             st.session_state[confirm_run_key] = False
+                            st.rerun()
                         else:
                             st.error("Функція запуску не знайдена.")
                 with c_conf2:
@@ -1873,7 +1885,7 @@ def show_keyword_details(kw_id):
                 scan_mentions = scan_mentions.sort_values('mention_count', ascending=False)
 
                 if not scan_mentions.empty:
-                    c_chart, c_table = st.columns([1.3, 2])
+                    c_chart, c_table = st.columns([1.3, 2], vertical_alignment="center")
                     with c_chart:
                         fig_brands = px.pie(
                             scan_mentions, values='mention_count', names='brand_name', hole=0.5,
@@ -1901,7 +1913,7 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (ВІДНОВЛЕНО ЛОГІКУ + Center Layout) ---
+            # --- ДЖЕРЕЛА (GROUPED + CENTERED) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
@@ -1909,14 +1921,13 @@ def show_keyword_details(kw_id):
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
                     
-                    # 1. Створюємо домен, якщо його немає (ВАЖЛИВО!)
+                    # 1. Домен
                     if 'url' in df_src.columns and 'domain' not in df_src.columns:
                         df_src['domain'] = df_src['url'].apply(lambda x: str(x).split('/')[2] if x and '//' in str(x) else 'unknown')
                     elif 'url' in df_src.columns:
-                         # Навіть якщо колонка є, заповнимо пропуски
                          df_src['domain'] = df_src.apply(lambda x: x['domain'] if pd.notna(x.get('domain')) else (str(x['url']).split('/')[2] if x['url'] and '//' in str(x['url']) else 'unknown'), axis=1)
 
-                    # 2. Обробка URL та Статусу
+                    # 2. Нормалізація
                     if 'url' in df_src.columns:
                         df_src['url'] = df_src['url'].apply(normalize_url)
                         if 'is_official' in df_src.columns:
@@ -1924,11 +1935,22 @@ def show_keyword_details(kw_id):
                         else:
                             df_src['status_text'] = "🔗 Зовнішнє"
 
-                    # 3. Графік та Таблиця
-                    c_src_chart, c_src_table = st.columns([1.3, 2])
-                    
-                    with c_src_chart:
-                        if 'domain' in df_src.columns and not df_src.empty:
+                    # 3. ГРУПУВАННЯ ТА ЛІЧИЛЬНИК
+                    if 'url' in df_src.columns:
+                        # Групуємо по URL, беремо перший статус/домен, і рахуємо кількість
+                        df_src_grouped = df_src.groupby('url').agg({
+                            'domain': 'first',
+                            'status_text': 'first',
+                            'url': 'count' # Trick to count occurrences
+                        }).rename(columns={'url': 'count'}).reset_index()
+                        
+                        df_src_grouped = df_src_grouped.sort_values(by='count', ascending=False)
+
+                        # 4. ВІЗУАЛІЗАЦІЯ (Center Layout)
+                        c_src_chart, c_src_table = st.columns([1.3, 2], vertical_alignment="center")
+                        
+                        with c_src_chart:
+                            # Графік по доменах
                             domain_counts = df_src['domain'].value_counts().reset_index()
                             domain_counts.columns = ['domain', 'count']
                             
@@ -1936,22 +1958,27 @@ def show_keyword_details(kw_id):
                                 domain_counts.head(10), values='count', names='domain', hole=0.5,
                                 labels={'domain': 'Домен', 'count': 'Кількість'}
                             )
-                            fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
+                            fig_src.update_traces(
+                                textposition='inside', 
+                                textinfo='percent',
+                                hovertemplate='<b>%{label}</b><br>Кількість: %{value}'
+                            )
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
                             st.plotly_chart(fig_src, use_container_width=True, config={'displayModeBar': False})
-                        else:
-                            st.write("Немає даних для графіка.")
 
-                    with c_src_table:
-                        st.dataframe(
-                            df_src[['url', 'status_text']], 
-                            use_container_width=True, 
-                            hide_index=True,
-                            column_config={
-                                "url": st.column_config.LinkColumn("Посилання", width="large", validate="^https?://"),
-                                "status_text": st.column_config.TextColumn("Тип", width="small")
-                            }
-                        )
+                        with c_src_table:
+                            st.dataframe(
+                                df_src_grouped[['url', 'status_text', 'count']], 
+                                use_container_width=True, 
+                                hide_index=True,
+                                column_config={
+                                    "url": st.column_config.LinkColumn("Посилання", width="large", validate="^https?://"),
+                                    "status_text": st.column_config.TextColumn("Тип", width="small"),
+                                    "count": st.column_config.NumberColumn("К-сть", width="small")
+                                }
+                            )
+                    else:
+                        st.info("URL не знайдено.")
                 else:
                     st.info("ℹ️ Джерел не знайдено.")
             except Exception as e:
