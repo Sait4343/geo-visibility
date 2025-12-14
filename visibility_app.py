@@ -2922,7 +2922,7 @@ def sidebar_menu():
     with st.sidebar:
         selected = option_menu(
             "Меню",
-            ["Дашборд", "Запити", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility", "Адмін"] if role == "admin" else ["Дашборд", "Запити", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility"],
+            ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility", "Адмін"] if role == "admin" else ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility"],
             icons=["speedometer2", "list-task", "router", "people", "lightbulb", "robot", "shield-lock"],
             menu_icon="cast",
             default_index=0,
