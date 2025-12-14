@@ -2911,7 +2911,7 @@ def sidebar_menu():
     with st.sidebar:
         selected = option_menu(
             "Меню",
-            ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility", "Адмін"] if role == "admin" else ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility"],
+            ["Дашборд", "Запити", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility", "Адмін"] if role == "admin" else ["Дашборд", "Запити", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility"],
             icons=["speedometer2", "list-task", "router", "people", "lightbulb", "robot", "shield-lock"],
             menu_icon="cast",
             default_index=0,
@@ -3588,7 +3588,7 @@ def main():
 
         if page == "Дашборд":
             show_dashboard()
-        elif page == "Запити":
+        elif page == "Перелік запитів":
             show_keywords_page()
         elif page == "Джерела":
             show_sources_page()
