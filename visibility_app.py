@@ -201,7 +201,7 @@ METRIC_TOOLTIPS = {
 def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
     """
     Викликає n8n вебхук для генерації промптів.
-    Відправляємо всі 4 параметри: бренд, домен, галузь, продукти/послуги.
+    ОНОВЛЕНО: Додано header авторизації (virshi-auth), щоб виправити помилку 403.
     """
     try:
         payload = {
@@ -210,7 +210,14 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
             "industry": industry,
             "products": products,
         }
-        response = requests.post(N8N_GEN_URL, json=payload, timeout=20)
+
+        # 🔥 ВАЖЛИВО: Додаємо заголовок авторизації
+        headers = {
+            "virshi-auth": "hi@virshi.ai2025"
+        }
+
+        # Передаємо headers у запит
+        response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=20)
 
         if response.status_code == 200:
             data = response.json()
@@ -223,7 +230,6 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
     except Exception as e:
         st.error(f"Помилка з'єднання з N8N: {e}")
         return []
-
 
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
