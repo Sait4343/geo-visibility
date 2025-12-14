@@ -2058,22 +2058,21 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FINAL UI FIX.
-    1. Назва запиту: без фону (виглядає як текст), клікабельна.
-    2. Кнопка "Аналізувати": Primary (червона/кольорова), з нормальним стилем.
-    3. Кнопка "Видалити": Стандартна (біла з рамкою).
-    4. Заголовок: Менший шрифт.
+    ВЕРСІЯ: RENAMED COLUMNS + FULL DELETE BUTTON.
+    1. UI: Стовпчик "Cron" -> "Автозапуск".
+    2. UI: Стовпчик "Дії" -> "Видалити".
+    3. UI: Кнопка видалення тепер з текстом "🗑️ Видалити".
+    4. Core: Збережено таймзону, чергу n8n, нумерацію та переходи.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime
     import time
     
-    # CSS: 
-    # 1. Зелені номери.
-    # 2. Прибираємо фон ТІЛЬКИ у кнопок в 3-му стовпчику (Назва запиту).
+    # CSS для стилізації номерів та кнопок-посилань
     st.markdown("""
     <style>
+        /* Стиль для зеленого номера */
         .green-number {
             background-color: #00C896;
             color: white;
@@ -2087,32 +2086,32 @@ def show_keywords_page():
             font-size: 14px;
             margin-top: 5px; 
         }
-        
-        /* Хак: Таргетуємо кнопки (kind="secondary") ТІЛЬКИ у 3-му стовпчику (де назва запиту).
-           Це не зачепить кнопку "Видалити" (6-й стовпчик) або "Аналізувати" (Primary). */
-        div[data-testid="stColumn"]:nth-of-type(3) button[kind="secondary"] {
+        /* Стиль для кнопки, щоб вона виглядала як текст (зліва) */
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
             border: none;
             background: transparent;
             text-align: left;
             padding-left: 0;
             font-weight: 600;
             color: #31333F;
-            box-shadow: none;
         }
-        div[data-testid="stColumn"]:nth-of-type(3) button[kind="secondary"]:hover {
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
             color: #00C896;
             background: transparent;
             border: none;
-            box-shadow: none;
         }
-        /* Прибираємо червоний колір тексту при наведенні, який іноді дає Streamlit */
-        div[data-testid="stColumn"]:nth-of-type(3) button[kind="secondary"]:active {
-            color: #00C896;
-            background: transparent;
+        /* Повертаємо стандартний вигляд для кнопок дій (Видалити/Додати/Аналіз) */
+        div[data-testid="stVerticalBlock"] button[kind="secondary"] {
+            border: 1px solid rgba(49, 51, 63, 0.2);
+            background-color: white;
+            color: #31333F;
+            text-align: center;
+            padding: 0.25rem 0.75rem;
         }
     </style>
     """, unsafe_allow_html=True)
 
+    # Таймзони
     try:
         import pytz
         kyiv_tz = pytz.timezone('Europe/Kiev')
@@ -2146,9 +2145,10 @@ def show_keywords_page():
         show_keyword_details(st.session_state["focus_keyword_id"])
         return
 
-    # --- 1. ЗАГОЛОВОК (H3 для меншого розміру) ---
-    st.markdown("### 📋 Перелік запитів")
+    # --- 1. ЗАГОЛОВОК ---
+    st.markdown("<h3 style='padding-top:0;'>📋 Перелік запитів</h3>", unsafe_allow_html=True)
 
+    # Хелпери
     def format_kyiv_time(iso_str):
         if not iso_str or iso_str == "1970-01-01T00:00:00+00:00":
             return "—"
@@ -2281,8 +2281,7 @@ def show_keywords_page():
         with c_models:
             bulk_models = st.multiselect("ЛЛМ для запуску:", list(MODEL_MAPPING.keys()), default=["Perplexity"], label_visibility="collapsed", key="bulk_models_main")
         with c_btn:
-            # Використовуємо type="primary", щоб кнопка була кольоровою/жирною
-            if st.button("🚀 Аналізувати обрані", use_container_width=True, type="primary"):
+            if st.button("🚀 Аналізувати обрані", use_container_width=True):
                 selected_kws_text = []
                 if select_all:
                     selected_kws_text = [k['keyword_text'] for k in keywords]
@@ -2312,33 +2311,40 @@ def show_keywords_page():
                     st.warning("Оберіть хоча б один запит.")
 
     # ========================================================
-    # 5. СПИСОК ЗАПИТІВ
+    # 5. СПИСОК ЗАПИТІВ (ОНОВЛЕНИЙ ДИЗАЙН)
     # ========================================================
     
+    # Заголовки стовпчиків
+    # Трохи розширили останній стовпчик для кнопки "Видалити"
     h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
     h_txt.markdown("**Запит**")
     h_cron.markdown("**Автозапуск**")
     h_date.markdown("**Останній аналіз**")
     h_act.markdown("**Видалити**")
 
+    # Вивід рядків
     for idx, k in enumerate(keywords, start=1):
         with st.container(border=True):
+            # Колони
             c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
             
+            # 1. Чекбокс
             with c1:
                 st.write("") 
                 is_checked = select_all
                 st.checkbox("", key=f"chk_{k['id']}", value=is_checked)
             
+            # 2. Зелений номер
             with c2:
                 st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
             
+            # 3. Текст запиту (Кнопка-посилання)
             with c3:
-                # Це кнопка, але завдяки CSS вище вона виглядає як текст
                 if st.button(k['keyword_text'], key=f"link_btn_{k['id']}", help="Натисніть для детального аналізу"):
                     st.session_state["focus_keyword_id"] = k["id"]
                     st.rerun()
             
+            # 4. Автозапуск (Cron)
             with c4:
                 cron_c1, cron_c2 = st.columns([0.8, 1.2])
                 is_auto = k.get('is_auto_scan', False) 
@@ -2361,23 +2367,27 @@ def show_keywords_page():
                     else:
                         st.caption("Вимкнено")
             
+            # 5. Дата
             with c5:
                 st.write("")
                 date_iso = k.get('last_scan_date')
                 formatted_date = format_kyiv_time(date_iso)
                 st.caption(f"{formatted_date}")
             
+            # 6. Видалити
             with c6:
                 st.write("")
+                
                 del_key = f"confirm_del_kw_{k['id']}"
                 if del_key not in st.session_state: st.session_state[del_key] = False
 
                 if not st.session_state[del_key]:
-                    # Стандартна кнопка (без type="primary", тому біла)
+                    # ПОВНОЦІННА КНОПКА
                     if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}"):
                         st.session_state[del_key] = True
                         st.rerun()
                 else:
+                    # Підтвердження
                     dc1, dc2 = st.columns(2)
                     if dc1.button("✅", key=f"yes_del_{k['id']}", type="primary"):
                         try:
@@ -2393,6 +2403,7 @@ def show_keywords_page():
                     if dc2.button("❌", key=f"no_del_{k['id']}"):
                         st.session_state[del_key] = False
                         st.rerun()
+
 
 # =========================
 # 8. РЕКОМЕНДАЦІЇ
