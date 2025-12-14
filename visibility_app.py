@@ -560,7 +560,7 @@ def login_page():
 def onboarding_wizard():
     """
     Майстер створення першого проекту (2 етапи).
-    Оновлено: Стиль карток, редагування, виправлення помилки втрати сесії.
+    Оновлено: Виправлено запис official_assets у таблицю projects.
     """
     import requests
     import time
@@ -588,7 +588,6 @@ def onboarding_wizard():
     
     st.markdown("## 🚀 Налаштування Проекту")
 
-    # Використовуємо .get для безпеки
     step = st.session_state.get("onboarding_step", 2) 
 
     with st.container(border=True):
@@ -616,7 +615,6 @@ def onboarding_wizard():
 
             if st.button("Згенерувати запити"):
                 if brand and domain and industry and products:
-                    # 1. Зберігаємо дані у тимчасовий стейт
                     st.session_state["temp_brand"] = brand
                     st.session_state["temp_domain"] = domain
                     st.session_state["temp_industry"] = industry
@@ -639,7 +637,6 @@ def onboarding_wizard():
         # STEP 3 – Редагування та Вибір (КОНФІРМАЦІЯ)
         # ========================================================
         elif step == 3:
-            # 🛡️ SAFETY CHECK: Перевіряємо, чи не зникли дані сесії
             if not st.session_state.get("temp_brand") or not st.session_state.get("temp_domain"):
                 st.warning("⚠️ Дані сесії застаріли. Будь ласка, поверніться на крок назад.")
                 if st.button("⬅ Назад до вводу даних"):
@@ -661,52 +658,38 @@ def onboarding_wizard():
 
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # Словник для збереження обраних (індекс -> текст)
             selected_indices = []
 
-            # --- ЦИКЛ ВИВОДУ КАРТОК (Card Style) ---
+            # --- ЦИКЛ ВИВОДУ КАРТОК ---
             for i, kw in enumerate(prompts_list):
-                # Ключ для відстеження режиму редагування
                 edit_key = f"edit_mode_row_{i}"
                 
-                # 🔥 STYLING: Використовуємо container(border=True) для створення ефекту картки
                 with st.container(border=True):
-                    # Сітка: Чекбокс | Текст | Кнопка
                     c_check, c_text, c_btn = st.columns([0.5, 9, 1])
                     
-                    # 1. Чекбокс
                     with c_check:
                         is_checked = st.checkbox("", value=True, key=f"chk_final_{i}", label_visibility="collapsed")
                         if is_checked:
                             selected_indices.append(i)
 
-                    # Перевіряємо режим редагування
                     if st.session_state.get(edit_key, False):
-                        # --- РЕЖИМ РЕДАГУВАННЯ ---
                         with c_text:
                             new_val = st.text_input("Редагування", value=kw, key=f"input_kw_{i}", label_visibility="collapsed")
-                        
                         with c_btn:
-                            # Кнопка Зберегти (Зелена галочка або дискета)
                             if st.button("💾", key=f"save_kw_{i}", help="Зберегти зміни"):
                                 st.session_state["generated_prompts"][i] = new_val
                                 st.session_state[edit_key] = False
                                 st.rerun()
                     else:
-                        # --- РЕЖИМ ПЕРЕГЛЯДУ ---
                         with c_text:
-                            # Виводимо текст жирним, трохи більшим шрифтом
                             st.markdown(f"<div style='font-size:16px; padding-top:5px;'>{kw}</div>", unsafe_allow_html=True)
-                        
                         with c_btn:
-                            # Кнопка Редагувати (Олівець)
                             if st.button("✏️", key=f"edit_kw_{i}", help="Редагувати текст"):
                                 st.session_state[edit_key] = True
                                 st.rerun()
 
             st.markdown("---")
             
-            # Збираємо фінальний список
             final_kws_to_send = [st.session_state["generated_prompts"][idx] for idx in selected_indices]
 
             c_info, c_action = st.columns([2, 1])
@@ -715,25 +698,29 @@ def onboarding_wizard():
                 st.caption("Натисніть кнопку справа, щоб створити проект і почати.")
 
             with c_action:
-                # --- КНОПКА ЗАПУСКУ ---
                 if st.button("🚀 Зберегти та Запустити аналіз", type="primary", use_container_width=True):
                     if len(final_kws_to_send) > 0:
                         with st.spinner("Створення проекту та запуск Gemini..."):
                             try:
                                 user_id = st.session_state["user"].id
                                 
-                                # Беремо дані з сесії (вони вже перевірені на початку кроку)
                                 brand_name = st.session_state.get("temp_brand")
                                 domain_name = st.session_state.get("temp_domain")
                                 region_name = "UA"
                                 
-                                # 1. Створення проекту в БД
+                                # --- 🔴 ВИПРАВЛЕННЯ ПОЧИНАЄТЬСЯ ТУТ ---
+                                # Готуємо official_assets у правильному JSON-форматі для таблиці projects
+                                clean_domain = domain_name.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                                initial_assets = [{"url": clean_domain, "tag": "Веб-сайт"}]
+
+                                # 1. Створення проекту в БД (Записуємо official_assets сюди!)
                                 res = supabase.table("projects").insert({
                                     "user_id": user_id,
                                     "brand_name": brand_name,
                                     "domain": domain_name,
                                     "region": region_name, 
                                     "status": "trial",
+                                    "official_assets": initial_assets # <--- ЗАПИСУЄМО В КОЛОНКУ ПРОЕКТУ
                                 }).execute()
 
                                 if not res.data:
@@ -748,16 +735,13 @@ def onboarding_wizard():
                                         "project_id": proj_id, 
                                         "keyword_text": kw_text, 
                                         "is_active": True, 
-                                        "is_cron_active": False
+                                        "is_auto_scan": False
                                     } for kw_text in final_kws_to_send
                                 ]
                                 supabase.table("keywords").insert(kws_data).execute()
                                 
-                                # 3. Записуємо офіційний домен
-                                clean_domain = domain_name.replace("https://", "").replace("http://", "").strip().rstrip("/")
-                                supabase.table("official_assets").insert(
-                                    {"project_id": proj_id, "domain_or_url": clean_domain, "type": "website"}
-                                ).execute()
+                                # 3. (ВИДАЛЕНО) Запис в окрему таблицю official_assets більше не потрібен, 
+                                # бо ми записали це в кроці 1.
 
                                 # 4. ВІДПРАВЛЯЄМО НА N8N (Gemini Only)
                                 n8n_trigger_analysis(
