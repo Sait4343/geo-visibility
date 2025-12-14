@@ -1438,11 +1438,10 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL PRODUCTION (OPENAI FIX).
-    1. Fixed: OpenAI GPT metrics display (Robust ID matching).
-    2. Fixed: Link cleaning (Markdown artifacts removal).
-    3. Removed: Delete button.
-    4. UI: Full metrics aggregation for target brand.
+    ВЕРСІЯ: FINAL FIXED (OPENAI TAB FIX).
+    1. Fix OpenAI Tab: Фільтрація тепер йде по 'provider_ui', а не по точному 'provider'.
+       Це вирішує проблему, якщо в базі записано 'gpt-4o', а скрипт шукав щось інше.
+    2. Всі попередні фікси (метрики, видалення, таймзона) збережені.
     """
     import pandas as pd
     import plotly.express as px
@@ -1464,7 +1463,7 @@ def show_keyword_details(kw_id):
         supabase = globals()['supabase']
 
     # --- MAPPING ---
-    # Важливо: ключі тут - це назви вкладок (UI), значення - provider в базі
+    # Ключі тут — це назви вкладок (UI)
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
@@ -1472,29 +1471,26 @@ def show_keyword_details(kw_id):
     }
     ALL_MODELS_UI = list(MODEL_CONFIG.keys())
     
+    # Функція нормалізації назв з бази
     def get_ui_model_name(db_name):
-        # Спочатку точне співпадіння
+        # 1. Точний збіг
         for ui, db in MODEL_CONFIG.items():
             if db == db_name: return ui
         
-        # Потім нечітке
-        lower = str(db_name).lower().strip()
+        # 2. Нечіткий пошук (Fallback)
+        lower = str(db_name).lower()
         if "perplexity" in lower: return "Perplexity"
-        if "gpt" in lower: return "OpenAI GPT"
-        if "gemini" in lower: return "Google Gemini"
-        return db_name
+        if "gpt" in lower or "openai" in lower: return "OpenAI GPT"
+        if "gemini" in lower or "google" in lower: return "Google Gemini"
+        
+        return db_name # Якщо не знайшли, повертаємо як є
 
     def tooltip(text):
         return f'<span title="{text}" style="cursor:help; font-size:14px; color:#333; margin-left:4px;">ℹ️</span>'
 
-    # 🔥 FIX: Очистка посилань від Markdown (наприклад "url](url")
     def normalize_url(u):
-        if not u: return ""
         u = str(u).strip()
-        # Розбиваємо по закриваючим дужкам або пробілам, беремо першу частину
-        u = re.split(r'[)\]\s]', u)[0]
-        # Чистимо можливі артефакти в кінці
-        u = u.rstrip(').,;')
+        u = re.split(r'[)\]]', u)[0] # Очистка від Markdown
         if not u.startswith(('http://', 'https://')): return f"https://{u}"
         return u
 
@@ -1511,7 +1507,6 @@ def show_keyword_details(kw_id):
         keyword_text = keyword_record["keyword_text"]
         project_id = keyword_record["project_id"]
         
-        # Отримуємо назву бренду для агрегації
         proj = st.session_state.get("current_project", {})
         target_brand_name = proj.get("brand_name", "").strip()
         
@@ -1608,18 +1603,16 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id і чистимо його
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
-            df_scans['scan_id'] = df_scans['scan_id'].astype(str).str.strip()
             
-            # --- 🕒 TIMEZONE FIX (Kyiv) ---
+            # --- TIMEZONE FIX (Kyiv) ---
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
             if df_scans['created_at'].dt.tz is None:
                 df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
-            
             df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
             
+            # 🔥 Нормалізація назви провайдера (GPT-4o -> OpenAI GPT)
             df_scans['provider_ui'] = df_scans['provider'].apply(get_ui_model_name)
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
@@ -1639,24 +1632,17 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # 🔥 FIX: Примусова чистка ID для успішного Merge (виправляє проблему OpenAI)
-        if not df_mentions.empty:
-            df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str).str.strip()
-
-        # 🔥 SMART MERGE: Пошук "Мого Бренду" за назвою (для виправлення дублів)
+        # SMART MERGE (Дублікати)
         if not df_mentions.empty and target_brand_name:
             df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
-            target_norm = target_brand_name.lower().split(' ')[0] # Беремо перше слово для надійності
+            target_norm = target_brand_name.lower().split(' ')[0]
             mask_match = df_mentions['brand_clean'].str.contains(target_norm, na=False)
-            
-            # Помічаємо ці рядки як "цільові"
             df_mentions['is_real_target'] = mask_match | (df_mentions['is_my_brand'] == True)
         elif not df_mentions.empty:
             df_mentions['is_real_target'] = df_mentions['is_my_brand']
 
         # C. Merge
         if not df_mentions.empty:
-            # Використовуємо outer/left join, але важливо, щоб типи ID співпадали
             df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
         else:
             df_full = df_scans.copy()
@@ -1678,7 +1664,6 @@ def show_keyword_details(kw_id):
         total_my_mentions = my_brand_data['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_real_target'] == False]['brand_name'].nunique()
         
-        # SOV Calculation
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
@@ -1688,18 +1673,14 @@ def show_keyword_details(kw_id):
         sov_df = pd.merge(scan_totals, my_mentions_per_scan, on='scan_result_id', how='left')
         sov_df['my_count'] = sov_df['my_count'].fillna(0)
         
-        sov_df['sov'] = 0.0
         mask_nonzero = sov_df['scan_total'] > 0
         sov_df.loc[mask_nonzero, 'sov'] = (sov_df.loc[mask_nonzero, 'my_count'] / sov_df.loc[mask_nonzero, 'scan_total']) * 100
-        
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
-        # Rank
         valid_ranks = my_brand_data[my_brand_data['rank_position'] > 0]['rank_position']
         avg_pos = valid_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # Sentiment
         if not my_brand_data.empty:
             active_mentions = my_brand_data[my_brand_data['mention_count'] > 0]
             if not active_mentions.empty:
@@ -1712,7 +1693,6 @@ def show_keyword_details(kw_id):
                 pos_pct, neg_pct, neu_pct = 0, 0, 0
         else:
             pos_pct, neg_pct, neu_pct = 0, 0, 0
-            
     else:
         avg_sov, total_my_mentions, unique_competitors = 0, 0, 0
         display_pos = "-"
@@ -1861,10 +1841,9 @@ def show_keyword_details(kw_id):
     
     for tab, ui_model_name in zip(tabs, ALL_MODELS_UI):
         with tab:
-            tech_model_id = MODEL_CONFIG[ui_model_name]
-            
+            # 🔥 FIX: Фільтрація по 'provider_ui' (нормалізоване ім'я)
             if not df_scans.empty:
-                model_scans = df_scans[df_scans['provider'] == tech_model_id].sort_values('created_at', ascending=False)
+                model_scans = df_scans[df_scans['provider_ui'] == ui_model_name].sort_values('created_at', ascending=False)
             else:
                 model_scans = pd.DataFrame()
             
@@ -1874,12 +1853,46 @@ def show_keyword_details(kw_id):
 
             with st.container(border=True):
                 scan_options = {row['date_str']: row['scan_id'] for _, row in model_scans.iterrows()}
-                selected_date = st.selectbox(f"Оберіть дату аналізу ({ui_model_name}):", list(scan_options.keys()), key=f"sel_date_{tech_model_id}")
-            
-            selected_scan_id = scan_options[selected_date]
+                
+                c_sel, c_del = st.columns([3, 1])
+                with c_sel:
+                    selected_date = st.selectbox(
+                        f"Оберіть дату аналізу ({ui_model_name}):", 
+                        list(scan_options.keys()), 
+                        key=f"sel_date_{ui_model_name}" # унікальний ключ
+                    )
+                
+                selected_scan_id = scan_options[selected_date]
+                
+                with c_del:
+                    st.write("") 
+                    st.write("")
+                    confirm_key = f"del_scan_{selected_scan_id}"
+                    if confirm_key not in st.session_state: st.session_state[confirm_key] = False
+
+                    if not st.session_state[confirm_key]:
+                        if st.button("🗑️ Видалити", key=f"btn_del_{selected_scan_id}"):
+                            st.session_state[confirm_key] = True
+                            st.rerun()
+                    else:
+                        c_y, c_n = st.columns(2)
+                        if c_y.button("✅", key=f"yes_{selected_scan_id}"):
+                            try:
+                                supabase.table("scan_results").delete().eq("id", selected_scan_id).execute()
+                                st.success("Видалено!")
+                                st.session_state[confirm_key] = False
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Помилка: {e}")
+                        
+                        if c_n.button("❌", key=f"no_{selected_scan_id}"):
+                            st.session_state[confirm_key] = False
+                            st.rerun()
+
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS (FIXED) ---
+            # --- LOCAL METRICS ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не згадано"
@@ -1887,8 +1900,7 @@ def show_keyword_details(kw_id):
             
             current_scan_mentions = pd.DataFrame()
             if not df_mentions.empty:
-                # Фільтруємо за ID скану (строге порівняння строк)
-                current_scan_mentions = df_mentions[df_mentions['scan_result_id'] == str(selected_scan_id)]
+                current_scan_mentions = df_mentions[df_mentions['scan_result_id'] == selected_scan_id]
             
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
@@ -1898,7 +1910,6 @@ def show_keyword_details(kw_id):
 
                 if not my_brand_rows.empty:
                     val_my_mentions = my_brand_rows['mention_count'].sum()
-                    
                     valid_ranks = my_brand_rows[my_brand_rows['rank_position'] > 0]['rank_position']
                     val_rank = valid_ranks.min() if not valid_ranks.empty else None
                     
@@ -1913,9 +1924,8 @@ def show_keyword_details(kw_id):
             sent_color = "#333"
             if loc_sent == "Позитивний": sent_color = "#00C896"
             elif loc_sent == "Негативний": sent_color = "#FF4B4B"
-            elif loc_sent == "Не згадано": sent_color = "#999"
+            elif loc_sent == "Не знайдено": sent_color = "#999"
 
-            # ВІЗУАЛІЗАЦІЯ (ЗЕЛЕНИЙ БОРДЕР)
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
@@ -1989,10 +1999,10 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count + Links) ---
+            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
-                sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", str(selected_scan_id)).execute()
+                sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
                 sources_data = sources_resp.data
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
@@ -2001,7 +2011,6 @@ def show_keyword_details(kw_id):
                         if 'domain' not in df_src.columns:
                             df_src['domain'] = df_src['url'].apply(lambda x: str(x).split('/')[2] if x and '//' in str(x) else 'unknown')
                         
-                        # 🔥 FIX: Нормалізація посилань
                         df_src['url'] = df_src['url'].apply(normalize_url)
                         
                         if 'is_official' in df_src.columns:
