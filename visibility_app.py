@@ -1090,10 +1090,8 @@ def show_competitors_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: FIXED MISSING ROWS + GLOSSARY + BUTTON ACTION.
-    1. Fix: Відображаються ВСІ запити, навіть без даних (прочерки).
-    2. Feature: Додано tooltips (глосарій) до метрик.
-    3. Fix: Кнопка переходу використовує callback для надійності.
+    ВЕРСІЯ: FIXED BUTTON ACTION.
+    Виправлено: Кнопка переходу тепер має прямий st.rerun(), щоб миттєво відкривати деталі.
     """
     import pandas as pd
     import plotly.express as px
@@ -1155,10 +1153,6 @@ def show_dashboard():
     """, unsafe_allow_html=True)
 
     st.title(f"📊 Дашборд: {proj.get('brand_name')}")
-
-    # Колбек для переходу (винесений, щоб не губився контекст)
-    def go_to_details(k_id):
-        st.session_state["focus_keyword_id"] = k_id
 
     # ==============================================================================
     # 1. ОТРИМАННЯ ДАНИХ
@@ -1385,7 +1379,7 @@ def show_dashboard():
                     kw_sources = sources_df[sources_df['scan_result_id'].isin(scan_ids_kw)]
                     off_sources_count = len(kw_sources[kw_sources['is_official'] == True])
 
-        # ВІДМАЛЬОВКА РЯДКА (Навіть якщо немає даних, рядок виводиться з прочерками)
+        # ВІДМАЛЬОВКА РЯДКА (Завжди)
         with st.container():
             c = st.columns([0.5, 3, 1.5, 1.5, 2.5, 1])
             
@@ -1417,11 +1411,10 @@ def show_dashboard():
                 c[4].caption("Немає даних")
             
             # 6. Button
-            # Використовуємо on_click для гарантованого запису в сесію
-            if c[5].button("➡️", key=f"go_{kw_id}", on_click=go_to_details, args=(kw_id,)):
-                # st.rerun() викликається автоматично при натисканні, якщо є on_click, 
-                # але явний rerun не завадить
-                pass 
+            # 🔥 FIX: Пряма логіка натискання. Якщо True -> записуємо ID і робимо rerun.
+            if c[5].button("➡️", key=f"go_{kw_id}"):
+                st.session_state["focus_keyword_id"] = kw_id
+                st.rerun()
         
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
