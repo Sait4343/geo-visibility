@@ -1109,9 +1109,7 @@ def show_competitors_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: SMART COMPETITOR LIST (TOP 10 LOGIC).
-    1. Конкуренти: Показує Top-10. Якщо наш бренд не в Top-10, беремо Top-9 + Наш бренд.
-    2. Виправлено: Уникнення дублювання цільового бренду.
+    ВЕРСІЯ: FIXED METRICS & LOGIC.
     """
     import pandas as pd
     import plotly.express as px
@@ -1175,7 +1173,6 @@ def show_dashboard():
             # Keywords
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             keywords_df = pd.DataFrame(kw_resp.data) if kw_resp.data else pd.DataFrame()
-            total_keywords_count = len(keywords_df)
             
             # Scans
             scan_resp = supabase.table("scan_results")\
@@ -1201,7 +1198,7 @@ def show_dashboard():
             st.error(f"Помилка завантаження: {e}")
             return
 
-    if scans_df.empty or mentions_df.empty:
+    if scans_df.empty:
         st.info("Даних ще немає. Запустіть сканування.")
         return
 
@@ -1221,38 +1218,68 @@ def show_dashboard():
     target_brand = proj.get('brand_name', '').lower().strip()
     target_part = target_brand.split(' ')[0]
     
-    df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
-    
-    df_full['is_target'] = df_full.apply(
-        lambda x: x.get('is_my_brand', False) or (target_part in str(x.get('brand_name', '')).lower()), axis=1
-    )
+    # Merge logic
+    if not mentions_df.empty:
+        df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
+        df_full['is_target'] = df_full.apply(
+            lambda x: x.get('is_my_brand', False) or (target_part in str(x.get('brand_name', '')).lower()), axis=1
+        )
+        # Гарантуємо числовий тип
+        df_full['mention_count'] = pd.to_numeric(df_full['mention_count'], errors='coerce').fillna(0)
+    else:
+        df_full = pd.DataFrame()
 
     # ==============================================================================
-    # 3. МЕТРИКИ ПО LLM (З ГЛОСАРІЄМ)
+    # 3. МЕТРИКИ ПО LLM (ВИПРАВЛЕНО)
     # ==============================================================================
     st.markdown("### 🌐 Огляд по моделях")
     
     def get_llm_stats(df_sub):
         if df_sub.empty: return 0, 0, "—"
+        
+        # Знаходимо останню дату сканування для цієї моделі
         latest_idx = df_sub.groupby('keyword_id')['created_at'].idxmax()
         latest_data = df_sub.loc[latest_idx]
         latest_scan_ids = latest_data['id'].unique()
+        
+        if df_full.empty:
+            return 0, 0, "—"
+
+        # Фільтруємо згадки тільки для цих сканів
         current_mentions = df_full[df_full['scan_result_id'].isin(latest_scan_ids)]
         
-        my = current_mentions[current_mentions['is_target'] == True]['mention_count'].sum()
-        total = current_mentions['mention_count'].sum()
-        sov = (my / total * 100) if total > 0 else 0
+        if current_mentions.empty:
+            return 0, 0, "—"
+
+        # Рахуємо SOV
+        my_mentions = current_mentions[current_mentions['is_target'] == True]
+        my_count = my_mentions['mention_count'].sum()
+        total_count = current_mentions['mention_count'].sum()
         
-        my_ranks = current_mentions[(current_mentions['is_target'] == True) & (current_mentions['rank_position'] > 0)]['rank_position']
+        sov = (my_count / total_count * 100) if total_count > 0 else 0
+        
+        # Рахуємо Rank
+        my_ranks = my_mentions[my_mentions['rank_position'] > 0]['rank_position']
         rank = my_ranks.mean() if not my_ranks.empty else 0
         
-        my_sent = current_mentions[current_mentions['is_target'] == True]['sentiment_score']
+        # Рахуємо Sentiment (Більш точна логіка)
+        my_sent = my_mentions['sentiment_score']
         if not my_sent.empty:
             pos = len(my_sent[my_sent == 'Позитивний'])
             neg = len(my_sent[my_sent == 'Негативний'])
-            sent_label = "Позитивний" if pos > neg else "Негативний" if neg > pos else "Нейтральний"
+            neu = len(my_sent[my_sent == 'Нейтральний'])
+            
+            if pos == 0 and neg == 0 and neu == 0:
+                sent_label = "Не знайдено"
+            elif pos >= neg and pos >= neu:
+                sent_label = "Позитивний"
+            elif neg >= pos and neg >= neu:
+                sent_label = "Негативний"
+            else:
+                sent_label = "Нейтральний"
         else:
             sent_label = "Не знайдено"
+            
         return sov, rank, sent_label
 
     cols = st.columns(3)
@@ -1266,12 +1293,12 @@ def show_dashboard():
             with st.container(border=True):
                 st.markdown(f"**{model}**")
                 c1, c2 = st.columns(2)
-                c1.metric("SOV", f"{sov:.1f}%", help="Share of Voice: Відсоток згадок вашого бренду.")
-                c2.metric("Rank", f"#{rank:.1f}" if rank > 0 else "-", help="Середня позиція у видачі.")
+                c1.metric("SOV", f"{sov:.1f}%", help="Share of Voice")
+                c2.metric("Rank", f"#{rank:.1f}" if rank > 0 else "-", help="Середня позиція")
                 
                 s_color = "#00C896" if sent == "Позитивний" else "#FF4B4B" if sent == "Негативний" else "#FFCE56"
                 if sent == "Не знайдено" or sent == "—": s_color = "#999"
-                st.markdown(f"Тональність: <span style='color:{s_color}; font-weight:bold' title='Емоційне забарвлення'>{sent}</span>", unsafe_allow_html=True)
+                st.markdown(f"Тональність: <span style='color:{s_color}; font-weight:bold'>{sent}</span>", unsafe_allow_html=True)
 
     # ==============================================================================
     # 4. ГРАФІК ДИНАМІКИ
@@ -1301,13 +1328,12 @@ def show_dashboard():
         st.info("Немає даних для графіка.")
 
     # ==============================================================================
-    # 5. КОНКУРЕНТНИЙ АНАЛІЗ (ВИПРАВЛЕНО)
+    # 5. КОНКУРЕНТНИЙ АНАЛІЗ
     # ==============================================================================
     st.write("")
     st.markdown("### 🏆 Конкурентний аналіз")
 
     if not df_full.empty:
-        # 1. Агрегація статистики по брендах
         def get_brand_metrics(x):
             total_mentions = x['mention_count'].sum()
             p_mentions = x[x['provider_ui'] == 'Perplexity']['mention_count'].sum()
@@ -1331,42 +1357,26 @@ def show_dashboard():
 
         brands_agg = df_full.groupby('brand_name').apply(get_brand_metrics).reset_index()
         
-        # 2. Розрахунок відсотків
         grand_total_mentions = df_full['mention_count'].sum()
         total_unique_scanned_kws = df_full['keyword_id'].nunique()
         
         brands_agg['sov'] = (brands_agg['mentions'] / grand_total_mentions * 100).fillna(0)
         brands_agg['presence'] = (brands_agg['unique_kws'] / total_unique_scanned_kws * 100).fillna(0)
         
-        # 3. Сортування за кількістю згадок
         brands_agg = brands_agg.sort_values('mentions', ascending=False)
-        
-        # --- ЛОГІКА ФОРМУВАННЯ СПИСКУ (TOP 10 + TARGET IF NEEDED) ---
-        
-        # Отримуємо "природний" Топ-10
         top_10_natural = brands_agg.head(10)
-        
-        # Перевіряємо, чи є наш бренд у цьому Топ-10
         is_target_in_top_10 = top_10_natural['is_target_brand'].any()
         
         if is_target_in_top_10:
-            # СЦЕНАРІЙ А: Бренд уже в топі -> просто показуємо Топ-10
             final_df = top_10_natural
         else:
-            # СЦЕНАРІЙ Б: Бренду немає в топі -> беремо Топ-9 + Наш бренд
-            
-            # Топ-9 конкурентів (виключаючи наш бренд, про всяк випадок фільтруємо)
             competitors_only = brands_agg[brands_agg['is_target_brand'] == False]
             top_9_comp = competitors_only.head(9)
-            
-            # Шукаємо наш рядок у загальному списку
             target_row = brands_agg[brands_agg['is_target_brand'] == True]
             
             if not target_row.empty:
-                # Бренд є в базі, але нижче 10-го місця
                 final_df = pd.concat([top_9_comp, target_row])
             else:
-                # Бренд взагалі не знайдено (0 згадок) - створюємо заглушку
                 dummy_target = pd.DataFrame([{
                     'brand_name': proj.get('brand_name', 'My Brand') + " (Ви)",
                     'mentions': 0, 'p_count': 0, 'g_count': 0, 'gem_count': 0,
@@ -1375,10 +1385,8 @@ def show_dashboard():
                 }])
                 final_df = pd.concat([top_9_comp, dummy_target])
         
-        # Фінальне сортування (щоб якщо ми додали бренд, він був у кінці, якщо у нього мало згадок)
         final_df = final_df.sort_values('mentions', ascending=False)
 
-        # 4. Відображення
         table_data = []
         for _, r in final_df.iterrows():
             name_display = r['brand_name']
@@ -1403,7 +1411,7 @@ def show_dashboard():
             use_container_width=True,
             column_config={
                 "SOV (%)": st.column_config.ProgressColumn("Частка голосу (SOV)", format="%.1f%%", min_value=0, max_value=1),
-                "Присутність": st.column_config.ProgressColumn("Присутність у запитах", format="%.0f%%", min_value=0, max_value=1),
+                "Присутність": st.column_config.ProgressColumn("Присутність", format="%.0f%%", min_value=0, max_value=1),
                 "Perplexity": st.column_config.NumberColumn(format="%d"),
                 "GPT": st.column_config.NumberColumn(format="%d"),
                 "Gemini": st.column_config.NumberColumn(format="%d"),
@@ -1414,7 +1422,7 @@ def show_dashboard():
         st.info("Немає даних для аналізу конкурентів.")
 
     # ==============================================================================
-    # 6. ДЕТАЛІЗАЦІЯ ПО ЗАПИТАХ
+    # 6. ДЕТАЛІЗАЦІЯ
     # ==============================================================================
     st.write("")
     st.markdown("### 📋 Детальна статистика по запитах")
@@ -1424,7 +1432,6 @@ def show_dashboard():
     cols[2].markdown("**SOV**")
     cols[3].markdown("**Позиція**")
     cols[4].markdown("**Топ Конкурент / Джерела**")
-    
     st.markdown("---")
 
     unique_kws = keywords_df.to_dict('records')
@@ -1442,12 +1449,10 @@ def show_dashboard():
 
         if not df_full.empty:
             kw_data = df_full[df_full['keyword_id'] == kw_id]
-            
             if not kw_data.empty:
                 has_data = True
                 sorted_scans = kw_data.sort_values('created_at', ascending=False)
                 latest_date = sorted_scans['created_at'].max()
-                
                 current_slice = sorted_scans[sorted_scans['created_at'] >= (latest_date - timedelta(hours=12))]
                 prev_slice = sorted_scans[sorted_scans['created_at'] < (latest_date - timedelta(hours=12))]
                 if prev_slice.empty and len(sorted_scans) > 1: prev_slice = sorted_scans.iloc[1:2]
@@ -1488,7 +1493,6 @@ def show_dashboard():
                     kw_sources = sources_df[sources_df['scan_result_id'].isin(scan_ids_kw)]
                     off_sources_count = len(kw_sources[kw_sources['is_official'] == True])
 
-        # Вивід рядка
         with st.container():
             c = st.columns([0.5, 3.5, 1.5, 1.5, 3])
             c[0].markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
@@ -1502,7 +1506,6 @@ def show_dashboard():
                 c[2].caption("—")
                 c[3].caption("—")
                 c[4].caption("Немає даних")
-        
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
 
