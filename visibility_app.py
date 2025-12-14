@@ -234,63 +234,59 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    Оновлено: 
-    1. Додано 'domain' у payload (Критично для визначення бренду).
-    2. Headers з авторизацією.
+    Оновлено: Гарантована передача домену та правильний формат JSON.
     """
     
-    # 1. Мапінг назв
+    # 1. Мапінг назв (UI -> Technical)
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # 2. Отримання даних проекту (для домену)
+    # 2. Отримуємо дані проекту з сесії для підстраховки
     proj = st.session_state.get("current_project", {})
-    # Якщо домену немає в аргументах, беремо з сесії
-    project_domain = proj.get("domain", "")
-
+    # Домен критично важливий для n8n
+    project_domain = proj.get("domain", "") 
+    
     # Перевірка статусу
     status = proj.get("status", "trial")
     if status in ["blocked", "expired"]:
-        st.error(f"⛔ Дія недоступна. Статус: {status}.")
+        st.error(f"⛔ Дія недоступна. Ваш статус: {status.upper()}.")
         return False
 
     try:
         user = st.session_state.get("user")
         user_email = user.email if user else "no-reply@virshi.ai"
         
-        if isinstance(keywords, str): keywords = [keywords]
-        if not models: models = ["Perplexity"]
+        # Гарантуємо, що keywords це список
+        if isinstance(keywords, str):
+            keywords = [keywords]
+
+        if not models:
+            models = ["Perplexity"]
 
         success_count = 0
 
-        # 3. Офіційні джерела
+        # 3. Офіційні джерела (Whitelist) з таблиці official_assets
         try:
-            # У старій версії ми читали з official_assets, але тепер це колонка в projects
-            # Якщо ви використовуєте нову структуру (json в projects), беремо звідти
-            raw_assets = proj.get("official_assets", [])
-            # Перетворюємо в список url
-            if raw_assets and isinstance(raw_assets[0], dict):
-                official_assets = [a.get("url") for a in raw_assets]
-            elif raw_assets:
-                official_assets = raw_assets
-            else:
-                official_assets = []
-                
-            # Якщо список пустий, додаємо хоча б домен проекту
-            if not official_assets and project_domain:
-                official_assets = [project_domain]
-                
+            assets_resp = supabase.table("official_assets")\
+                .select("domain_or_url")\
+                .eq("project_id", project_id)\
+                .execute()
+            official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
         except Exception as e:
             official_assets = []
+            # Якщо таблиця пуста, додаємо хоча б основний домен
+            if project_domain:
+                official_assets.append(project_domain)
 
+        # 🔥 AUTH HEADER
         headers = {
             "virshi-auth": "hi@virshi.ai2025"
         }
 
-        # 4. Відправка
+        # 4. Відправка по моделях
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
@@ -298,19 +294,22 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "project_id": project_id,
                 "keywords": keywords, 
                 "brand_name": brand_name,
-                "domain": project_domain,  # <--- 🔥 ДОДАНО ДОМЕН
+                "domain": project_domain, # <--- ВАЖЛИВО: Передаємо домен
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
                 "official_assets": official_assets
             }
             
+            # Логування для відлагодження (можна прибрати в проді)
+            # print(f"Sending payload to n8n ({ui_model_name}): {payload}")
+
             try:
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
                     headers=headers, 
-                    timeout=10
+                    timeout=15 
                 )
                 
                 if response.status_code == 200:
