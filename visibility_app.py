@@ -2491,10 +2491,7 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка джерел.
-    ВЕРСІЯ: FINAL ADVANCED (LLM BREAKDOWN + EDITOR MODES).
-    1. UI: Whitelist має режим "Перегляд" та "Редагування". Нумерація з 1.
-    2. Stats: Блоки статистики показують розподіл по LLM (P, G, Gem).
-    3. Tables: Ренкінг та Посилання показують "Total (Breakdown)".
+    ВЕРСІЯ: FINAL ULTIMATE (PIVOT TABLES + KEYWORD FILTERS + CENTERED CHART).
     """
     import pandas as pd
     import plotly.express as px
@@ -2520,45 +2517,70 @@ def show_sources_page():
     st.title("🔗 Джерела")
 
     # ==============================================================================
-    # 1. ОТРИМАННЯ ДАНИХ
+    # 1. ОТРИМАННЯ ТА ОБ'ЄДНАННЯ ВСІХ ДАНИХ
     # ==============================================================================
     try:
-        # 1.1 Scan Results (щоб знати провайдера)
+        # 1.1 Keywords (id -> text)
+        kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+        kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
+
+        # 1.2 Scan Results (id -> provider, keyword_id)
         scan_resp = supabase.table("scan_results")\
             .select("id, provider, created_at, keyword_id")\
             .eq("project_id", proj["id"])\
             .execute()
         
-        scan_map = {} # id -> {provider, date}
+        scan_meta = {} # scan_id -> {provider, date, keyword_text}
         scan_ids = []
+        
+        # Mapping назв провайдерів для колонок
+        PROVIDER_MAP = {
+            "perplexity": "Perplexity",
+            "gpt-4o": "OpenAI GPT",
+            "gpt-4": "OpenAI GPT",
+            "gemini-1.5-pro": "Google Gemini",
+            "gemini": "Google Gemini"
+        }
+
         if scan_resp.data:
             for s in scan_resp.data:
                 scan_ids.append(s['id'])
-                # Нормалізація провайдера
-                p = s.get('provider', '').lower()
-                if 'perplexity' in p: prov = 'P'
-                elif 'gpt' in p or 'openai' in p: prov = 'G'
-                elif 'gemini' in p or 'google' in p: prov = 'Gem'
-                else: prov = 'Other'
+                # Нормалізація назви
+                raw_p = s.get('provider', '').lower()
+                clean_p = "Інше"
+                for k, v in PROVIDER_MAP.items():
+                    if k in raw_p:
+                        clean_p = v
+                        break
                 
-                scan_map[s['id']] = {'provider': prov, 'date': s['created_at']}
+                scan_meta[s['id']] = {
+                    'provider': clean_p,
+                    'date': s['created_at'],
+                    'keyword_text': kw_map.get(s['keyword_id'], "Невідомий запит")
+                }
         
-        # 1.2 Sources
-        df_sources = pd.DataFrame()
+        # 1.3 Extracted Sources
+        df_master = pd.DataFrame()
         if scan_ids:
             sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
             if sources_resp.data:
-                df_sources = pd.DataFrame(sources_resp.data)
-                # Збагачуємо провайдером
-                df_sources['provider'] = df_sources['scan_result_id'].map(lambda x: scan_map.get(x, {}).get('provider', 'Other'))
-                # Нормалізація доменів
-                if 'domain' not in df_sources.columns:
-                    df_sources['domain'] = df_sources['url'].apply(lambda x: urlparse(x).netloc if x else "unknown")
-    except Exception as e:
-        st.error(f"Помилка завантаження джерел: {e}")
-        df_sources = pd.DataFrame()
+                df_master = pd.DataFrame(sources_resp.data)
+                # Збагачуємо даними
+                df_master['provider'] = df_master['scan_result_id'].map(lambda x: scan_meta.get(x, {}).get('provider', 'Інше'))
+                df_master['keyword_text'] = df_master['scan_result_id'].map(lambda x: scan_meta.get(x, {}).get('keyword_text', ''))
+                df_master['scan_date'] = df_master['scan_result_id'].map(lambda x: scan_meta.get(x, {}).get('date'))
+                
+                # Домен
+                if 'domain' not in df_master.columns:
+                    df_master['domain'] = df_master['url'].apply(lambda x: urlparse(x).netloc if x else "unknown")
 
-    # 1.3 Whitelist (Офіційні ресурси)
+    except Exception as e:
+        st.error(f"Помилка завантаження даних: {e}")
+        df_master = pd.DataFrame()
+
+    # ==============================================================================
+    # 2. WHITELIST LOGIC
+    # ==============================================================================
     try:
         project_data = supabase.table("projects").select("official_assets").eq("id", proj["id"]).execute()
         raw_assets = project_data.data[0].get("official_assets", []) if project_data.data else []
@@ -2566,7 +2588,7 @@ def show_sources_page():
     except Exception as e:
         raw_assets = []
 
-    # Підготовка списку для логіки
+    # Готуємо список для перевірки
     assets_list_dicts = []
     for item in raw_assets:
         if isinstance(item, str):
@@ -2574,14 +2596,9 @@ def show_sources_page():
         elif isinstance(item, dict):
             assets_list_dicts.append({"Домен": item.get("url", ""), "Мітка": item.get("tag", "Веб-сайт")})
     
-    # Список доменів для перевірки (lowercase)
     OFFICIAL_DOMAINS = [d["Домен"].lower().strip() for d in assets_list_dicts if d["Домен"]]
 
-    # ==============================================================================
-    # 2. HELPER FUNCTIONS
-    # ==============================================================================
-    
-    # Функція перевірки офіційності (динамічна)
+    # Динамічна перевірка в головному датафреймі
     def check_is_official(url):
         if not url: return False
         u_str = str(url).lower()
@@ -2589,148 +2606,140 @@ def show_sources_page():
             if od in u_str: return True
         return False
 
-    if not df_sources.empty:
-        df_sources['is_official_dynamic'] = df_sources['url'].apply(check_is_official)
-
-    # Функція форматування рядка статистики "10 (P:5, G:2, Gem:3)"
-    def format_breakdown(group_df):
-        total = group_df['mention_count'].sum()
-        # Групуємо по провайдерах всередині цієї групи
-        prov_counts = group_df.groupby('provider')['mention_count'].sum()
-        
-        p_c = prov_counts.get('P', 0)
-        g_c = prov_counts.get('G', 0)
-        gem_c = prov_counts.get('Gem', 0)
-        
-        # Формуємо рядок
-        return f"{total} (P:{p_c}, G:{g_c}, Gem:{gem_c})"
+    if not df_master.empty:
+        df_master['is_official_dynamic'] = df_master['url'].apply(check_is_official)
 
     # ==============================================================================
     # 3. ВКЛАДКИ
     # ==============================================================================
     tab1, tab2, tab3 = st.tabs(["📊 Офіційні ресурси бренду", "🌐 Ренкінг доменів", "🔗 Посилання"])
 
-    # --- TAB 1: СТАТИСТИКА + РЕДАКТОР ---
+    # --- TAB 1: АНАЛІЗ ОХОПЛЕННЯ ---
     with tab1:
-        st.markdown("#### 📊 Аналіз охоплення")
+        st.markdown("#### 📊 Аналіз охоплення офіційних ресурсів")
         
-        if not df_sources.empty:
-            total_links_df = df_sources
-            official_links_df = df_sources[df_sources['is_official_dynamic'] == True]
-            external_links_df = df_sources[df_sources['is_official_dynamic'] == False]
+        if not df_master.empty:
+            total_rows = len(df_master)
+            off_rows = df_master[df_master['is_official_dynamic'] == True]
+            ext_rows = df_master[df_master['is_official_dynamic'] == False]
             
-            # Розрахунок для карток
-            def get_stats_block(df_sub):
-                count = len(df_sub)
-                if count == 0: return 0, 0, 0, 0
-                provs = df_sub['provider'].value_counts()
-                return count, provs.get('P', 0), provs.get('G', 0), provs.get('Gem', 0)
+            # Підрахунок по LLM
+            def get_counts(df_sub):
+                cnt = len(df_sub)
+                if cnt == 0: return 0, 0, 0, 0
+                p_c = len(df_sub[df_sub['provider'] == 'Perplexity'])
+                g_c = len(df_sub[df_sub['provider'] == 'OpenAI GPT'])
+                gem_c = len(df_sub[df_sub['provider'] == 'Google Gemini'])
+                return cnt, p_c, g_c, gem_c
 
-            tot_c, tot_p, tot_g, tot_gem = get_stats_block(total_links_df)
-            off_c, off_p, off_g, off_gem = get_stats_block(official_links_df)
+            tot_all, tot_p, tot_g, tot_gem = get_counts(df_master)
+            off_all, off_p, off_g, off_gem = get_counts(off_rows)
             
-            c_chart, c_stat = st.columns([1.5, 1.5])
+            # Розмітка: Графік (більший) | Статистика
+            # vertical_alignment="center" вирівнює блоки по вертикалі
+            c_chart, c_stats = st.columns([2.5, 1.5], vertical_alignment="center")
             
             with c_chart:
-                if tot_c > 0:
+                if total_rows > 0:
                     fig = px.pie(
                         names=["Офіційні", "Зовнішні"], 
-                        values=[off_c, len(external_links_df)],
-                        hole=0.6, 
+                        values=[off_all, len(ext_rows)],
+                        hole=0.55, 
                         color_discrete_sequence=["#00C896", "#E0E0E0"]
                     )
-                    fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=220, showlegend=True)
+                    # Збільшуємо висоту графіка
+                    fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=True)
+                    fig.update_traces(textposition='inside', textinfo='percent+label')
                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("Немає даних.")
 
-            with c_stat:
-                # Стилізовані картки з розподілом
+            with c_stats:
+                # Картка 1: Всього
                 st.markdown(f"""
-                <div style="display:flex; flex-direction:column; gap:10px;">
-                    <div style="padding:15px; border:1px solid #eee; border-radius:10px; background:white;">
-                        <div style="color:#888; font-size:12px; font-weight:bold; text-transform:uppercase;">Всього посилань</div>
-                        <div style="font-size:28px; font-weight:bold; color:#333;">{tot_c}</div>
-                        <div style="font-size:11px; color:#666; margin-top:5px; background:#f9f9f9; padding:4px; border-radius:4px; display:inline-block;">
-                            Perplexity: <b>{tot_p}</b> &nbsp;|&nbsp; GPT: <b>{tot_g}</b> &nbsp;|&nbsp; Gemini: <b>{tot_gem}</b>
-                        </div>
-                    </div>
-                    
-                    <div style="padding:15px; border:1px solid #00C896; border-radius:10px; background:#f0fdf9;">
-                        <div style="color:#007a5c; font-size:12px; font-weight:bold; text-transform:uppercase;">З них офіційні</div>
-                        <div style="font-size:28px; font-weight:bold; color:#00C896;">{off_c}</div>
-                        <div style="font-size:11px; color:#005c45; margin-top:5px; background:#dcfce7; padding:4px; border-radius:4px; display:inline-block;">
-                            Perplexity: <b>{off_p}</b> &nbsp;|&nbsp; GPT: <b>{off_g}</b> &nbsp;|&nbsp; Gemini: <b>{off_gem}</b>
-                        </div>
+                <div style="margin-bottom: 20px; padding:20px; border:1px solid #eee; border-radius:12px; background:white; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+                    <div style="color:#888; font-size:13px; font-weight:700; text-transform:uppercase; margin-bottom:5px;">Всього посилань</div>
+                    <div style="font-size:32px; font-weight:800; color:#333; line-height:1;">{tot_all}</div>
+                    <div style="margin-top:10px; font-size:12px; color:#555; display:flex; flex-direction:column; gap:3px;">
+                        <div>🔹 Perplexity: <b>{tot_p}</b></div>
+                        <div>🔸 OpenAI GPT: <b>{tot_g}</b></div>
+                        <div>✨ Google Gemini: <b>{tot_gem}</b></div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # Картка 2: Офіційні
+                st.markdown(f"""
+                <div style="padding:20px; border:1px solid #00C896; border-radius:12px; background:#f0fdf9; box-shadow: 0 2px 5px rgba(0,200,150,0.1);">
+                    <div style="color:#007a5c; font-size:13px; font-weight:700; text-transform:uppercase; margin-bottom:5px;">З них офіційні</div>
+                    <div style="font-size:32px; font-weight:800; color:#00C896; line-height:1;">{off_all}</div>
+                    <div style="margin-top:10px; font-size:12px; color:#005c45; display:flex; flex-direction:column; gap:3px;">
+                        <div>🔹 Perplexity: <b>{off_p}</b></div>
+                        <div>🔸 OpenAI GPT: <b>{off_g}</b></div>
+                        <div>✨ Google Gemini: <b>{off_gem}</b></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
         else:
             st.info("Дані сканування відсутні.")
 
         st.divider()
 
-        # --- РЕДАКТОР WHITELIST (З КНОПКОЮ РЕДАГУВАННЯ) ---
+        # --- РЕДАКТОР WHITELIST ---
         st.subheader("⚙️ Керування списком (Whitelist)")
         
-        # Ініціалізація стану редагування
         if "edit_whitelist_mode" not in st.session_state:
             st.session_state["edit_whitelist_mode"] = False
 
-        # Підготовка DataFrame
         if assets_list_dicts:
             df_assets = pd.DataFrame(assets_list_dicts)
         else:
             df_assets = pd.DataFrame(columns=["Домен", "Мітка"])
-
-        # Нумерація з 1
         df_assets.index = df_assets.index + 1
 
-        # ЛОГІКА РЕЖИМІВ
-        if not st.session_state["edit_whitelist_mode"]:
-            # === РЕЖИМ ПЕРЕГЛЯДУ ===
-            st.dataframe(
-                df_assets, 
-                use_container_width=True, 
-                column_config={
-                    "Домен": st.column_config.TextColumn("Домен / URL"),
-                    "Мітка": st.column_config.TextColumn("Тип")
-                }
-            )
+        # Додаємо статистику
+        if not df_master.empty:
+            def get_stat_whitelist(dom):
+                matches = df_master[df_master['url'].astype(str).str.contains(dom.lower(), case=False, na=False)]
+                return len(matches), len(matches[matches['provider']=='Perplexity']), len(matches[matches['provider']=='OpenAI GPT']), len(matches[matches['provider']=='Google Gemini'])
             
+            stats = df_assets['Домен'].apply(get_stat_whitelist)
+            df_assets['Всього'] = stats.apply(lambda x: x[0])
+            df_assets['Perplexity'] = stats.apply(lambda x: x[1])
+            df_assets['GPT'] = stats.apply(lambda x: x[2])
+            df_assets['Gemini'] = stats.apply(lambda x: x[3])
+        else:
+            for c in ['Всього', 'Perplexity', 'GPT', 'Gemini']: df_assets[c] = 0
+
+        if not st.session_state["edit_whitelist_mode"]:
+            st.dataframe(df_assets, use_container_width=True)
             if st.button("✏️ Редагувати список"):
                 st.session_state["edit_whitelist_mode"] = True
                 st.rerun()
         else:
-            # === РЕЖИМ РЕДАГУВАННЯ ===
-            st.info("Внесіть зміни та натисніть 'Зберегти'.")
+            st.info("Режим редагування. Внесіть зміни та натисніть 'Зберегти'.")
+            if df_assets.empty: df_assets = pd.DataFrame([{"Домен": "", "Мітка": "Веб-сайт"}])
             
-            # Якщо список пустий, додаємо рядок для старту
-            if df_assets.empty:
-                df_assets = pd.DataFrame([{"Домен": "", "Мітка": "Веб-сайт"}])
-                df_assets.index = df_assets.index + 1
-
+            # В режимі редагування показуємо тільки поля для вводу
+            edit_df_input = df_assets[["Домен", "Мітка"]]
+            
             edited_df = st.data_editor(
-                df_assets,
+                edit_df_input,
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
-                    "Домен": st.column_config.TextColumn("Домен", required=True),
-                    "Мітка": st.column_config.SelectboxColumn("Тип", options=["Веб-сайт", "Соціальні мережі", "Автор", "Інше"], required=True)
+                    "Домен": st.column_config.TextColumn(required=True),
+                    "Мітка": st.column_config.SelectboxColumn(options=["Веб-сайт", "Соціальні мережі", "Автор", "Інше"], required=True)
                 }
             )
-
-            col_s1, col_s2 = st.columns([1, 4])
-            with col_s1:
+            c1, c2 = st.columns([1, 4])
+            with c1:
                 if st.button("💾 Зберегти", type="primary"):
-                    # Зберігаємо
                     save_data = []
-                    # st.data_editor повертає індекси як є, ітеруємось
                     for _, row in edited_df.iterrows():
                         d_val = str(row["Домен"]).strip()
-                        if d_val:
-                            save_data.append({"url": d_val, "tag": row["Мітка"]})
-                    
+                        if d_val: save_data.append({"url": d_val, "tag": row["Мітка"]})
                     try:
                         supabase.table("projects").update({"official_assets": save_data}).eq("id", proj["id"]).execute()
                         st.success("Збережено!")
@@ -2739,107 +2748,151 @@ def show_sources_page():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Помилка: {e}")
-            
-            with col_s2:
+            with c2:
                 if st.button("❌ Скасувати"):
                     st.session_state["edit_whitelist_mode"] = False
                     st.rerun()
 
-    # --- TAB 2: РЕНКІНГ (З РОЗПОДІЛОМ) ---
+    # --- TAB 2: РЕНКІНГ ДОМЕНІВ (PIVOT + FILTER) ---
     with tab2:
-        st.markdown("#### 🏆 Ренкінг всіх доменів")
-        if not df_sources.empty:
-            # Групуємо дані по домену
-            grouped = df_sources.groupby('domain')
+        st.markdown("#### 🏆 Ренкінг доменів")
+        
+        if not df_master.empty:
+            # 1. Фільтр по запитах (Тільки тут і в Tab 3)
+            all_kws = sorted(df_master['keyword_text'].unique())
+            sel_kws_rank = st.multiselect("🔍 Фільтр по запитах:", all_kws, key="rank_kw_filter")
             
-            ranking_data = []
-            for domain, group in grouped:
-                # Визначаємо тип
-                dtype = "Зовнішній"
-                for od in OFFICIAL_DOMAINS:
-                    if od in domain.lower():
-                        dtype = "Офіційний"
-                        break
+            # Фільтруємо копію
+            df_rank_view = df_master.copy()
+            if sel_kws_rank:
+                df_rank_view = df_rank_view[df_rank_view['keyword_text'].isin(sel_kws_rank)]
+            
+            if not df_rank_view.empty:
+                # 2. Pivot Table для колонок по LLM
+                # Групуємо: Domain + Provider -> Count
+                pivot_df = df_rank_view.pivot_table(
+                    index='domain', 
+                    columns='provider', 
+                    values='mention_count', 
+                    aggfunc='sum', 
+                    fill_value=0
+                ).reset_index()
                 
-                # Форматуємо рядок (Total + P/G/Gem)
-                mentions_str = format_breakdown(group)
-                # Для сортування беремо чисте число
-                total_count = group['mention_count'].sum()
+                # Додаємо "Всього"
+                pivot_df['Всього'] = pivot_df.sum(axis=1, numeric_only=True)
                 
-                ranking_data.append({
-                    "Домен": domain,
-                    "Тип": dtype,
-                    "Кількість згадок (розподіл)": mentions_str,
-                    "_sort_val": total_count
-                })
-            
-            # Створюємо DF і сортуємо
-            df_rank = pd.DataFrame(ranking_data).sort_values('_sort_val', ascending=False)
-            
-            # Нумерація з 1
-            df_rank.reset_index(drop=True, inplace=True)
-            df_rank.index = df_rank.index + 1
-            
-            st.dataframe(
-                df_rank[["Домен", "Тип", "Кількість згадок (розподіл)"]],
-                use_container_width=True,
-                column_config={
-                    "Кількість згадок (розподіл)": st.column_config.TextColumn("К-сть згадок (Всього | P, G, Gem)")
-                }
-            )
-        else:
-            st.info("Немає даних.")
+                # Переконуємось, що всі колонки є (навіть якщо 0)
+                for col in ["Perplexity", "OpenAI GPT", "Google Gemini"]:
+                    if col not in pivot_df.columns:
+                        pivot_df[col] = 0
+                
+                # Додаємо Тип та Першу появу
+                def get_meta(dom):
+                    is_off = "Зовнішній"
+                    for od in OFFICIAL_DOMAINS:
+                        if od in dom.lower():
+                            is_off = "Офіційний"
+                            break
+                    # Перша дата
+                    dates = df_rank_view[df_rank_view['domain'] == dom]['scan_date']
+                    first = dates.min() if not dates.empty else None
+                    first_str = pd.to_datetime(first).strftime("%Y-%m-%d") if first else "-"
+                    return is_off, first_str
 
-    # --- TAB 3: ПОСИЛАННЯ (З РОЗПОДІЛОМ) ---
-    with tab3:
-        st.markdown("#### 🔗 Всі знайдені посилання")
-        if not df_sources.empty:
-            f1, f2 = st.columns(2)
-            with f1: f_type = st.selectbox("Фільтр типу:", ["Всі", "Офіційні", "Зовнішні"], key="src_ft")
-            with f2: f_txt = st.text_input("Пошук URL:", key="src_st")
-            
-            # Фільтрація
-            df_show = df_sources.copy()
-            if f_type == "Офіційні": df_show = df_show[df_show['is_official_dynamic'] == True]
-            elif f_type == "Зовнішні": df_show = df_show[df_show['is_official_dynamic'] == False]
-            if f_txt: df_show = df_show[df_show['url'].astype(str).str.contains(f_txt, case=False)]
-            
-            if not df_show.empty:
-                # Групуємо по URL (щоб об'єднати згадки одного URL від різних LLM)
-                grouped_url = df_show.groupby(['url', 'domain', 'is_official_dynamic'])
+                pivot_df[['Тип', 'Вперше знайдено']] = pivot_df['domain'].apply(lambda x: pd.Series(get_meta(x)))
                 
-                links_data = []
-                for (url, dom, is_off), group in grouped_url:
-                    mentions_str = format_breakdown(group)
-                    total_count = group['mention_count'].sum()
-                    
-                    links_data.append({
-                        "url": url,
-                        "domain": dom,
-                        "type": "Офіційні" if is_off else "Зовнішні",
-                        "mentions": mentions_str,
-                        "_sort": total_count
-                    })
+                # Сортуємо
+                pivot_df = pivot_df.sort_values("Всього", ascending=False).reset_index(drop=True)
+                pivot_df.index = pivot_df.index + 1
                 
-                df_links_final = pd.DataFrame(links_data).sort_values('_sort', ascending=False)
-                df_links_final.reset_index(drop=True, inplace=True)
-                df_links_final.index = df_links_final.index + 1
-
+                # Обираємо порядок колонок
+                cols_order = ["domain", "Тип", "Всього", "Perplexity", "OpenAI GPT", "Google Gemini", "Вперше знайдено"]
+                # Захист від відсутніх колонок (якщо "Інше")
+                final_cols = [c for c in cols_order if c in pivot_df.columns]
+                
                 st.dataframe(
-                    df_links_final[["url", "domain", "type", "mentions"]],
+                    pivot_df[final_cols],
+                    use_container_width=True,
                     column_config={
-                        "url": st.column_config.LinkColumn("Посилання"),
                         "domain": "Домен",
-                        "type": "Тип",
-                        "mentions": st.column_config.TextColumn("Згадок (Всього | P, G, Gem)")
-                    },
-                    use_container_width=True
+                        "Всього": st.column_config.NumberColumn("Всього згадок", format="%d"),
+                        "Perplexity": st.column_config.NumberColumn(format="%d"),
+                        "OpenAI GPT": st.column_config.NumberColumn(format="%d"),
+                        "Google Gemini": st.column_config.NumberColumn(format="%d"),
+                    }
                 )
             else:
-                st.info("Нічого не знайдено за фільтрами.")
+                st.warning("За обраними фільтрами даних немає.")
         else:
-            st.info("Список порожній.")
+            st.info("Дані відсутні.")
 
+    # --- TAB 3: ПОСИЛАННЯ (PIVOT + FILTER) ---
+    with tab3:
+        st.markdown("#### 🔗 Детальний список посилань")
+        
+        if not df_master.empty:
+            # Фільтри
+            c_f1, c_f2 = st.columns([1, 1])
+            with c_f1:
+                sel_kws_links = st.multiselect("🔍 Фільтр по запитах:", all_kws, key="links_kw_filter")
+            with c_f2:
+                search_url = st.text_input("🔎 Пошук URL:", key="links_search")
+            
+            c_f3, c_f4 = st.columns(2)
+            with c_f3:
+                type_filter = st.selectbox("Тип ресурсу:", ["Всі", "Офіційні", "Зовнішні"], key="links_type_filter")
+            
+            # Фільтрація
+            df_links_view = df_master.copy()
+            if sel_kws_links:
+                df_links_view = df_links_view[df_links_view['keyword_text'].isin(sel_kws_links)]
+            if search_url:
+                df_links_view = df_links_view[df_links_view['url'].astype(str).str.contains(search_url, case=False)]
+            if type_filter == "Офіційні":
+                df_links_view = df_links_view[df_links_view['is_official_dynamic'] == True]
+            elif type_filter == "Зовнішні":
+                df_links_view = df_links_view[df_links_view['is_official_dynamic'] == False]
+
+            if not df_links_view.empty:
+                # Pivot: URL -> Provider Counts
+                pivot_links = df_links_view.pivot_table(
+                    index=['url', 'domain', 'is_official_dynamic'],
+                    columns='provider',
+                    values='mention_count',
+                    aggfunc='sum',
+                    fill_value=0
+                ).reset_index()
+                
+                pivot_links['Всього'] = pivot_links.sum(axis=1, numeric_only=True)
+                
+                for col in ["Perplexity", "OpenAI GPT", "Google Gemini"]:
+                    if col not in pivot_links.columns: pivot_links[col] = 0
+                
+                pivot_links['Тип'] = pivot_links['is_official_dynamic'].apply(lambda x: "Офіційні" if x else "Зовнішні")
+                
+                # Сортування
+                pivot_links = pivot_links.sort_values("Всього", ascending=False).reset_index(drop=True)
+                pivot_links.index = pivot_links.index + 1
+                
+                cols_order = ["url", "domain", "Тип", "Всього", "Perplexity", "OpenAI GPT", "Google Gemini"]
+                final_cols = [c for c in cols_order if c in pivot_links.columns]
+                
+                st.dataframe(
+                    pivot_links[final_cols],
+                    use_container_width=True,
+                    column_config={
+                        "url": st.column_config.LinkColumn("Посилання", width="large"),
+                        "domain": "Домен",
+                        "Всього": st.column_config.NumberColumn("Всього згадок"),
+                        "Perplexity": st.column_config.NumberColumn(format="%d"),
+                        "OpenAI GPT": st.column_config.NumberColumn(format="%d"),
+                        "Google Gemini": st.column_config.NumberColumn(format="%d"),
+                    }
+                )
+            else:
+                st.warning("Нічого не знайдено.")
+        else:
+            st.info("Дані відсутні.")
 
 
 def sidebar_menu():
