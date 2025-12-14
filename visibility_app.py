@@ -2487,13 +2487,14 @@ def show_recommendations_page():
 # =========================
 # 9. SIDEBAR
 # =========================
+
 def show_sources_page():
     """
     Сторінка джерел.
-    ВЕРСІЯ: FINAL EDITOR + TAGS + LLM STATS.
-    1. UI: st.data_editor замість акордеона.
-    2. Features: Мітки (Tags), Статистика по LLM навпроти домену.
-    3. Fix: Обробка помилки відсутності колонки в БД.
+    ВЕРСІЯ: FINAL ADVANCED (LLM BREAKDOWN + EDITOR MODES).
+    1. UI: Whitelist має режим "Перегляд" та "Редагування". Нумерація з 1.
+    2. Stats: Блоки статистики показують розподіл по LLM (P, G, Gem).
+    3. Tables: Ренкінг та Посилання показують "Total (Breakdown)".
     """
     import pandas as pd
     import plotly.express as px
@@ -2519,10 +2520,10 @@ def show_sources_page():
     st.title("🔗 Джерела")
 
     # ==============================================================================
-    # 1. ОТРИМАННЯ ДАНИХ (SOURCES & SCAN INFO)
+    # 1. ОТРИМАННЯ ДАНИХ
     # ==============================================================================
     try:
-        # Отримуємо scan_results (для прив'язки до провайдера/LLM)
+        # 1.1 Scan Results (щоб знати провайдера)
         scan_resp = supabase.table("scan_results")\
             .select("id, provider, created_at, keyword_id")\
             .eq("project_id", proj["id"])\
@@ -2533,23 +2534,23 @@ def show_sources_page():
         if scan_resp.data:
             for s in scan_resp.data:
                 scan_ids.append(s['id'])
-                # Нормалізація назви провайдера
+                # Нормалізація провайдера
                 p = s.get('provider', '').lower()
-                if 'perplexity' in p: prov = 'Perplexity'
-                elif 'gpt' in p or 'openai' in p: prov = 'OpenAI GPT'
-                elif 'gemini' in p or 'google' in p: prov = 'Google Gemini'
+                if 'perplexity' in p: prov = 'P'
+                elif 'gpt' in p or 'openai' in p: prov = 'G'
+                elif 'gemini' in p or 'google' in p: prov = 'Gem'
                 else: prov = 'Other'
                 
                 scan_map[s['id']] = {'provider': prov, 'date': s['created_at']}
         
+        # 1.2 Sources
         df_sources = pd.DataFrame()
         if scan_ids:
             sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
             if sources_resp.data:
                 df_sources = pd.DataFrame(sources_resp.data)
-                # Збагачуємо даними про провайдера
-                df_sources['provider'] = df_sources['scan_result_id'].map(lambda x: scan_map.get(x, {}).get('provider', 'Unknown'))
-                
+                # Збагачуємо провайдером
+                df_sources['provider'] = df_sources['scan_result_id'].map(lambda x: scan_map.get(x, {}).get('provider', 'Other'))
                 # Нормалізація доменів
                 if 'domain' not in df_sources.columns:
                     df_sources['domain'] = df_sources['url'].apply(lambda x: urlparse(x).netloc if x else "unknown")
@@ -2557,236 +2558,285 @@ def show_sources_page():
         st.error(f"Помилка завантаження джерел: {e}")
         df_sources = pd.DataFrame()
 
-    # ==============================================================================
-    # 2. ОТРИМАННЯ ТА ОБРОБКА WHITELIST
-    # ==============================================================================
+    # 1.3 Whitelist (Офіційні ресурси)
     try:
         project_data = supabase.table("projects").select("official_assets").eq("id", proj["id"]).execute()
-        # Дані можуть бути списком рядків ["a.com"] АБО списком об'єктів [{"url":"a.com", "tag":"Website"}]
         raw_assets = project_data.data[0].get("official_assets", []) if project_data.data else []
         if raw_assets is None: raw_assets = []
     except Exception as e:
-        # Якщо колонки немає, ініціалізуємо пустий список, щоб не ламати інтерфейс
-        # st.warning(f"Увага: Неможливо завантажити налаштування ({e})")
         raw_assets = []
 
-    # Перетворення raw_assets у DataFrame для редактора
-    assets_list = []
+    # Підготовка списку для логіки
+    assets_list_dicts = []
     for item in raw_assets:
         if isinstance(item, str):
-            assets_list.append({"Домен": item, "Мітка": "Веб-сайт"})
+            assets_list_dicts.append({"Домен": item, "Мітка": "Веб-сайт"})
         elif isinstance(item, dict):
-            assets_list.append({"Домен": item.get("url", ""), "Мітка": item.get("tag", "Веб-сайт")})
+            assets_list_dicts.append({"Домен": item.get("url", ""), "Мітка": item.get("tag", "Веб-сайт")})
     
-    if not assets_list:
-        # Початковий рядок для прикладу
-        df_assets_editor = pd.DataFrame([{"Домен": "", "Мітка": "Веб-сайт"}])
-    else:
-        df_assets_editor = pd.DataFrame(assets_list)
+    # Список доменів для перевірки (lowercase)
+    OFFICIAL_DOMAINS = [d["Домен"].lower().strip() for d in assets_list_dicts if d["Домен"]]
 
-    # --- ПІДРАХУНОК СТАТИСТИКИ ПО LLM ---
-    # Додаємо колонки зі статистикою до df_assets_editor
+    # ==============================================================================
+    # 2. HELPER FUNCTIONS
+    # ==============================================================================
+    
+    # Функція перевірки офіційності (динамічна)
+    def check_is_official(url):
+        if not url: return False
+        u_str = str(url).lower()
+        for od in OFFICIAL_DOMAINS:
+            if od in u_str: return True
+        return False
+
     if not df_sources.empty:
-        def count_mentions(domain_part, provider_filter=None):
-            if not domain_part or len(domain_part) < 3: return 0
-            d_lower = domain_part.lower().strip()
-            
-            # Фільтруємо джерела
-            subset = df_sources
-            if provider_filter:
-                subset = df_sources[df_sources['provider'] == provider_filter]
-            
-            # Рахуємо входження
-            # (Шукаємо підстроку домену в URL джерела)
-            matches = subset[subset['url'].astype(str).str.contains(d_lower, case=False, na=False)]
-            return matches['mention_count'].sum() if not matches.empty else 0
+        df_sources['is_official_dynamic'] = df_sources['url'].apply(check_is_official)
 
-        # Розраховуємо для кожного рядка редактора
-        df_assets_editor["Всього згадок"] = df_assets_editor["Домен"].apply(lambda x: count_mentions(x))
-        df_assets_editor["Perplexity"] = df_assets_editor["Домен"].apply(lambda x: count_mentions(x, "Perplexity"))
-        df_assets_editor["GPT"] = df_assets_editor["Домен"].apply(lambda x: count_mentions(x, "OpenAI GPT"))
-        df_assets_editor["Gemini"] = df_assets_editor["Домен"].apply(lambda x: count_mentions(x, "Google Gemini"))
-    else:
-        df_assets_editor["Всього згадок"] = 0
-        df_assets_editor["Perplexity"] = 0
-        df_assets_editor["GPT"] = 0
-        df_assets_editor["Gemini"] = 0
-
-    # Список офіційних доменів для фільтрації в інших вкладках
-    # (беремо тільки ті, що мають текст у полі Домен)
-    OFFICIAL_DOMAINS = [r["Домен"].lower().strip() for r in df_assets_editor.to_dict('records') if r["Домен"]]
+    # Функція форматування рядка статистики "10 (P:5, G:2, Gem:3)"
+    def format_breakdown(group_df):
+        total = group_df['mention_count'].sum()
+        # Групуємо по провайдерах всередині цієї групи
+        prov_counts = group_df.groupby('provider')['mention_count'].sum()
+        
+        p_c = prov_counts.get('P', 0)
+        g_c = prov_counts.get('G', 0)
+        gem_c = prov_counts.get('Gem', 0)
+        
+        # Формуємо рядок
+        return f"{total} (P:{p_c}, G:{g_c}, Gem:{gem_c})"
 
     # ==============================================================================
     # 3. ВКЛАДКИ
     # ==============================================================================
     tab1, tab2, tab3 = st.tabs(["📊 Офіційні ресурси бренду", "🌐 Ренкінг доменів", "🔗 Посилання"])
 
-    # --- TAB 1: ОФІЦІЙНІ РЕСУРСИ + РЕДАКТОР ---
+    # --- TAB 1: СТАТИСТИКА + РЕДАКТОР ---
     with tab1:
-        # 1. ГРАФІК
         st.markdown("#### 📊 Аналіз охоплення")
+        
         if not df_sources.empty:
-            # Динамічний перерахунок
-            def is_official_calc(u):
-                for od in OFFICIAL_DOMAINS:
-                    if od in str(u).lower(): return True
-                return False
+            total_links_df = df_sources
+            official_links_df = df_sources[df_sources['is_official_dynamic'] == True]
+            external_links_df = df_sources[df_sources['is_official_dynamic'] == False]
             
-            df_sources['is_official_dynamic'] = df_sources['url'].apply(is_official_calc)
+            # Розрахунок для карток
+            def get_stats_block(df_sub):
+                count = len(df_sub)
+                if count == 0: return 0, 0, 0, 0
+                provs = df_sub['provider'].value_counts()
+                return count, provs.get('P', 0), provs.get('G', 0), provs.get('Gem', 0)
+
+            tot_c, tot_p, tot_g, tot_gem = get_stats_block(total_links_df)
+            off_c, off_p, off_g, off_gem = get_stats_block(official_links_df)
             
-            total_links = len(df_sources)
-            official_count = df_sources[df_sources['is_official_dynamic'] == True].shape[0]
-            external_count = total_links - official_count
+            c_chart, c_stat = st.columns([1.5, 1.5])
             
-            c_chart, c_stat = st.columns([2, 1])
             with c_chart:
-                if total_links > 0:
+                if tot_c > 0:
                     fig = px.pie(
-                        names=["Офіційні", "Зовнішні"], values=[official_count, external_count],
-                        hole=0.6, color_discrete_sequence=["#00C896", "#E0E0E0"]
+                        names=["Офіційні", "Зовнішні"], 
+                        values=[off_c, len(external_links_df)],
+                        hole=0.6, 
+                        color_discrete_sequence=["#00C896", "#E0E0E0"]
                     )
-                    fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250)
+                    fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=220, showlegend=True)
                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("Немає даних.")
-            
+
             with c_stat:
-                st.metric("Всього посилань", total_links)
-                st.metric("З них офіційні", official_count)
+                # Стилізовані картки з розподілом
+                st.markdown(f"""
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div style="padding:15px; border:1px solid #eee; border-radius:10px; background:white;">
+                        <div style="color:#888; font-size:12px; font-weight:bold; text-transform:uppercase;">Всього посилань</div>
+                        <div style="font-size:28px; font-weight:bold; color:#333;">{tot_c}</div>
+                        <div style="font-size:11px; color:#666; margin-top:5px; background:#f9f9f9; padding:4px; border-radius:4px; display:inline-block;">
+                            Perplexity: <b>{tot_p}</b> &nbsp;|&nbsp; GPT: <b>{tot_g}</b> &nbsp;|&nbsp; Gemini: <b>{tot_gem}</b>
+                        </div>
+                    </div>
+                    
+                    <div style="padding:15px; border:1px solid #00C896; border-radius:10px; background:#f0fdf9;">
+                        <div style="color:#007a5c; font-size:12px; font-weight:bold; text-transform:uppercase;">З них офіційні</div>
+                        <div style="font-size:28px; font-weight:bold; color:#00C896;">{off_c}</div>
+                        <div style="font-size:11px; color:#005c45; margin-top:5px; background:#dcfce7; padding:4px; border-radius:4px; display:inline-block;">
+                            Perplexity: <b>{off_p}</b> &nbsp;|&nbsp; GPT: <b>{off_g}</b> &nbsp;|&nbsp; Gemini: <b>{off_gem}</b>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
         else:
             st.info("Дані сканування відсутні.")
 
         st.divider()
 
-        # 2. РЕДАКТОР (Тільки тут)
+        # --- РЕДАКТОР WHITELIST (З КНОПКОЮ РЕДАГУВАННЯ) ---
         st.subheader("⚙️ Керування списком (Whitelist)")
-        st.caption("Додайте домени ваших ресурсів. Статистика перераховується автоматично.")
+        
+        # Ініціалізація стану редагування
+        if "edit_whitelist_mode" not in st.session_state:
+            st.session_state["edit_whitelist_mode"] = False
 
-        # Конфігурація колонок редактора
-        column_config = {
-            "Домен": st.column_config.TextColumn(
-                "Домен / URL", 
-                help="Наприклад: skyup.aero",
-                validate="^.+$", # Не пустий
-                required=True
-            ),
-            "Мітка": st.column_config.SelectboxColumn(
-                "Тип ресурсу",
-                options=["Веб-сайт", "Соціальні мережі", "Автор", "Інше"],
-                required=True
-            ),
-            "Всього згадок": st.column_config.NumberColumn("Всього", disabled=True),
-            "Perplexity": st.column_config.NumberColumn("Perplexity", disabled=True),
-            "GPT": st.column_config.NumberColumn("GPT", disabled=True),
-            "Gemini": st.column_config.NumberColumn("Gemini", disabled=True),
-        }
+        # Підготовка DataFrame
+        if assets_list_dicts:
+            df_assets = pd.DataFrame(assets_list_dicts)
+        else:
+            df_assets = pd.DataFrame(columns=["Домен", "Мітка"])
 
-        edited_df = st.data_editor(
-            df_assets_editor,
-            column_config=column_config,
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=False # Нумерація 0, 1, 2...
-        )
+        # Нумерація з 1
+        df_assets.index = df_assets.index + 1
 
-        if st.button("💾 Зберегти зміни", type="primary"):
-            # Підготовка даних для збереження (прибираємо статистику, лишаємо дані)
-            save_data = []
-            for _, row in edited_df.iterrows():
-                domain_val = str(row["Домен"]).strip()
-                if domain_val:
-                    save_data.append({
-                        "url": domain_val,
-                        "tag": row["Мітка"]
-                    })
+        # ЛОГІКА РЕЖИМІВ
+        if not st.session_state["edit_whitelist_mode"]:
+            # === РЕЖИМ ПЕРЕГЛЯДУ ===
+            st.dataframe(
+                df_assets, 
+                use_container_width=True, 
+                column_config={
+                    "Домен": st.column_config.TextColumn("Домен / URL"),
+                    "Мітка": st.column_config.TextColumn("Тип")
+                }
+            )
             
-            try:
-                # Спроба зберегти як JSON
-                supabase.table("projects").update({"official_assets": save_data}).eq("id", proj["id"]).execute()
-                st.success("Список успішно оновлено!")
-                time.sleep(1)
+            if st.button("✏️ Редагувати список"):
+                st.session_state["edit_whitelist_mode"] = True
                 st.rerun()
-            except Exception as e:
-                # Якщо помилка, пробуємо зберегти як простий список (fallback для старої схеми)
-                try:
-                    simple_list = [item["url"] for item in save_data]
-                    supabase.table("projects").update({"official_assets": simple_list}).eq("id", proj["id"]).execute()
-                    st.warning("Збережено як простий список (теги не підтримуються вашою версією БД).")
-                    time.sleep(2)
-                    st.rerun()
-                except Exception as e2:
-                    st.error(f"Не вдалося зберегти. Перевірте структуру БД. Помилка: {e}")
+        else:
+            # === РЕЖИМ РЕДАГУВАННЯ ===
+            st.info("Внесіть зміни та натисніть 'Зберегти'.")
+            
+            # Якщо список пустий, додаємо рядок для старту
+            if df_assets.empty:
+                df_assets = pd.DataFrame([{"Домен": "", "Мітка": "Веб-сайт"}])
+                df_assets.index = df_assets.index + 1
 
-    # --- TAB 2: РЕНКІНГ ---
+            edited_df = st.data_editor(
+                df_assets,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "Домен": st.column_config.TextColumn("Домен", required=True),
+                    "Мітка": st.column_config.SelectboxColumn("Тип", options=["Веб-сайт", "Соціальні мережі", "Автор", "Інше"], required=True)
+                }
+            )
+
+            col_s1, col_s2 = st.columns([1, 4])
+            with col_s1:
+                if st.button("💾 Зберегти", type="primary"):
+                    # Зберігаємо
+                    save_data = []
+                    # st.data_editor повертає індекси як є, ітеруємось
+                    for _, row in edited_df.iterrows():
+                        d_val = str(row["Домен"]).strip()
+                        if d_val:
+                            save_data.append({"url": d_val, "tag": row["Мітка"]})
+                    
+                    try:
+                        supabase.table("projects").update({"official_assets": save_data}).eq("id", proj["id"]).execute()
+                        st.success("Збережено!")
+                        st.session_state["edit_whitelist_mode"] = False
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Помилка: {e}")
+            
+            with col_s2:
+                if st.button("❌ Скасувати"):
+                    st.session_state["edit_whitelist_mode"] = False
+                    st.rerun()
+
+    # --- TAB 2: РЕНКІНГ (З РОЗПОДІЛОМ) ---
     with tab2:
         st.markdown("#### 🏆 Ренкінг всіх доменів")
         if not df_sources.empty:
-            # Агрегація
-            df_sources['domain'] = df_sources['url'].apply(lambda x: urlparse(x).netloc if x else "unknown")
+            # Групуємо дані по домену
+            grouped = df_sources.groupby('domain')
             
-            # Статистика
-            domain_stats = df_sources['domain'].value_counts().reset_index()
-            domain_stats.columns = ['Domain', 'Mentions']
-            
-            # Перша поява
-            if 'scan_result_id' in df_sources.columns:
-                # Оскільки ми вже джойнили дату в Tab 1, тут може знадобитися повторний мердж
-                # Але для простоти зробимо групування тут, якщо 'created_at' недоступний
-                pass 
-
-            # Тип (Офіційний / Зовнішній)
-            def get_type(d):
+            ranking_data = []
+            for domain, group in grouped:
+                # Визначаємо тип
+                dtype = "Зовнішній"
                 for od in OFFICIAL_DOMAINS:
-                    if od in str(d).lower(): return "Офіційний"
-                return "Зовнішній"
+                    if od in domain.lower():
+                        dtype = "Офіційний"
+                        break
+                
+                # Форматуємо рядок (Total + P/G/Gem)
+                mentions_str = format_breakdown(group)
+                # Для сортування беремо чисте число
+                total_count = group['mention_count'].sum()
+                
+                ranking_data.append({
+                    "Домен": domain,
+                    "Тип": dtype,
+                    "Кількість згадок (розподіл)": mentions_str,
+                    "_sort_val": total_count
+                })
             
-            domain_stats['Type'] = domain_stats['Domain'].apply(get_type)
+            # Створюємо DF і сортуємо
+            df_rank = pd.DataFrame(ranking_data).sort_values('_sort_val', ascending=False)
             
-            # Нумерація
-            domain_stats.index = domain_stats.index + 1
+            # Нумерація з 1
+            df_rank.reset_index(drop=True, inplace=True)
+            df_rank.index = df_rank.index + 1
             
             st.dataframe(
-                domain_stats,
+                df_rank[["Домен", "Тип", "Кількість згадок (розподіл)"]],
+                use_container_width=True,
                 column_config={
-                    "Domain": "Домен",
-                    "Mentions": st.column_config.NumberColumn("Кількість згадок"),
-                    "Type": "Тип"
-                },
-                use_container_width=True
+                    "Кількість згадок (розподіл)": st.column_config.TextColumn("К-сть згадок (Всього | P, G, Gem)")
+                }
             )
         else:
             st.info("Немає даних.")
 
-    # --- TAB 3: ПОСИЛАННЯ ---
+    # --- TAB 3: ПОСИЛАННЯ (З РОЗПОДІЛОМ) ---
     with tab3:
         st.markdown("#### 🔗 Всі знайдені посилання")
         if not df_sources.empty:
             f1, f2 = st.columns(2)
-            with f1: f_type = st.selectbox("Фільтр типу:", ["Всі", "Офіційні", "Зовнішні"], key="f_type_src")
-            with f2: f_txt = st.text_input("Пошук URL:", key="f_txt_src")
+            with f1: f_type = st.selectbox("Фільтр типу:", ["Всі", "Офіційні", "Зовнішні"], key="src_ft")
+            with f2: f_txt = st.text_input("Пошук URL:", key="src_st")
             
-            # Динамічний статус для фільтру
-            def check_official(u):
-                for od in OFFICIAL_DOMAINS:
-                    if od in str(u).lower(): return True
-                return False
-            
-            df_sources['is_off'] = df_sources['url'].apply(check_official)
-            
+            # Фільтрація
             df_show = df_sources.copy()
-            if f_type == "Офіційні": df_show = df_show[df_show['is_off'] == True]
-            elif f_type == "Зовнішні": df_show = df_show[df_show['is_off'] == False]
-            
+            if f_type == "Офіційні": df_show = df_show[df_show['is_official_dynamic'] == True]
+            elif f_type == "Зовнішні": df_show = df_show[df_show['is_official_dynamic'] == False]
             if f_txt: df_show = df_show[df_show['url'].astype(str).str.contains(f_txt, case=False)]
             
-            st.dataframe(
-                df_show[['url', 'domain', 'mention_count']],
-                column_config={
-                    "url": st.column_config.LinkColumn("URL"),
-                    "mention_count": "Згадок"
-                },
-                use_container_width=True, hide_index=True
-            )
+            if not df_show.empty:
+                # Групуємо по URL (щоб об'єднати згадки одного URL від різних LLM)
+                grouped_url = df_show.groupby(['url', 'domain', 'is_official_dynamic'])
+                
+                links_data = []
+                for (url, dom, is_off), group in grouped_url:
+                    mentions_str = format_breakdown(group)
+                    total_count = group['mention_count'].sum()
+                    
+                    links_data.append({
+                        "url": url,
+                        "domain": dom,
+                        "type": "Офіційні" if is_off else "Зовнішні",
+                        "mentions": mentions_str,
+                        "_sort": total_count
+                    })
+                
+                df_links_final = pd.DataFrame(links_data).sort_values('_sort', ascending=False)
+                df_links_final.reset_index(drop=True, inplace=True)
+                df_links_final.index = df_links_final.index + 1
+
+                st.dataframe(
+                    df_links_final[["url", "domain", "type", "mentions"]],
+                    column_config={
+                        "url": st.column_config.LinkColumn("Посилання"),
+                        "domain": "Домен",
+                        "type": "Тип",
+                        "mentions": st.column_config.TextColumn("Згадок (Всього | P, G, Gem)")
+                    },
+                    use_container_width=True
+                )
+            else:
+                st.info("Нічого не знайдено за фільтрами.")
         else:
             st.info("Список порожній.")
 
