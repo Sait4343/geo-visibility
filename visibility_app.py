@@ -1090,7 +1090,10 @@ def show_competitors_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: FINAL (METRICS BY LLM + KEYWORD LIST + COMPETITORS + TRENDS).
+    ВЕРСІЯ: UI FIXES (FONTS, NUMBERING, BUTTONS).
+    1. Заголовки: Менший шрифт (h3).
+    2. Таблиця: Зелена нумерація, звичайний шрифт тексту запиту.
+    3. Кнопка: Перехід до деталей працює коректно.
     """
     import pandas as pd
     import plotly.express as px
@@ -1114,6 +1117,43 @@ def show_dashboard():
         st.info("Спочатку створіть проект.")
         return
 
+    # --- CSS СТИЛІ ---
+    st.markdown("""
+    <style>
+        /* Стиль для заголовків (як на інших сторінках) */
+        h3 {
+            font-size: 1.25rem !important;
+            font-weight: 600 !important;
+            padding-top: 10px !important;
+            padding-bottom: 5px !important;
+        }
+        /* Зелена нумерація */
+        .green-number {
+            background-color: #00C896;
+            color: white;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        /* Стилі для рядка таблиці */
+        .kw-row-text {
+            font-size: 16px;
+            color: #31333F;
+            font-weight: 400; /* Звичайний шрифт */
+        }
+        .trend-up { color: #00C896; font-size: 12px; font-weight: bold; }
+        .trend-down { color: #FF4B4B; font-size: 12px; font-weight: bold; }
+        .trend-flat { color: #ccc; font-size: 12px; }
+        .comp-tag { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #555; }
+        .source-tag { font-size: 12px; color: #666; }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.title(f"📊 Дашборд: {proj.get('brand_name')}")
 
     # ==============================================================================
@@ -1121,11 +1161,11 @@ def show_dashboard():
     # ==============================================================================
     with st.spinner("Оновлення аналітики..."):
         try:
-            # 1. Запити (Keywords)
+            # 1. Запити
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             keywords_df = pd.DataFrame(kw_resp.data) if kw_resp.data else pd.DataFrame()
             
-            # 2. Результати сканувань (Scans)
+            # 2. Результати
             scan_resp = supabase.table("scan_results")\
                 .select("id, provider, created_at, keyword_id")\
                 .eq("project_id", proj["id"])\
@@ -1133,13 +1173,12 @@ def show_dashboard():
                 .execute()
             scans_df = pd.DataFrame(scan_resp.data) if scan_resp.data else pd.DataFrame()
             
-            # 3. Згадки (Mentions) та Джерела (Sources)
+            # 3. Згадки та Джерела
             mentions_df = pd.DataFrame()
             sources_df = pd.DataFrame()
             
             if not scans_df.empty:
                 scan_ids = scans_df['id'].tolist()
-                # Batch requests if needed (simplified here)
                 m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
                 if m_resp.data: mentions_df = pd.DataFrame(m_resp.data)
                 
@@ -1157,8 +1196,6 @@ def show_dashboard():
     # ==============================================================================
     # 2. ОБРОБКА ДАНИХ
     # ==============================================================================
-    
-    # Нормалізація назв LLM
     def norm_provider(p):
         p = str(p).lower()
         if 'perplexity' in p: return 'Perplexity'
@@ -1169,54 +1206,41 @@ def show_dashboard():
     scans_df['provider_ui'] = scans_df['provider'].apply(norm_provider)
     scans_df['created_at'] = pd.to_datetime(scans_df['created_at'])
 
-    # Smart Search для "Мого Бренду" (якщо is_my_brand не проставлено)
     target_brand = proj.get('brand_name', '').lower().strip()
-    target_part = target_brand.split(' ')[0] # Перше слово
+    target_part = target_brand.split(' ')[0]
     
-    # Об'єднуємо згадки зі сканами
     df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
     
-    # Логіка визначення "свого" бренду
     df_full['is_target'] = df_full.apply(
         lambda x: x.get('is_my_brand', False) or (target_part in str(x.get('brand_name', '')).lower()), axis=1
     )
 
     # ==============================================================================
-    # 3. БЛОК 1: МЕТРИКИ ПО LLM (КАРТКИ)
+    # 3. МЕТРИКИ ПО LLM
     # ==============================================================================
-    st.subheader("🌐 Огляд по моделях")
+    st.markdown("### 🌐 Огляд по моделях")
     
-    # Функція для розрахунку середніх показників за останнім зрізом
     def get_llm_stats(df_sub):
         if df_sub.empty: return 0, 0, "—"
-        
-        # Беремо тільки останні скани для кожного ключового слова в рамках цієї моделі
         latest_idx = df_sub.groupby('keyword_id')['created_at'].idxmax()
         latest_data = df_sub.loc[latest_idx]
-        
-        # Але нам потрібні всі згадки для цих сканів, тому фільтруємо по scan_result_id
         latest_scan_ids = latest_data['id'].unique()
         current_mentions = df_full[df_full['scan_result_id'].isin(latest_scan_ids)]
         
-        # Рахуємо SOV
         my = current_mentions[current_mentions['is_target'] == True]['mention_count'].sum()
         total = current_mentions['mention_count'].sum()
         sov = (my / total * 100) if total > 0 else 0
         
-        # Рахуємо Rank
         my_ranks = current_mentions[(current_mentions['is_target'] == True) & (current_mentions['rank_position'] > 0)]['rank_position']
         rank = my_ranks.mean() if not my_ranks.empty else 0
         
-        # Sentiment
         my_sent = current_mentions[current_mentions['is_target'] == True]['sentiment_score']
         if not my_sent.empty:
             pos = len(my_sent[my_sent == 'Позитивний'])
             neg = len(my_sent[my_sent == 'Негативний'])
-            # Проста евристика
             sent_label = "Позитивний" if pos > neg else "Негативний" if neg > pos else "Нейтральний"
         else:
             sent_label = "Не знайдено"
-            
         return sov, rank, sent_label
 
     cols = st.columns(3)
@@ -1224,7 +1248,6 @@ def show_dashboard():
     
     for i, model in enumerate(models):
         with cols[i]:
-            # Фільтруємо скани цієї моделі
             model_scans = scans_df[scans_df['provider_ui'] == model]
             sov, rank, sent = get_llm_stats(model_scans)
             
@@ -1236,25 +1259,21 @@ def show_dashboard():
                 
                 s_color = "#00C896" if sent == "Позитивний" else "#FF4B4B" if sent == "Негативний" else "#FFCE56"
                 if sent == "Не знайдено": s_color = "#999"
-                
                 st.markdown(f"Тональність: <span style='color:{s_color}; font-weight:bold'>{sent}</span>", unsafe_allow_html=True)
 
     # ==============================================================================
-    # 4. БЛОК 2: ГРАФІК ДИНАМІКИ
+    # 4. ГРАФІК
     # ==============================================================================
     st.write("")
-    st.subheader("📈 Динаміка бренду (SOV)")
+    st.markdown("### 📈 Динаміка бренду (SOV)")
     
-    # Агрегація по днях
     df_full['date_day'] = df_full['created_at'].dt.floor('D')
-    
     daily_stats = df_full.groupby(['date_day', 'provider_ui']).apply(
         lambda x: pd.Series({
             'total': x['mention_count'].sum(),
             'my': x[x['is_target'] == True]['mention_count'].sum()
         })
     ).reset_index()
-    
     daily_stats['sov'] = (daily_stats['my'] / daily_stats['total'] * 100).fillna(0)
     
     if not daily_stats.empty:
@@ -1268,26 +1287,13 @@ def show_dashboard():
         st.plotly_chart(fig, use_container_width=True)
 
     # ==============================================================================
-    # 5. БЛОК 3: СПИСОК ЗАПИТІВ (ДЕТАЛІЗАЦІЯ)
+    # 5. ДЕТАЛІЗАЦІЯ (ТАБЛИЦЯ)
     # ==============================================================================
     st.write("")
-    st.subheader("📋 Детальна статистика по запитах")
+    st.markdown("### 📋 Детальна статистика по запитах")
     
-    # CSS для таблиці
-    st.markdown("""
-    <style>
-        .kw-row { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
-        .trend-up { color: #00C896; font-size: 12px; font-weight: bold; }
-        .trend-down { color: #FF4B4B; font-size: 12px; font-weight: bold; }
-        .trend-flat { color: #ccc; font-size: 12px; }
-        .comp-tag { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: #555; }
-        .source-tag { font-size: 12px; color: #666; }
-    </style>
-    """, unsafe_allow_html=True)
-
     # Заголовки таблиці
     cols = st.columns([0.5, 3, 1.5, 1.5, 2.5, 1])
-    cols[0].markdown("#")
     cols[1].markdown("**Запит**")
     cols[2].markdown("**SOV**")
     cols[3].markdown("**Позиція**")
@@ -1296,46 +1302,29 @@ def show_dashboard():
     
     st.markdown("---")
 
-    # Ітеруємося по унікальних запитах
     unique_kws = keywords_df.to_dict('records')
     
     for idx, kw in enumerate(unique_kws, 1):
         kw_id = kw['id']
         kw_text = kw['keyword_text']
-        
-        # Дані по цьому запиту
         kw_data = df_full[df_full['keyword_id'] == kw_id]
         
         if kw_data.empty:
-            # Якщо немає даних, показуємо пустий рядок
-            c = st.columns([0.5, 3, 1.5, 1.5, 2.5, 1])
-            c[0].write(f"{idx}")
-            c[1].write(kw_text)
-            c[2].caption("-")
-            c[3].caption("-")
-            c[4].caption("-")
             continue
 
-        # Сортуємо скани
         sorted_scans = kw_data.sort_values('created_at', ascending=False)
         latest_date = sorted_scans['created_at'].max()
         
-        # Поточний зріз (останні 24 години або останній скан)
         current_slice = sorted_scans[sorted_scans['created_at'] >= (latest_date - timedelta(hours=12))]
-        
-        # Попередній зріз (для тренду)
         prev_slice = sorted_scans[sorted_scans['created_at'] < (latest_date - timedelta(hours=12))]
         if prev_slice.empty and len(sorted_scans) > 1:
-             # Якщо немає старих, беремо просто наступний за датою
              prev_slice = sorted_scans.iloc[1:2]
 
-        # Функція розрахунку показників для рядка
         def calc_row_stats(df_in):
             if df_in.empty: return 0, 0
             my = df_in[df_in['is_target'] == True]['mention_count'].sum()
             tot = df_in['mention_count'].sum()
             sov = (my / tot * 100) if tot > 0 else 0
-            
             ranks = df_in[(df_in['is_target'] == True) & (df_in['rank_position'] > 0)]['rank_position']
             rank = ranks.mean() if not ranks.empty else 0
             return sov, rank
@@ -1343,32 +1332,28 @@ def show_dashboard():
         cur_sov, cur_rank = calc_row_stats(current_slice)
         prev_sov, prev_rank = calc_row_stats(prev_slice)
         
-        # Тренди (Стрілочки)
+        # Тренди
         sov_diff = cur_sov - prev_sov
-        if sov_diff > 0.1: sov_arrow = "▲"
-        elif sov_diff < -0.1: sov_arrow = "▼"
-        else: sov_arrow = "●"
-        sov_class = "trend-up" if sov_diff > 0 else "trend-down" if sov_diff < 0 else "trend-flat"
+        if sov_diff > 0.1: sov_arrow = "▲"; sov_class = "trend-up"
+        elif sov_diff < -0.1: sov_arrow = "▼"; sov_class = "trend-down"
+        else: sov_arrow = "●"; sov_class = "trend-flat"
         
-        rank_diff = cur_rank - prev_rank # Менше ранк = краще
+        rank_diff = cur_rank - prev_rank
         if prev_rank == 0: rank_arrow = "●"; rank_class = "trend-flat"
-        elif cur_rank == 0: rank_arrow = "▼"; rank_class = "trend-down" # Зникли з видачі
-        elif rank_diff < -0.1: rank_arrow = "▲"; rank_class = "trend-up" # Покращилась (число зменшилось)
-        elif rank_diff > 0.1: rank_arrow = "▼"; rank_class = "trend-down" # Погіршилась
+        elif cur_rank == 0: rank_arrow = "▼"; rank_class = "trend-down"
+        elif rank_diff < -0.1: rank_arrow = "▲"; rank_class = "trend-up"
+        elif rank_diff > 0.1: rank_arrow = "▼"; rank_class = "trend-down"
         else: rank_arrow = "●"; rank_class = "trend-flat"
 
-        # Конкурент (хто не я і має найбільше згадок)
+        # Конкурент
         competitors = current_slice[current_slice['is_target'] == False]
         if not competitors.empty:
             top_comp_name = competitors.groupby('brand_name')['mention_count'].sum().idxmax()
             top_comp_val = competitors.groupby('brand_name')['mention_count'].sum().max()
         else:
-            top_comp_name = "Немає"
-            top_comp_val = 0
+            top_comp_name = "Немає"; top_comp_val = 0
             
-        # Джерела (Official Sources) для цього запиту
-        # Поєднуємо зі sources_df по scan_result_id
-        # (Увага: це приблизна оцінка, бо sources_df вже завантажений глобально)
+        # Джерела (Official Sources Count)
         scan_ids_kw = current_slice['scan_result_id'].unique()
         if not sources_df.empty:
             kw_sources = sources_df[sources_df['scan_result_id'].isin(scan_ids_kw)]
@@ -1379,24 +1364,28 @@ def show_dashboard():
         # ВИВІД РЯДКА
         with st.container():
             c = st.columns([0.5, 3, 1.5, 1.5, 2.5, 1])
-            c[0].write(f"{idx}")
-            c[1].markdown(f"**{kw_text}**")
+            
+            # Нумерація (зелена кулька)
+            c[0].markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
+            
+            # Текст запиту (звичайний шрифт)
+            c[1].markdown(f"<span class='kw-row-text'>{kw_text}</span>", unsafe_allow_html=True)
             
             c[2].markdown(f"{cur_sov:.1f}% <span class='{sov_class}'>{sov_arrow}</span>", unsafe_allow_html=True)
             c[3].markdown(f"#{cur_rank:.1f} <span class='{rank_class}'>{rank_arrow}</span>" if cur_rank > 0 else "-", unsafe_allow_html=True)
             
-            # Конкурент + Джерела
             c[4].markdown(f"""
             <span class='comp-tag'>VS {top_comp_name} ({top_comp_val})</span><br>
             <span class='source-tag'>🔗 Офіц. джерел: {off_sources_count}</span>
             """, unsafe_allow_html=True)
             
+            # Кнопка Дії
             if c[5].button("➡️", key=f"go_{kw_id}"):
                 st.session_state["focus_keyword_id"] = kw_id
                 st.rerun()
         
-        st.divider()
-
+        st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
+        
 # =========================
 # 7. КЕРУВАННЯ ЗАПИТАМИ
 # =========================
