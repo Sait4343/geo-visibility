@@ -601,37 +601,38 @@ def onboarding_wizard():
 
     with st.container(border=True):
 
-        # ========================================================
-        # STEP 2 – ВВІД ДАНИХ
+       # ========================================================
+        # STEP 2 – дані про бренд (ВВІД)
         # ========================================================
         if step == 2:
             st.subheader("Крок 1: Введіть дані про ваш бренд")
 
             c1, c2 = st.columns(2)
             with c1:
-                brand = st.text_input("Назва бренду", placeholder="Monobank", value=st.session_state.get("temp_brand", ""))
-                industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг", value=st.session_state.get("temp_industry", ""))
+                brand = st.text_input("Назва бренду", placeholder="Brand", value=st.session_state.get("temp_brand", ""))
+                industry = st.text_input("Галузь бренду / ніша", placeholder="Industry", value=st.session_state.get("temp_industry", ""))
                 
             with c2:
-                domain = st.text_input("Домен (офіційний сайт)", placeholder="monobank.ua", value=st.session_state.get("temp_domain", ""))
+                domain = st.text_input("Домен (офіційний сайт)", placeholder="domain.ua", value=st.session_state.get("temp_domain", ""))
                 st.markdown("<p style='color: #6c5ce7; margin-top: 10px;'>📍 **Регіон:** UA (Фіксовано)</p>", unsafe_allow_html=True)
             
             products = st.text_area(
-                "Продукти / Послуги (перелічіть через кому або у стовпчик)", 
-                help="На основі цього буде сформовано запити.",
+                "Продукти / Послуги (перерахуйте через кому або у стовпчик)", 
+                help="На основі цього буде сформовано 10 запитів.",
                 value=st.session_state.get("temp_products", "")
             )
 
             if st.button("Згенерувати запити"):
+                # 🔥 ПЕРЕВІРКА: Всі поля мають бути заповнені
                 if brand and domain and industry and products:
+                    # 1. Зберігаємо дані у тимчасовий стейт
                     st.session_state["temp_brand"] = brand
                     st.session_state["temp_domain"] = domain
                     st.session_state["temp_industry"] = industry
                     st.session_state["temp_products"] = products
                     st.session_state["temp_region"] = "UA"
 
-                    with st.spinner("Генеруємо релевантні запити через n8n AI Agent..."):
-                        # Тут викликається виправлена функція n8n_generate_prompts (з авторизацією)
+                    with st.spinner("Генеруємо релевантні запити через AI Agent..."):
                         prompts = n8n_generate_prompts(brand, domain, industry, products)
                         
                         if prompts and len(prompts) > 0:
@@ -639,9 +640,9 @@ def onboarding_wizard():
                             st.session_state["onboarding_step"] = 3
                             st.rerun()
                         else:
-                            st.error("AI не повернув результатів. Спробуйте змінити опис продуктів.")
+                            st.error("AI не повернув результатів (або сталася помилка). Спробуйте змінити опис продуктів.")
                 else:
-                    st.warning("Будь ласка, заповніть всі 4 поля.")
+                    st.warning("⚠️ Будь ласка, заповніть всі 4 поля (Назва, Галузь, Домен, Продукти) перед продовженням.")
 
         # ========================================================
         # STEP 3 – ПЕРЕВІРКА ТА ЗАПУСК (LOOP FIX)
