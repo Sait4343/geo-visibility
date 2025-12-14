@@ -2506,18 +2506,18 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка джерел.
-    ВЕРСІЯ: DYNAMIC RECALCULATION + ALWAYS VISIBLE TABS.
-    1. Tabs: Відображаються завжди, щоб можна було додати домени до сканування.
-    2. Logic: Статус is_official перераховується "на льоту" на основі актуального списку.
-    3. UI: Покращене керування списком (Whitelist).
+    ВЕРСІЯ: RESTORED DESIGN + FULL RANKING.
+    1. Layout: Вкладки зверху, налаштування знизу (як було).
+    2. Ranking: Всі домени, дата першої появи, к-сть запитів, нумерація.
+    3. Logic: Динамічний перерахунок 'is_official' збережено.
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
     import time
     from urllib.parse import urlparse
+    from datetime import datetime
 
-    # Перевірка підключення
     if 'supabase' not in globals():
         if 'supabase' in st.session_state:
             supabase = st.session_state['supabase']
@@ -2535,9 +2535,10 @@ def show_sources_page():
     st.title("🔗 Джерела")
 
     # ==============================================================================
-    # 1. ОТРИМАННЯ ТА РЕДАГУВАННЯ WHITELIST (ОФІЦІЙНІ ДОМЕНИ)
+    # 1. ОТРИМАННЯ ДАНИХ (WHITELIST + SOURCES)
     # ==============================================================================
-    # Отримуємо актуальний список з БД
+    
+    # А. Whitelist
     try:
         project_data = supabase.table("projects").select("official_assets").eq("id", proj["id"]).execute()
         current_assets = project_data.data[0].get("official_assets", []) if project_data.data else []
@@ -2545,85 +2546,63 @@ def show_sources_page():
     except Exception as e:
         st.error(f"Помилка завантаження налаштувань: {e}")
         current_assets = []
+    
+    OFFICIAL_DOMAINS = [d.lower().strip() for d in current_assets if d.strip()]
 
-    # Конвертуємо в текст для відображення в text_area (по одному в рядок)
-    text_area_value = "\n".join(current_assets)
-
-    with st.expander("⚙️ Налаштування офіційних ресурсів (Whitelist)", expanded=True):
-        st.markdown("Введіть домени, які вважаються офіційними (кожен з нового рядка). Графіки оновляться автоматично.")
-        
-        new_assets_text = st.text_area(
-            "Список доменів (наприклад: skyup.aero, instagram.com/skyup)", 
-            value=text_area_value, 
-            height=150
-        )
-
-        if st.button("💾 Зберегти список", type="primary"):
-            # Чистимо список: розбиваємо по рядках, видаляємо пробіли, ігноруємо пусті
-            updated_list = [line.strip() for line in new_assets_text.split('\n') if line.strip()]
-            
-            try:
-                supabase.table("projects").update({"official_assets": updated_list}).eq("id", proj["id"]).execute()
-                st.success("Список оновлено! Графіки перераховуються...")
-                time.sleep(1)
-                st.rerun()
-            except Exception as e:
-                st.error(f"Помилка збереження: {e}")
-
-    # Оновлюємо змінну для подальших розрахунків
-    OFFICIAL_DOMAINS = [d.lower().strip() for d in new_assets_text.split('\n') if d.strip()]
-
-    # ==============================================================================
-    # 2. ОТРИМАННЯ ДАНИХ (SOURCES)
-    # ==============================================================================
-    # Отримуємо ID всіх сканувань проекту
+    # Б. Sources + Scan Info
     try:
-        scan_ids_resp = supabase.table("scan_results").select("id").eq("project_id", proj["id"]).execute()
-        scan_ids = [item['id'] for item in scan_ids_resp.data] if scan_ids_resp.data else []
+        # Отримуємо scan_results для дат та keyword_id
+        scan_resp = supabase.table("scan_results")\
+            .select("id, created_at, keyword_id")\
+            .eq("project_id", proj["id"])\
+            .execute()
+        
+        scan_map = {} # id -> {date, keyword_id}
+        scan_ids = []
+        if scan_resp.data:
+            for s in scan_resp.data:
+                scan_ids.append(s['id'])
+                scan_map[s['id']] = {
+                    'date': s['created_at'], 
+                    'kw_id': s['keyword_id']
+                }
         
         df_sources = pd.DataFrame()
-        
         if scan_ids:
-            # Отримуємо джерела
             sources_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
             if sources_resp.data:
                 df_sources = pd.DataFrame(sources_resp.data)
+                
+                # Збагачуємо даними про скан
+                df_sources['scan_date'] = df_sources['scan_result_id'].map(lambda x: scan_map.get(x, {}).get('date'))
+                df_sources['keyword_id'] = df_sources['scan_result_id'].map(lambda x: scan_map.get(x, {}).get('kw_id'))
+                
+                # Нормалізація доменів
+                if 'domain' not in df_sources.columns:
+                    df_sources['domain'] = df_sources['url'].apply(lambda x: urlparse(x).netloc if x else "unknown")
+                
+                # Динамічний статус
+                def check_official_dynamic(url):
+                    if not url: return False
+                    url_str = str(url).lower()
+                    for domain in OFFICIAL_DOMAINS:
+                        if domain in url_str: return True
+                    return False
+
+                df_sources['is_official_dynamic'] = df_sources['url'].apply(check_official_dynamic)
+                df_sources['source_type'] = df_sources['is_official_dynamic'].apply(lambda x: "Офіційні" if x else "Зовнішні")
+
     except Exception as e:
         st.error(f"Помилка завантаження джерел: {e}")
         df_sources = pd.DataFrame()
 
     # ==============================================================================
-    # 3. ДИНАМІЧНИЙ ПЕРЕРАХУНОК (RECALCULATION LOGIC)
-    # ==============================================================================
-    # Навіть якщо даних немає, ми створюємо структуру, щоб показати вкладки
-    
-    if not df_sources.empty:
-        # Функція перевірки (перевизначає те, що в базі)
-        def check_official_dynamic(url):
-            if not url: return False
-            url_str = str(url).lower()
-            for domain in OFFICIAL_DOMAINS:
-                if domain in url_str:
-                    return True
-            return False
-
-        # Застосовуємо логіку до датафрейму
-        df_sources['is_official_dynamic'] = df_sources['url'].apply(check_official_dynamic)
-        
-        # Визначаємо тип для графіків
-        df_sources['source_type'] = df_sources['is_official_dynamic'].apply(lambda x: "Офіційні" if x else "Зовнішні")
-        
-        # Нормалізація доменів (якщо немає в базі)
-        if 'domain' not in df_sources.columns:
-            df_sources['domain'] = df_sources['url'].apply(lambda x: urlparse(x).netloc if x else "unknown")
-
-    # ==============================================================================
-    # 4. ВІДОБРАЖЕННЯ В ЗАВЖДИ ВИДИМИХ ВКЛАДКАХ
+    # 2. ВКЛАДКИ (TABS)
     # ==============================================================================
     
     tab1, tab2, tab3 = st.tabs(["📊 Офіційні ресурси бренду", "🌐 Ренкінг доменів", "🔗 Посилання"])
 
-    # --- TAB 1: АНАЛІЗ ОХОПЛЕННЯ ---
+    # --- TAB 1: АНАЛІЗ ---
     with tab1:
         st.markdown("#### 📊 Аналіз охоплення офіційних ресурсів")
         
@@ -2633,30 +2612,24 @@ def show_sources_page():
             external_count = total_links - official_count
             
             c_chart, c_stats = st.columns([2, 1])
-            
             with c_chart:
-                # Графік
                 counts_df = pd.DataFrame({
                     "Тип": ["Офіційні", "Зовнішні"],
                     "Кількість": [official_count, external_count]
                 })
-                
-                # Якщо все по нулях, показуємо заглушку, інакше графік
                 if total_links > 0:
                     fig = px.pie(
-                        counts_df, values="Кількість", names="Тип", 
-                        hole=0.5,
-                        color="Тип",
-                        color_discrete_map={"Офіційні": "#00C896", "Зовнішні": "#E0E0E0"}
+                        counts_df, values="Кількість", names="Тип", hole=0.5,
+                        color="Тип", color_discrete_map={"Офіційні": "#00C896", "Зовнішні": "#E0E0E0"}
                     )
                     fig.update_traces(textposition='inside', textinfo='percent+label')
                     fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=300, showlegend=True)
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("Дані є, але їх кількість 0 (дивно).")
+                    st.info("Немає даних.")
 
             with c_stats:
-                st.write("**Статистика (динамічна):**")
+                st.write("**Статистика:**")
                 st.markdown(f"""
                 <div style="padding:15px; border:1px solid #eee; border-radius:10px; margin-bottom:10px;">
                     <div style="color:#888; font-size:12px;">ВСЬОГО ПОСИЛАНЬ</div>
@@ -2668,73 +2641,107 @@ def show_sources_page():
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            st.info("ℹ️ Поки немає даних сканування. Додайте домени вище та запустіть аналіз.")
+            st.info("ℹ️ Дані відсутні.")
 
-    # --- TAB 2: РЕНКІНГ ДОМЕНІВ ---
+    # --- TAB 2: РЕНКІНГ (ВСІ ДОМЕНИ + ДЕТАЛІ) ---
     with tab2:
-        st.markdown("#### 🏆 Топ доменів, що згадуються")
+        st.markdown("#### 🏆 Ренкінг всіх доменів")
         
         if not df_sources.empty:
-            # Групуємо
-            domain_counts = df_sources['domain'].value_counts().reset_index()
-            domain_counts.columns = ['Domain', 'Count']
+            # Групуємо дані
+            # 1. Кількість згадок
+            domain_stats = df_sources['domain'].value_counts().reset_index()
+            domain_stats.columns = ['Domain', 'Mentions']
             
-            # Позначаємо свої
-            def is_my_domain(d):
+            # 2. Перша поява (Min Date)
+            first_seen = df_sources.groupby('domain')['scan_date'].min().reset_index()
+            
+            # 3. Кількість унікальних запитів (Unique Keyword IDs)
+            unique_kws = df_sources.groupby('domain')['keyword_id'].nunique().reset_index()
+            unique_kws.columns = ['domain', 'Unique Keywords']
+            
+            # Merge all
+            ranking_df = pd.merge(domain_stats, first_seen, left_on='Domain', right_on='domain', how='left')
+            ranking_df = pd.merge(ranking_df, unique_kws, on='domain', how='left')
+            
+            # Форматуємо дату
+            def format_date(d):
+                try:
+                    return pd.to_datetime(d).strftime("%Y-%m-%d %H:%M")
+                except: return "-"
+            ranking_df['First Seen'] = ranking_df['scan_date'].apply(format_date)
+            
+            # Визначаємо тип
+            def get_type(d):
                 for od in OFFICIAL_DOMAINS:
-                    if od in d: return "Офіційний"
+                    if od in str(d).lower(): return "Офіційний"
                 return "Зовнішній"
-                
-            domain_counts['Type'] = domain_counts['Domain'].apply(is_my_domain)
+            ranking_df['Type'] = ranking_df['Domain'].apply(get_type)
             
-            fig_bar = px.bar(
-                domain_counts.head(15), 
-                x='Count', y='Domain', 
-                orientation='h',
-                color='Type',
-                color_discrete_map={"Офіційний": "#00C896", "Зовнішній": "#6366f1"},
-                title="Top 15 Доменів"
+            # Фінальна таблиця
+            final_table = ranking_df[['Domain', 'Type', 'Mentions', 'Unique Keywords', 'First Seen']]
+            
+            # Додаємо індекс + 1 для нумерації
+            final_table.index = final_table.index + 1
+            
+            st.dataframe(
+                final_table,
+                column_config={
+                    "Domain": "Домен",
+                    "Type": "Тип",
+                    "Mentions": st.column_config.NumberColumn("Всього згадок"),
+                    "Unique Keywords": st.column_config.NumberColumn("У скількох запитах"),
+                    "First Seen": "Вперше знайдено"
+                },
+                use_container_width=True
             )
-            fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig_bar, use_container_width=True)
         else:
-            st.info("ℹ️ Немає даних для побудови ренкінгу.")
+            st.info("ℹ️ Немає даних.")
 
     # --- TAB 3: ПОСИЛАННЯ ---
     with tab3:
-        st.markdown("#### 🔗 Список всіх знайдених посилань")
-        
+        st.markdown("#### 🔗 Всі знайдені посилання")
         if not df_sources.empty:
-            # Фільтри
-            filter_col1, filter_col2 = st.columns(2)
-            with filter_col1:
-                filter_type = st.selectbox("Фільтр типу:", ["Всі", "Офіційні", "Зовнішні"])
-            with filter_col2:
-                search_text = st.text_input("Пошук по URL:", "")
-
-            # Фільтрація
-            df_show = df_sources.copy()
-            if filter_type == "Офіційні":
-                df_show = df_show[df_show['is_official_dynamic'] == True]
-            elif filter_type == "Зовнішні":
-                df_show = df_show[df_show['is_official_dynamic'] == False]
+            f1, f2 = st.columns(2)
+            with f1: f_type = st.selectbox("Фільтр типу:", ["Всі", "Офіційні", "Зовнішні"])
+            with f2: f_txt = st.text_input("Пошук URL:", "")
             
-            if search_text:
-                df_show = df_show[df_show['url'].astype(str).str.contains(search_text, case=False)]
-
+            df_show = df_sources.copy()
+            if f_type == "Офіційні": df_show = df_show[df_show['is_official_dynamic'] == True]
+            elif f_type == "Зовнішні": df_show = df_show[df_show['is_official_dynamic'] == False]
+            if f_txt: df_show = df_show[df_show['url'].str.contains(f_txt, case=False)]
+            
             st.dataframe(
                 df_show[['url', 'domain', 'source_type', 'mention_count']],
                 column_config={
-                    "url": st.column_config.LinkColumn("Посилання"),
-                    "domain": "Домен",
-                    "source_type": "Тип",
-                    "mention_count": st.column_config.NumberColumn("Згадок")
+                    "url": st.column_config.LinkColumn("URL"),
+                    "mention_count": "Згадок"
                 },
-                use_container_width=True,
-                hide_index=True
+                use_container_width=True, hide_index=True
             )
         else:
-            st.info("ℹ️ Список посилань порожній.")
+            st.info("Список порожній.")
+
+    # ==============================================================================
+    # 3. НАЛАШТУВАННЯ (ЗНИЗУ)
+    # ==============================================================================
+    st.divider()
+    with st.expander("⚙️ Керування списком офіційних ресурсів (Whitelist)", expanded=False):
+        st.info("Додайте домени (наприклад: site.com), щоб вони вважалися офіційними. Графіки перерахуються автоматично.")
+        
+        # Поточне значення для редагування
+        current_text = "\n".join(current_assets)
+        new_text = st.text_area("Список доменів (один на рядок):", value=current_text, height=150)
+        
+        if st.button("💾 Зберегти Whitelist", type="primary"):
+            updated_list = [line.strip() for line in new_text.split('\n') if line.strip()]
+            try:
+                supabase.table("projects").update({"official_assets": updated_list}).eq("id", proj["id"]).execute()
+                st.success("Оновлено! Перезавантаження...")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Помилка: {e}")
 
 
 def sidebar_menu():
