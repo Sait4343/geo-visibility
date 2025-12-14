@@ -1438,7 +1438,7 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL STABLE (NO DELETE BTN, FIXED METRICS & LINKS).
+    ВЕРСІЯ: FINAL STABLE (METRICS AGGREGATION FIXED).
     """
     import pandas as pd
     import plotly.express as px
@@ -1479,14 +1479,12 @@ def show_keyword_details(kw_id):
     def tooltip(text):
         return f'<span title="{text}" style="cursor:help; font-size:14px; color:#333; margin-left:4px;">ℹ️</span>'
 
-    # 🔥 FIX: Нормалізація URL (видаляє Markdown артефакти)
+    # 🔥 FIX: Очистка посилань від Markdown артефактів
     def normalize_url(u):
-        if not u: return ""
         u = str(u).strip()
-        # Видаляємо все після закриваючої дужки Markdown ')' або ']'
+        # Відрізаємо все, що йде після ']' або ')'
         u = re.split(r'[)\]]', u)[0]
-        if not u.startswith(('http://', 'https://')): 
-            return f"https://{u}"
+        if not u.startswith(('http://', 'https://')): return f"https://{u}"
         return u
 
     # 1. ОТРИМАННЯ ДАНИХ ЗАПИТУ
@@ -1502,9 +1500,9 @@ def show_keyword_details(kw_id):
         keyword_text = keyword_record["keyword_text"]
         project_id = keyword_record["project_id"]
         
-        # Отримуємо назву бренду для агрегації
+        # Назва бренду для пошуку (lowercase)
         proj = st.session_state.get("current_project", {})
-        target_brand_name = proj.get("brand_name", "").strip().lower()
+        target_brand_name = proj.get("brand_name", "").strip()
         
     except Exception as e:
         st.error(f"Помилка БД: {e}")
@@ -1599,13 +1597,14 @@ def show_keyword_details(kw_id):
         df_scans = pd.DataFrame(scans_data)
         
         if not df_scans.empty:
-            # Перейменовуємо ID в scan_id
+            # 🔥 ВАЖЛИВО: Перейменовуємо ID в scan_id
             df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
             
             # --- 🕒 TIMEZONE FIX (Kyiv) ---
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
             if df_scans['created_at'].dt.tz is None:
                 df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
+            
             df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
             df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
             
@@ -1628,18 +1627,18 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # 🔥 FIX: Нормалізація та визначення "Мого Бренду" (Агрегація)
-        if not df_mentions.empty:
-            # Створюємо маску для нашого бренду (включаючи дублікати)
-            # 1. За прапорцем is_my_brand
-            mask_flag = (df_mentions['is_my_brand'] == True)
-            # 2. За назвою (якщо прапорець не спрацював або для агрегації)
-            if target_brand_name:
-                mask_name = df_mentions['brand_name'].astype(str).str.lower().str.contains(target_brand_name)
-                df_mentions['is_real_target'] = mask_flag | mask_name
-            else:
-                df_mentions['is_real_target'] = mask_flag
-        
+        # 🔥 SMART MERGE: Пошук "Мого Бренду" за назвою (для виправлення дублів)
+        if not df_mentions.empty and target_brand_name:
+            df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
+            # Шукаємо згадки, що містять назву бренду (наприклад "skyup")
+            target_norm = target_brand_name.lower().split(' ')[0] # Беремо перше слово для надійності
+            mask_match = df_mentions['brand_clean'].str.contains(target_norm, na=False)
+            
+            # Помічаємо ці рядки як "цільові", навіть якщо is_my_brand=False
+            df_mentions['is_real_target'] = mask_match | (df_mentions['is_my_brand'] == True)
+        elif not df_mentions.empty:
+            df_mentions['is_real_target'] = df_mentions['is_my_brand']
+
         # C. Merge
         if not df_mentions.empty:
             df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
@@ -1658,10 +1657,9 @@ def show_keyword_details(kw_id):
 
     # 3. KPI (GLOBAL)
     if not df_mentions.empty:
-        # Фільтруємо ТІЛЬКИ наш бренд (всі рядки, що підходять)
+        # Дані ТІЛЬКИ нашого бренду (всі варіанти написання)
         my_brand_data = df_mentions[df_mentions['is_real_target'] == True]
         
-        # Сумарна кількість згадок (сумуємо всі дублікати, якщо є)
         total_my_mentions = my_brand_data['mention_count'].sum()
         unique_competitors = df_mentions[df_mentions['is_real_target'] == False]['brand_name'].nunique()
         
@@ -1669,28 +1667,28 @@ def show_keyword_details(kw_id):
         scan_totals = df_mentions.groupby('scan_result_id')['mention_count'].sum().reset_index()
         scan_totals.rename(columns={'mention_count': 'scan_total'}, inplace=True)
         
-        my_scan_totals = my_brand_data.groupby('scan_result_id')['mention_count'].sum().reset_index()
-        my_scan_totals.rename(columns={'mention_count': 'my_count'}, inplace=True)
+        my_mentions_per_scan = my_brand_data.groupby('scan_result_id')['mention_count'].sum().reset_index()
+        my_mentions_per_scan.rename(columns={'mention_count': 'my_count'}, inplace=True)
         
-        sov_df = pd.merge(scan_totals, my_scan_totals, on='scan_result_id', how='left')
+        sov_df = pd.merge(scan_totals, my_mentions_per_scan, on='scan_result_id', how='left')
         sov_df['my_count'] = sov_df['my_count'].fillna(0)
         
-        sov_df['sov'] = 0.0
+        # SOV
         mask_nonzero = sov_df['scan_total'] > 0
         sov_df.loc[mask_nonzero, 'sov'] = (sov_df.loc[mask_nonzero, 'my_count'] / sov_df.loc[mask_nonzero, 'scan_total']) * 100
-        
         avg_sov = sov_df['sov'].mean() if not sov_df.empty else 0
         
-        # Rank
+        # Rank (ігноруємо нулі)
         valid_ranks = my_brand_data[my_brand_data['rank_position'] > 0]['rank_position']
         avg_pos = valid_ranks.mean()
         display_pos = f"#{avg_pos:.1f}" if pd.notna(avg_pos) else "-"
         
-        # Sentiment
+        # Sentiment (Тільки цільовий бренд)
         if not my_brand_data.empty:
-            sentiment_rows = my_brand_data[my_brand_data['mention_count'] > 0]
-            if not sentiment_rows.empty:
-                s_counts = sentiment_rows['sentiment_score'].value_counts()
+            # Беремо тільки ті записи, де є згадки
+            active_mentions = my_brand_data[my_brand_data['mention_count'] > 0]
+            if not active_mentions.empty:
+                s_counts = active_mentions['sentiment_score'].value_counts()
                 total_s = s_counts.sum()
                 pos_pct = (s_counts.get("Позитивний", 0) / total_s) * 100
                 neg_pct = (s_counts.get("Негативний", 0) / total_s) * 100
@@ -1724,6 +1722,7 @@ def show_keyword_details(kw_id):
     </style>
     """, unsafe_allow_html=True)
 
+    # Відображення тональності
     if total_my_mentions > 0:
         sent_display = f"""
         <span style='color:#00C896'>😊 {pos_pct:.0f}%</span> &nbsp;
@@ -1768,6 +1767,7 @@ def show_keyword_details(kw_id):
             if not df_plot_base.empty:
                 min_d = df_plot_base['created_at'].min().date()
                 max_d = df_plot_base['created_at'].max().date()
+                # ВИПРАВЛЕНО СИНТАКСИС
                 date_range = st.date_input("Діапазон дат:", value=(min_d, max_d), min_value=min_d, max_value=max_d)
             else:
                 date_range = None
@@ -1779,9 +1779,14 @@ def show_keyword_details(kw_id):
             with col_brand:
                 if not df_plot_base.empty:
                     all_found_brands = sorted([str(b) for b in df_plot_base['brand_name'].unique() if pd.notna(b)])
-                    proj = st.session_state.get("current_project", {})
-                    my_brand_name = proj.get("brand_name", "")
-                    default_sel = [my_brand_name] if my_brand_name in all_found_brands else ([all_found_brands[0]] if all_found_brands else [])
+                    default_sel = []
+                    # Автовибір бренду
+                    if target_brand_name:
+                        target_first_word = target_brand_name.split(' ')[0].lower()
+                        default_sel = [b for b in all_found_brands if target_first_word in b.lower()]
+                    
+                    if not default_sel and all_found_brands: default_sel = [all_found_brands[0]]
+                    
                     selected_brands = st.multiselect("Фільтр по Брендах:", options=all_found_brands, default=default_sel)
                 else:
                     st.multiselect("Фільтр по Брендах:", options=[], disabled=True)
@@ -1860,13 +1865,14 @@ def show_keyword_details(kw_id):
                 continue
 
             with st.container(border=True):
+                # Кнопку видалення ПРИБРАНО за вашим запитом
                 scan_options = {row['date_str']: row['scan_id'] for _, row in model_scans.iterrows()}
                 selected_date = st.selectbox(f"Оберіть дату аналізу ({ui_model_name}):", list(scan_options.keys()), key=f"sel_date_{tech_model_id}")
             
             selected_scan_id = scan_options[selected_date]
             current_scan_row = model_scans[model_scans['scan_id'] == selected_scan_id].iloc[0]
             
-            # --- LOCAL METRICS (FIXED AGGREGATION) ---
+            # --- LOCAL METRICS (FIXED: AGGREGATE ALL MATCHES) ---
             loc_sov = 0
             loc_mentions = 0
             loc_sent = "Не згадано"
@@ -1879,21 +1885,20 @@ def show_keyword_details(kw_id):
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
                 
-                # 🔥 FIX: Фільтруємо ВСІ рядки, що є нашим брендом (is_real_target)
+                # 🔥 FIX: Фільтруємо ВСІ рядки, що підходять під "Мій Бренд"
                 my_brand_rows = current_scan_mentions[current_scan_mentions['is_real_target'] == True]
 
                 if not my_brand_rows.empty:
-                    # 1. Сума згадок з усіх дублів
+                    # 1. СУМУЄМО ЗГАДКИ (щоб взяти 9, а не 0)
                     val_my_mentions = my_brand_rows['mention_count'].sum()
                     
-                    # 2. Найкраща позиція
-                    # (фільтруємо 0 або NaN, бо інколи там сміття)
+                    # 2. Позиція (ігноруємо нулі)
                     valid_ranks = my_brand_rows[my_brand_rows['rank_position'] > 0]['rank_position']
                     val_rank = valid_ranks.min() if not valid_ranks.empty else None
                     
-                    # 3. Тональність (беремо з рядка, де найбільше згадок)
+                    # 3. Тональність (беремо з рядка, де count > 0)
                     if val_my_mentions > 0:
-                        # Сортуємо: спочатку ті, де є згадки
+                        # Сортуємо: спочатку ті, де найбільше згадок
                         main_row = my_brand_rows.sort_values('mention_count', ascending=False).iloc[0]
                         loc_sent = main_row['sentiment_score']
                     
@@ -1906,6 +1911,7 @@ def show_keyword_details(kw_id):
             elif loc_sent == "Негативний": sent_color = "#FF4B4B"
             elif loc_sent == "Не згадано": sent_color = "#999"
 
+            # ВІЗУАЛІЗАЦІЯ (ЗЕЛЕНИЙ БОРДЕР)
             st.markdown(f"""
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px;">
                 <div style="background:#fff; border:1px solid #E0E0E0; border-top:4px solid #00C896; border-radius:8px; padding:15px; text-align:center;">
@@ -1947,7 +1953,7 @@ def show_keyword_details(kw_id):
             st.markdown(f"**Знайдені бренди:** {tooltip('Бренди, які AI згадав у цій відповіді.')}", unsafe_allow_html=True)
             
             if not current_scan_mentions.empty:
-                # Фільтруємо нульові згадки
+                # Показуємо тільки ті, де згадок > 0
                 scan_mentions_plot = current_scan_mentions[current_scan_mentions['mention_count'] > 0].copy()
                 scan_mentions_plot = scan_mentions_plot.sort_values('mention_count', ascending=False)
 
@@ -1980,7 +1986,7 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count + Clean URL) ---
+            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count + Links) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
@@ -1992,7 +1998,7 @@ def show_keyword_details(kw_id):
                         if 'domain' not in df_src.columns:
                             df_src['domain'] = df_src['url'].apply(lambda x: str(x).split('/')[2] if x and '//' in str(x) else 'unknown')
                         
-                        # 🔥 FIX: Нормалізація
+                        # 🔥 FIX: Нормалізація посилань
                         df_src['url'] = df_src['url'].apply(normalize_url)
                         
                         if 'is_official' in df_src.columns:
