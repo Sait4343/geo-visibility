@@ -2058,31 +2058,64 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FINAL + DELETE CONFIRMATION + NUMBERING.
-    1. Fix: Подвійне підтвердження видалення запиту.
-    2. UI: Нумерація запитів (1, 2, 3...).
-    3. Core: Збережено таймзону (Київ) та почергову відправку на n8n.
+    ВЕРСІЯ: STYLED LIST (GREEN NUMBERS + CLICKABLE TEXT).
+    1. UI: Стиль списку як на скріншоті (зелені номери).
+    2. UI: Менший заголовок "Перелік запитів".
+    3. UX: Клік на назву відкриває деталі.
+    4. Core: Збережено логіку видалення, таймзон та черги n8n.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime
     import time
     
-    # Спробуємо імпортувати pytz для таймзон
+    # CSS для стилізації номерів та кнопок-посилань
+    st.markdown("""
+    <style>
+        /* Стиль для зеленого номера */
+        .green-number {
+            background-color: #00C896;
+            color: white;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            margin-top: 5px; 
+        }
+        /* Стиль для кнопки, щоб вона виглядала як текст (зліва) */
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+            border: none;
+            background: transparent;
+            text-align: left;
+            padding-left: 0;
+            font-weight: 600;
+            color: #31333F;
+        }
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
+            color: #00C896;
+            background: transparent;
+            border: none;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Таймзони
     try:
         import pytz
         kyiv_tz = pytz.timezone('Europe/Kiev')
     except ImportError:
         kyiv_tz = None
 
-    # Локальний мапінг
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # Підключення до Supabase
     if 'supabase' not in globals():
         if 'supabase' in st.session_state:
             supabase = st.session_state['supabase']
@@ -2092,7 +2125,6 @@ def show_keywords_page():
     else:
         supabase = globals()['supabase']
 
-    # Ініціалізація лічильника інпутів
     if "kw_input_count" not in st.session_state:
         st.session_state["kw_input_count"] = 1
 
@@ -2101,15 +2133,14 @@ def show_keywords_page():
         st.info("Спочатку створіть проект в онбордингу.")
         return
 
-    # Якщо натиснули "Деталі" - показуємо іншу сторінку
     if st.session_state.get("focus_keyword_id"):
         show_keyword_details(st.session_state["focus_keyword_id"])
         return
 
-    # --- 1. ЗАГОЛОВОК ---
-    st.title("📋 Запити")
+    # --- 1. ЗАГОЛОВОК (ЗМЕНШЕНИЙ) ---
+    st.markdown("<h3 style='padding-top:0;'>📋 Перелік запитів</h3>", unsafe_allow_html=True)
 
-    # Хелпер для форматування дати по Києву
+    # Хелпери
     def format_kyiv_time(iso_str):
         if not iso_str or iso_str == "1970-01-01T00:00:00+00:00":
             return "—"
@@ -2123,7 +2154,6 @@ def show_keywords_page():
         except:
             return iso_str
 
-    # Хелпер для оновлення полів (CRON)
     def update_kw_field(kw_id, field, value):
         try:
             supabase.table("keywords").update({field: value}).eq("id", kw_id).execute()
@@ -2131,17 +2161,14 @@ def show_keywords_page():
             st.error(f"Помилка оновлення: {e}")
 
     # ========================================================
-    # 2. БЛОК ДОДАВАННЯ (ЗГОРНУТИЙ)
+    # 2. БЛОК ДОДАВАННЯ
     # ========================================================
     with st.expander("➕ Додати нові запити", expanded=False): 
         with st.container(border=True):
             st.markdown("##### 📝 Введіть нові запити")
-            
-            # Динамічні поля
             for i in range(st.session_state["kw_input_count"]):
                 st.text_input(f"Запит #{i+1}", key=f"new_kw_input_{i}", placeholder="Наприклад: Купити квитки...")
 
-            # Кнопки +/-
             col_plus, col_minus, _ = st.columns([1, 1, 5])
             with col_plus:
                 if st.button("➕ Ще рядок"):
@@ -2154,8 +2181,6 @@ def show_keywords_page():
                         st.rerun()
 
             st.divider()
-
-            # Вибір ЛЛМ і Сабміт
             c_models, c_submit = st.columns([3, 1])
             with c_models:
                 selected_models_add = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="add_multiselect")
@@ -2171,32 +2196,19 @@ def show_keywords_page():
                     
                     if new_keywords_list:
                         try:
-                            # Вставляємо в базу
                             insert_data = [{
-                                "project_id": proj["id"], 
-                                "keyword_text": kw, 
-                                "is_active": True, 
-                                "is_auto_scan": False,
-                                "frequency": "daily"
+                                "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                "is_auto_scan": False, "frequency": "daily"
                             } for kw in new_keywords_list]
                             
                             res = supabase.table("keywords").insert(insert_data).execute()
-                            
                             if res.data:
-                                # Запускаємо скан ПОЧЕРГОВО (якщо їх кілька)
                                 with st.spinner(f"Запускаємо аналіз..."):
                                     if 'n8n_trigger_analysis' in globals():
                                         for new_kw in new_keywords_list:
-                                            n8n_trigger_analysis(
-                                                proj["id"], 
-                                                [new_kw], 
-                                                proj.get("brand_name"), 
-                                                models=selected_models_add
-                                            )
+                                            n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models_add)
                                             time.sleep(0.5) 
-                                
                                 st.success(f"Додано {len(new_keywords_list)} запитів!")
-                                # Скидаємо поля
                                 st.session_state["kw_input_count"] = 1
                                 for key in list(st.session_state.keys()):
                                     if key.startswith("new_kw_input_"): del st.session_state[key]
@@ -2213,23 +2225,15 @@ def show_keywords_page():
     # 3. ОТРИМАННЯ ДАНИХ
     # ========================================================
     try:
-        # Запити
         keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute().data
+        last_scans_resp = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
         
-        # Дати останнього скану
-        last_scans_resp = supabase.table("scan_results")\
-            .select("keyword_id, created_at")\
-            .eq("project_id", proj["id"])\
-            .order("created_at", desc=True)\
-            .execute()
-            
         last_scan_map = {}
         if last_scans_resp.data:
             for s in last_scans_resp.data:
                 if s['keyword_id'] not in last_scan_map:
                     last_scan_map[s['keyword_id']] = s['created_at']
         
-        # Збагачуємо даними
         for k in keywords:
             k['last_scan_date'] = last_scan_map.get(k['id'], "1970-01-01T00:00:00+00:00")
 
@@ -2244,8 +2248,6 @@ def show_keywords_page():
     # ========================================================
     # 4. ПАНЕЛЬ УПРАВЛІННЯ
     # ========================================================
-    
-    # Сортування
     c_sort, _ = st.columns([2, 4])
     with c_sort:
         sort_option = st.selectbox(
@@ -2254,7 +2256,6 @@ def show_keywords_page():
             label_visibility="collapsed"
         )
 
-    # Логіка сортування
     if sort_option == "Найновіші (Додані)":
         keywords.sort(key=lambda x: x['created_at'], reverse=True)
     elif sort_option == "Найстаріші (Додані)":
@@ -2264,25 +2265,14 @@ def show_keywords_page():
     elif sort_option == "Давно не скановані":
         keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
-    # Масові дії
     with st.container(border=True):
         c_check, c_models, c_btn = st.columns([0.5, 3, 1.5])
-        
         with c_check:
             st.write("") 
             select_all = st.checkbox("Всі", key="select_all_kws")
-        
         with c_models:
-            bulk_models = st.multiselect(
-                "ЛЛМ для запуску:", 
-                list(MODEL_MAPPING.keys()), 
-                default=["Perplexity"], 
-                label_visibility="collapsed",
-                key="bulk_models_main"
-            )
-        
+            bulk_models = st.multiselect("ЛЛМ для запуску:", list(MODEL_MAPPING.keys()), default=["Perplexity"], label_visibility="collapsed", key="bulk_models_main")
         with c_btn:
-            # ПОЧЕРГОВА ВІДПРАВКА
             if st.button("🚀 Аналізувати обрані", use_container_width=True):
                 selected_kws_text = []
                 if select_all:
@@ -2293,22 +2283,14 @@ def show_keywords_page():
                             selected_kws_text.append(k['keyword_text'])
                 
                 if selected_kws_text:
-                    progress_text = "Ініціалізація..."
-                    my_bar = st.progress(0, text=progress_text)
+                    my_bar = st.progress(0, text="Ініціалізація...")
                     total_kws = len(selected_kws_text)
-
                     try:
                         if 'n8n_trigger_analysis' in globals():
                             for i, single_kw in enumerate(selected_kws_text):
                                 my_bar.progress((i / total_kws), text=f"Відправка: {single_kw}...")
-                                n8n_trigger_analysis(
-                                    proj["id"], 
-                                    [single_kw], 
-                                    proj.get("brand_name"), 
-                                    models=bulk_models
-                                )
+                                n8n_trigger_analysis(proj["id"], [single_kw], proj.get("brand_name"), models=bulk_models)
                                 time.sleep(0.3)
-                            
                             my_bar.progress(1.0, text="Готово!")
                             st.success(f"Успішно запущено {total_kws} завдань! Оновіть сторінку за хвилину.")
                             time.sleep(2)
@@ -2321,102 +2303,97 @@ def show_keywords_page():
                     st.warning("Оберіть хоча б один запит.")
 
     # ========================================================
-    # 5. СПИСОК ЗАПИТІВ (КАРТКИ)
+    # 5. СПИСОК ЗАПИТІВ (ОНОВЛЕНИЙ ДИЗАЙН)
     # ========================================================
     
-    # Заголовки
-    h1, h2, h3, h4, h5 = st.columns([0.5, 3, 2.5, 1.5, 1.2])
-    h2.markdown("**Запит**")
-    h3.markdown("**⏰ Налаштування CRON**")
-    h4.markdown("**Останній аналіз**")
-    h5.markdown("**Дії**")
+    # Заголовки стовпчиків
+    # [Check] [Num] [Text (Button)] [Cron] [Date] [Action]
+    h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.5, 2, 1.2, 1])
+    h_txt.markdown("**Запит**")
+    h_cron.markdown("**⏰ CRON**")
+    h_date.markdown("**Останній аналіз**")
+    h_act.markdown("**Дії**")
 
     # Вивід рядків
     for idx, k in enumerate(keywords, start=1):
         with st.container(border=True):
-            c1, c2, c3, c4, c5 = st.columns([0.5, 3, 2.5, 1.5, 1.2])
+            # Колони: Чекбокс | Номер | Текст (Кнопка) | Налаштування | Дата | Дії
+            c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.5, 2, 1.2, 1])
             
             # 1. Чекбокс
             with c1:
+                st.write("") # Вирівнювання по центру
                 is_checked = select_all
                 st.checkbox("", key=f"chk_{k['id']}", value=is_checked)
             
-            # 2. Текст запиту + Нумерація
+            # 2. Зелений номер (HTML)
             with c2:
-                st.write("") 
-                st.markdown(f"**{idx}. {k['keyword_text']}**")
+                st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
             
-            # 3. CRON
+            # 3. Текст запиту (КЛІКАБЕЛЬНИЙ - КНОПКА)
             with c3:
-                cron_col1, cron_col2 = st.columns([1, 1.5])
+                # Використовуємо кнопку як посилання (стилізовану CSS вище)
+                if st.button(k['keyword_text'], key=f"link_btn_{k['id']}", help="Натисніть для детального аналізу"):
+                    st.session_state["focus_keyword_id"] = k["id"]
+                    st.rerun()
+            
+            # 4. CRON
+            with c4:
+                cron_c1, cron_c2 = st.columns([0.8, 1.2])
                 is_auto = k.get('is_auto_scan', False) 
                 
-                with cron_col1:
+                with cron_c1:
                     new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}", label_visibility="collapsed")
                     if new_auto != is_auto:
                         update_kw_field(k['id'], "is_auto_scan", new_auto)
                         st.rerun()
 
-                with cron_col2:
+                with cron_c2:
                     if new_auto:
                         current_freq = k.get('frequency', 'daily')
                         freq_options = ["daily", "weekly", "monthly"]
                         try: idx_f = freq_options.index(current_freq)
                         except: idx_f = 0
-                            
                         new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=f"freq_{k['id']}", label_visibility="collapsed")
-                        
                         if new_freq != current_freq:
                             update_kw_field(k['id'], "frequency", new_freq)
                     else:
                         st.caption("Вимкнено")
             
-            # 4. Дата (Kyiv)
-            with c4:
+            # 5. Дата (Kyiv)
+            with c5:
                 st.write("")
                 date_iso = k.get('last_scan_date')
                 formatted_date = format_kyiv_time(date_iso)
-                st.caption(f"🕒 {formatted_date}")
+                st.caption(f"{formatted_date}")
             
-            # 5. Дії (Деталі + Видалити з підтвердженням)
-            with c5:
+            # 6. Дії (Видалити)
+            with c6:
                 st.write("")
-                b1, b2 = st.columns(2)
                 
-                # Деталі
-                if b1.button("🔍", key=f"det_{k['id']}", help="Детальний аналіз"):
-                    st.session_state["focus_keyword_id"] = k["id"]
-                    st.rerun()
-                
-                # --- ПОДВІЙНЕ ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ---
                 del_key = f"confirm_del_kw_{k['id']}"
                 if del_key not in st.session_state: st.session_state[del_key] = False
 
                 if not st.session_state[del_key]:
-                    # Крок 1: Сірий смітник
-                    if b2.button("🗑", key=f"pre_del_{k['id']}", help="Видалити"):
+                    # Кнопка смітника
+                    if st.button("🗑", key=f"pre_del_{k['id']}"):
                         st.session_state[del_key] = True
                         st.rerun()
                 else:
-                    # Крок 2: Так / Ні
-                    bd1, bd2 = b2.columns(2)
-                    # Кнопка підтвердження (червона/primary)
-                    if bd1.button("✅", key=f"yes_del_{k['id']}", type="primary"):
+                    # Підтвердження видалення
+                    dc1, dc2 = st.columns(2)
+                    if dc1.button("✅", key=f"yes_del_{k['id']}", type="primary"):
                         try:
-                            # 1. Видаляємо зв'язані результати (щоб не було APIError)
                             supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
-                            # 2. Видаляємо сам запит
                             supabase.table("keywords").delete().eq("id", k["id"]).execute()
-                            
-                            st.success("Видалено!")
+                            st.success("!")
                             st.session_state[del_key] = False
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Помилка: {e}")
+                            st.error("Помилка")
                     
-                    # Кнопка скасування
-                    if bd2.button("❌", key=f"no_del_{k['id']}"):
+                    if dc2.button("❌", key=f"no_del_{k['id']}"):
                         st.session_state[del_key] = False
                         st.rerun()
 
