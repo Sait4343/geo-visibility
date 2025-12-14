@@ -2058,17 +2058,17 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FIXED (DELETE, TIMEZONE, SEQUENTIAL SEND).
-    1. Fix Delete: Спочатку видаляємо scan_results, потім keyword.
-    2. Fix Timezone: Відображення по Києву.
-    3. Fix Workflow: Відправка на n8n по одному запиту в циклі.
-    4. UI: Перейменовано на "Запити".
+    ВЕРСІЯ: FINAL + DELETE CONFIRMATION + NUMBERING.
+    1. Fix: Подвійне підтвердження видалення запиту.
+    2. UI: Нумерація запитів (1, 2, 3...).
+    3. Core: Збережено таймзону (Київ) та почергову відправку на n8n.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime
     import time
-    # Спробуємо імпортувати pytz для таймзон, якщо немає - буде UTC
+    
+    # Спробуємо імпортувати pytz для таймзон
     try:
         import pytz
         kyiv_tz = pytz.timezone('Europe/Kiev')
@@ -2106,7 +2106,7 @@ def show_keywords_page():
         show_keyword_details(st.session_state["focus_keyword_id"])
         return
 
-    # --- 1. ЗАГОЛОВОК (ЗМІНЕНО) ---
+    # --- 1. ЗАГОЛОВОК ---
     st.title("📋 Запити")
 
     # Хелпер для форматування дати по Києву
@@ -2114,14 +2114,11 @@ def show_keywords_page():
         if not iso_str or iso_str == "1970-01-01T00:00:00+00:00":
             return "—"
         try:
-            # Парсимо UTC
             dt_utc = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
-            # Конвертуємо
             if kyiv_tz:
                 dt_kyiv = dt_utc.astimezone(kyiv_tz)
                 return dt_kyiv.strftime("%d.%m %H:%M")
             else:
-                # Fallback якщо pytz немає (додаємо 2 години грубо)
                 return dt_utc.strftime("%d.%m %H:%M UTC")
         except:
             return iso_str
@@ -2189,15 +2186,14 @@ def show_keywords_page():
                                 # Запускаємо скан ПОЧЕРГОВО (якщо їх кілька)
                                 with st.spinner(f"Запускаємо аналіз..."):
                                     if 'n8n_trigger_analysis' in globals():
-                                        # Проходимо циклом по нових словах, щоб відправляти по одному
                                         for new_kw in new_keywords_list:
                                             n8n_trigger_analysis(
                                                 proj["id"], 
-                                                [new_kw],  # Відправляємо як список з 1 елемента
+                                                [new_kw], 
                                                 proj.get("brand_name"), 
                                                 models=selected_models_add
                                             )
-                                            time.sleep(0.5) # Пауза щоб не спамити
+                                            time.sleep(0.5) 
                                 
                                 st.success(f"Додано {len(new_keywords_list)} запитів!")
                                 # Скидаємо поля
@@ -2246,10 +2242,10 @@ def show_keywords_page():
         return
 
     # ========================================================
-    # 4. ПАНЕЛЬ УПРАВЛІННЯ (Сортування та Масові дії)
+    # 4. ПАНЕЛЬ УПРАВЛІННЯ
     # ========================================================
     
-    # --- Рядок 1: Сортування ---
+    # Сортування
     c_sort, _ = st.columns([2, 4])
     with c_sort:
         sort_option = st.selectbox(
@@ -2268,7 +2264,7 @@ def show_keywords_page():
     elif sort_option == "Давно не скановані":
         keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
-    # --- Рядок 2: Масові дії (Container) ---
+    # Масові дії
     with st.container(border=True):
         c_check, c_models, c_btn = st.columns([0.5, 3, 1.5])
         
@@ -2286,9 +2282,8 @@ def show_keywords_page():
             )
         
         with c_btn:
-            # 🔥 FIX: ПОЧЕРГОВА ВІДПРАВКА (SEQUENTIAL SEND)
+            # ПОЧЕРГОВА ВІДПРАВКА
             if st.button("🚀 Аналізувати обрані", use_container_width=True):
-                # Збираємо текст обраних запитів
                 selected_kws_text = []
                 if select_all:
                     selected_kws_text = [k['keyword_text'] for k in keywords]
@@ -2298,24 +2293,21 @@ def show_keywords_page():
                             selected_kws_text.append(k['keyword_text'])
                 
                 if selected_kws_text:
-                    # Прогрес бар
                     progress_text = "Ініціалізація..."
                     my_bar = st.progress(0, text=progress_text)
                     total_kws = len(selected_kws_text)
 
                     try:
                         if 'n8n_trigger_analysis' in globals():
-                            # ЦИКЛ: ВІДПРАВЛЯЄМО ПО ОДНОМУ
                             for i, single_kw in enumerate(selected_kws_text):
                                 my_bar.progress((i / total_kws), text=f"Відправка: {single_kw}...")
-                                
                                 n8n_trigger_analysis(
                                     proj["id"], 
-                                    [single_kw], # Передаємо як список з 1 елемента
+                                    [single_kw], 
                                     proj.get("brand_name"), 
                                     models=bulk_models
                                 )
-                                time.sleep(0.3) # Маленька затримка для стабільності
+                                time.sleep(0.3)
                             
                             my_bar.progress(1.0, text="Готово!")
                             st.success(f"Успішно запущено {total_kws} завдань! Оновіть сторінку за хвилину.")
@@ -2340,19 +2332,19 @@ def show_keywords_page():
     h5.markdown("**Дії**")
 
     # Вивід рядків
-    for k in keywords:
+    for idx, k in enumerate(keywords, start=1):
         with st.container(border=True):
             c1, c2, c3, c4, c5 = st.columns([0.5, 3, 2.5, 1.5, 1.2])
             
-            # 1. Чекбокс вибору
+            # 1. Чекбокс
             with c1:
                 is_checked = select_all
                 st.checkbox("", key=f"chk_{k['id']}", value=is_checked)
             
-            # 2. Текст запиту
+            # 2. Текст запиту + Нумерація
             with c2:
                 st.write("") 
-                st.markdown(f"**{k['keyword_text']}**")
+                st.markdown(f"**{idx}. {k['keyword_text']}**")
             
             # 3. CRON
             with c3:
@@ -2369,24 +2361,24 @@ def show_keywords_page():
                     if new_auto:
                         current_freq = k.get('frequency', 'daily')
                         freq_options = ["daily", "weekly", "monthly"]
-                        try: idx = freq_options.index(current_freq)
-                        except: idx = 0
+                        try: idx_f = freq_options.index(current_freq)
+                        except: idx_f = 0
                             
-                        new_freq = st.selectbox("Freq", freq_options, index=idx, key=f"freq_{k['id']}", label_visibility="collapsed")
+                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=f"freq_{k['id']}", label_visibility="collapsed")
                         
                         if new_freq != current_freq:
                             update_kw_field(k['id'], "frequency", new_freq)
                     else:
                         st.caption("Вимкнено")
             
-            # 4. Дата (FIX: KYIV TIME)
+            # 4. Дата (Kyiv)
             with c4:
                 st.write("")
                 date_iso = k.get('last_scan_date')
                 formatted_date = format_kyiv_time(date_iso)
                 st.caption(f"🕒 {formatted_date}")
             
-            # 5. Дії (Деталі + Видалити FIX)
+            # 5. Дії (Деталі + Видалити з підтвердженням)
             with c5:
                 st.write("")
                 b1, b2 = st.columns(2)
@@ -2396,22 +2388,37 @@ def show_keywords_page():
                     st.session_state["focus_keyword_id"] = k["id"]
                     st.rerun()
                 
-                # Видалити (ВИПРАВЛЕНО APIError)
-                if b2.button("🗑", key=f"del_{k['id']}", help="Видалити"):
-                    try:
-                        # 1. Видаляємо зв'язані результати сканування
-                        supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
-                        
-                        # 2. Видаляємо сам запит
-                        supabase.table("keywords").delete().eq("id", k["id"]).execute()
-                        
-                        st.success("Видалено!")
-                        time.sleep(0.5)
-                        st.rerun()
-                    except Exception as e:
-                        # Якщо все ще помилка (наприклад, інші зв'язки), показуємо її
-                        st.error(f"Неможливо видалити: {e}")
+                # --- ПОДВІЙНЕ ПІДТВЕРДЖЕННЯ ВИДАЛЕННЯ ---
+                del_key = f"confirm_del_kw_{k['id']}"
+                if del_key not in st.session_state: st.session_state[del_key] = False
 
+                if not st.session_state[del_key]:
+                    # Крок 1: Сірий смітник
+                    if b2.button("🗑", key=f"pre_del_{k['id']}", help="Видалити"):
+                        st.session_state[del_key] = True
+                        st.rerun()
+                else:
+                    # Крок 2: Так / Ні
+                    bd1, bd2 = b2.columns(2)
+                    # Кнопка підтвердження (червона/primary)
+                    if bd1.button("✅", key=f"yes_del_{k['id']}", type="primary"):
+                        try:
+                            # 1. Видаляємо зв'язані результати (щоб не було APIError)
+                            supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
+                            # 2. Видаляємо сам запит
+                            supabase.table("keywords").delete().eq("id", k["id"]).execute()
+                            
+                            st.success("Видалено!")
+                            st.session_state[del_key] = False
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Помилка: {e}")
+                    
+                    # Кнопка скасування
+                    if bd2.button("❌", key=f"no_del_{k['id']}"):
+                        st.session_state[del_key] = False
+                        st.rerun()
 
 
 # =========================
