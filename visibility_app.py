@@ -3344,13 +3344,13 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: FIX TIMEZONE ERROR & MERGE ERROR.
-    1. Виправлено порівняння дат (UTC vs Naive).
-    2. Виправлено конфлікт імен колонок при злитті.
+    ВЕРСІЯ: PRETTY PROVIDER NAMES.
+    1. Технічні назви моделей (gpt-4o) замінено на брендові (OpenAI).
+    2. Виправлено Timezone та Merge помилки.
     """
     import pandas as pd
     import streamlit as st
-    from datetime import datetime, timedelta, timezone # <--- Додано timezone
+    from datetime import datetime, timedelta, timezone 
 
     # --- 1. ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
@@ -3412,9 +3412,18 @@ def show_history_page():
     # --- 3. ОБРОБКА ДАНИХ ---
     df_scans = pd.DataFrame(scans_data)
     
+    # 🔥 НОВЕ: Мапінг назв провайдерів
+    PROVIDER_MAP = {
+        "gpt-4o": "OpenAI",
+        "gpt-4-turbo": "OpenAI",
+        "gemini-1.5-pro": "Gemini",
+        "perplexity": "Perplexity"
+    }
+    # Замінюємо технічні назви на красиві (якщо назви немає в мапі, залишаємо як є)
+    df_scans['provider'] = df_scans['provider'].replace(PROVIDER_MAP)
+
     # Підготовка
     df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Видалений запит")
-    # Перетворення в datetime (автоматично стає UTC-aware, якщо рядок містить +00:00)
     df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
     
     # Агрегація Mentions
@@ -3439,7 +3448,7 @@ def show_history_page():
         df_scans = pd.merge(df_scans, links_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
         if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
             
-        # Використовуємо suffixes, щоб уникнути MergeError
+        # Suffixes для уникнення MergeError
         df_scans = pd.merge(
             df_scans, 
             official_count, 
@@ -3460,6 +3469,7 @@ def show_history_page():
     c1, c2, c3 = st.columns([1, 1, 1.5])
     
     with c1:
+        # Тепер тут будуть красиві назви (OpenAI, Gemini...)
         all_providers = df_scans['provider'].unique().tolist()
         sel_providers = st.multiselect("Модель (LLM)", all_providers, default=all_providers)
     
@@ -3481,7 +3491,7 @@ def show_history_page():
     # Фільтрація
     mask = df_scans['provider'].isin(sel_providers)
     
-    # 🔥 FIX: Використовуємо timezone-aware datetime для порівняння
+    # Timezone-aware date comparison
     now = datetime.now(timezone.utc)
     
     if sel_date == "Сьогодні":
@@ -3511,7 +3521,6 @@ def show_history_page():
     st.divider()
     st.markdown(f"**Знайдено записів:** {len(df_final)}")
     
-    # Вибір колонок, які існують (захист від помилок, якщо даних мало)
     cols_to_show = [
         'created_at_dt', 'keyword', 'provider', 
         'total_brands', 'total_links', 'my_mentions_count', 'official_links'
@@ -3520,7 +3529,6 @@ def show_history_page():
     
     df_display = df_final[cols_to_show].copy()
     
-    # Форматування дати
     if 'created_at_dt' in df_display.columns:
         df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
 
