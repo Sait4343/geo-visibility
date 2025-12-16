@@ -2172,8 +2172,9 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: CRON PERMISSION CHECK.
-    1. Автосканування доступне лише якщо proj['allow_cron'] == True.
+    ВЕРСІЯ: FIXED UNBOUND LOCAL ERROR & CRON LOGIC.
+    1. Виправлено помилку змінної new_auto.
+    2. Якщо адмін заборонив автосканування -> тогл неактивний.
     """
     import pandas as pd
     import streamlit as st
@@ -2348,7 +2349,6 @@ def show_keywords_page():
             
             df_upload = None
             
-            # Логіка завантаження
             if import_source == "Файл (.xlsx)":
                 uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"])
                 if uploaded_file:
@@ -2623,18 +2623,23 @@ def show_keywords_page():
                 cron_c1, cron_c2 = st.columns([0.8, 1.2])
                 is_auto = k.get('is_auto_scan', False) 
                 
+                # 🔥 FIX: Ініціалізуємо змінну ПЕРЕД перевіркою
+                new_auto = is_auto 
+
                 with cron_c1:
-                    # 🔥 ЛОГІКА ОБМЕЖЕННЯ (CRON)
+                    # Відображаємо тогл тільки якщо дозволено глобально
                     if allow_cron_global:
                         new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}", label_visibility="collapsed")
                         if new_auto != is_auto:
                             update_kw_field(k['id'], "is_auto_scan", new_auto)
                             st.rerun()
                     else:
-                        st.write("")
-                        st.caption("🔒 Disabled")
+                        # Якщо заборонено - відображаємо вимкнений стан
+                        st.toggle("Авто", value=False, key=f"auto_{k['id']}", label_visibility="collapsed", disabled=True)
+                        st.caption("🔒 Admin")
 
                 with cron_c2:
+                    # Вибір частоти - тільки якщо увімкнено І дозволено глобально
                     if new_auto and allow_cron_global:
                         current_freq = k.get('frequency', 'daily')
                         freq_options = ["daily", "weekly", "monthly"]
@@ -2644,7 +2649,7 @@ def show_keywords_page():
                         if new_freq != current_freq:
                             update_kw_field(k['id'], "frequency", new_freq)
                     else:
-                        st.write("")
+                        st.write("") # Пусте місце
             
             with c5:
                 st.write("")
@@ -2678,6 +2683,7 @@ def show_keywords_page():
                     if dc2.button("❌", key=f"no_del_{k['id']}"):
                         st.session_state[del_key] = False
                         st.rerun()
+
 
 # =========================
 # 9. SIDEBAR
