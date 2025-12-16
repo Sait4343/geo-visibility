@@ -2111,18 +2111,20 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: IMPORT/EXPORT EXCEL + TABS IN ACCORDION.
+    ВЕРСІЯ: FIX EXPORT ERROR & ADD URL IMPORT.
+    1. Export: Виправлено запит до БД (прибрано неіснуючу колонку).
+    2. Import: Додано завантаження за посиланням (Google Sheets/CSV).
+    3. Import: Додано обробку помилки відсутності openpyxl.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime
     import time
-    import io  # Додано для роботи з файлами в пам'яті
+    import io 
     
-    # CSS Стилізація (ЗБЕРЕЖЕНО)
+    # CSS Стилізація (Без змін)
     st.markdown("""
     <style>
-        /* 1. Зелені номери */
         .green-number {
             background-color: #00C896;
             color: white;
@@ -2136,8 +2138,6 @@ def show_keywords_page():
             font-size: 14px;
             margin-top: 5px; 
         }
-        
-        /* 2. Назва запиту (3-й стовпчик): ПРИБИРАЄМО ФОН */
         div[data-testid="stColumn"]:nth-of-type(3) button[kind="secondary"] {
             border: none;
             background: transparent;
@@ -2147,7 +2147,6 @@ def show_keywords_page():
             color: #31333F;
             box-shadow: none;
         }
-        /* Ефект наведення */
         div[data-testid="stColumn"]:nth-of-type(3) button[kind="secondary"]:hover {
             color: #00C896;
             background: transparent;
@@ -2162,7 +2161,6 @@ def show_keywords_page():
     </style>
     """, unsafe_allow_html=True)
 
-    # Таймзони
     try:
         import pytz
         kyiv_tz = pytz.timezone('Europe/Kiev')
@@ -2192,18 +2190,13 @@ def show_keywords_page():
         st.info("Спочатку створіть проект в онбордингу.")
         return
 
-    # Перехід на деталі
     if st.session_state.get("focus_keyword_id"):
-        # Передбачаємо, що show_keyword_details визначена десь в іншому місці
-        # Якщо ні - треба імпортувати або передати
         if 'show_keyword_details' in globals():
             show_keyword_details(st.session_state["focus_keyword_id"])
             return
 
-    # --- 1. ЗАГОЛОВОК ---
     st.markdown("<h3 style='padding-top:0;'>📋 Перелік запитів</h3>", unsafe_allow_html=True)
 
-    # Хелпери
     def format_kyiv_time(iso_str):
         if not iso_str or iso_str == "1970-01-01T00:00:00+00:00":
             return "—"
@@ -2224,11 +2217,11 @@ def show_keywords_page():
             st.error(f"Помилка оновлення: {e}")
 
     # ========================================================
-    # 2. БЛОК РЕДАГУВАННЯ (Tabs: Manual, Import, Export)
+    # 2. БЛОК РЕДАГУВАННЯ (ОНОВЛЕНИЙ)
     # ========================================================
     with st.expander("✏️ Редагування запитів", expanded=False): 
         
-        tab_manual, tab_import, tab_export = st.tabs(["✍️ Ввести вручну", "📥 Завантажити Excel", "📤 Експорт (Excel)"])
+        tab_manual, tab_import, tab_export = st.tabs(["✍️ Ввести вручну", "📥 Імпорт (Excel / URL)", "📤 Експорт (Excel)"])
 
         # --- TAB 1: ВРУЧНУ ---
         with tab_manual:
@@ -2278,7 +2271,6 @@ def show_keywords_page():
                                                 time.sleep(0.5) 
                                     st.success(f"Додано {len(new_keywords_list)} запитів!")
                                     st.session_state["kw_input_count"] = 1
-                                    # Очистка
                                     for key in list(st.session_state.keys()):
                                         if key.startswith("new_kw_input_"): del st.session_state[key]
                                     time.sleep(1)
@@ -2288,95 +2280,153 @@ def show_keywords_page():
                         else:
                             st.warning("Введіть хоча б один запит.")
 
-        # --- TAB 2: ІМПОРТ EXCEL ---
+        # --- TAB 2: ІМПОРТ EXCEL / URL (ВИПРАВЛЕНО) ---
         with tab_import:
-            st.info("💡 Завантажте файл .xlsx. Перша колонка має називатися **Keyword** (або просто бути першою). Всі запити з цієї колонки будуть додані.")
+            st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet (має бути відкритий доступ). Перша колонка має називатися **Keyword**.")
             
-            uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"])
+            # Вибір джерела
+            import_source = st.radio("Джерело:", ["Файл (.xlsx)", "Посилання (URL)"], horizontal=True)
             
-            if uploaded_file:
-                try:
-                    df_upload = pd.read_excel(uploaded_file)
-                    # Шукаємо колонку
-                    target_col = None
-                    if "Keyword" in df_upload.columns:
-                        target_col = "Keyword"
-                    elif "keyword" in df_upload.columns:
-                        target_col = "keyword"
-                    elif "Запит" in df_upload.columns:
-                        target_col = "Запит"
-                    else:
-                        # Беремо першу
-                        target_col = df_upload.columns[0]
-                    
-                    preview_kws = df_upload[target_col].dropna().astype(str).tolist()
-                    st.write(f"Знайдено **{len(preview_kws)}** запитів. Перші 3: {preview_kws[:3]}")
-                    
-                    c_imp_models, c_imp_btn = st.columns([3, 1])
-                    with c_imp_models:
-                        selected_models_import = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="import_multiselect")
-                    
-                    with c_imp_btn:
-                        st.write("")
-                        st.write("")
-                        if st.button("🚀 Завантажити та Аналізувати", type="primary", use_container_width=True):
-                            if preview_kws:
-                                try:
-                                    # 1. Insert to DB
-                                    insert_data = [{
-                                        "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
-                                        "is_auto_scan": False, "frequency": "daily"
-                                    } for kw in preview_kws]
-                                    
-                                    # Insert batches to avoid limits if list is huge
-                                    res = supabase.table("keywords").insert(insert_data).execute()
-                                    
-                                    # 2. Trigger Analysis
-                                    if res.data:
-                                        with st.spinner(f"Обробка {len(preview_kws)} запитів..."):
-                                            if 'n8n_trigger_analysis' in globals():
-                                                my_bar = st.progress(0, text="Запуск...")
-                                                total = len(preview_kws)
-                                                for i, kw in enumerate(preview_kws):
-                                                    n8n_trigger_analysis(proj["id"], [kw], proj.get("brand_name"), models=selected_models_import)
-                                                    my_bar.progress((i + 1) / total)
-                                                    time.sleep(0.3) # Anti-spam delay
-                                        st.success("Успішно імпортовано та запущено!")
-                                        time.sleep(2)
-                                        st.rerun()
-                                except Exception as e:
-                                    st.error(f"Помилка імпорту: {e}")
-                            else:
-                                st.warning("Файл порожній або не знайдено запитів.")
+            df_upload = None
+            
+            if import_source == "Файл (.xlsx)":
+                uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"])
+                if uploaded_file:
+                    try:
+                        df_upload = pd.read_excel(uploaded_file)
+                    except ImportError:
+                        st.error("🚨 Відсутня бібліотека `openpyxl`. Будь ласка, додайте `openpyxl` у requirements.txt вашого проекту.")
+                    except Exception as e:
+                        st.error(f"Не вдалося прочитати файл: {e}")
+            
+            else: # URL
+                import_url = st.text_input("Вставте посилання (Google Sheets або пряме посилання на CSV/XLSX):")
+                if import_url:
+                    try:
+                        # Обробка Google Sheets
+                        if "docs.google.com" in import_url:
+                            # Перетворюємо /edit на /export?format=csv
+                            import_url = import_url.replace('/edit#gid=', '/export?format=csv&gid=')
+                            import_url = import_url.replace('/edit', '/export?format=csv')
+                            df_upload = pd.read_csv(import_url)
+                        elif import_url.endswith(".csv"):
+                            df_upload = pd.read_csv(import_url)
+                        elif import_url.endswith(".xlsx"):
+                            df_upload = pd.read_excel(import_url)
+                        else:
+                            st.warning("Спробуємо прочитати як CSV...")
+                            df_upload = pd.read_csv(import_url)
+                    except Exception as e:
+                        st.error(f"Не вдалося завантажити за посиланням: {e}")
 
-                except Exception as e:
-                    st.error(f"Не вдалося прочитати файл: {e}")
+            # Якщо дані отримано
+            if df_upload is not None:
+                # Шукаємо колонку
+                target_col = None
+                cols_lower = [c.lower() for c in df_upload.columns]
+                
+                if "keyword" in cols_lower:
+                    target_col = df_upload.columns[cols_lower.index("keyword")]
+                elif "запит" in cols_lower:
+                    target_col = df_upload.columns[cols_lower.index("запит")]
+                else:
+                    target_col = df_upload.columns[0] # Беремо першу, якщо не знайшли
+                
+                preview_kws = df_upload[target_col].dropna().astype(str).tolist()
+                st.write(f"Знайдено **{len(preview_kws)}** запитів. Приклад: {preview_kws[:3]}")
+                
+                c_imp_models, c_imp_btn = st.columns([3, 1])
+                with c_imp_models:
+                    selected_models_import = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="import_multiselect")
+                
+                with c_imp_btn:
+                    st.write("")
+                    st.write("")
+                    if st.button("🚀 Завантажити та Аналізувати", type="primary", use_container_width=True):
+                        if preview_kws:
+                            try:
+                                insert_data = [{
+                                    "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                    "is_auto_scan": False, "frequency": "daily"
+                                } for kw in preview_kws]
+                                
+                                res = supabase.table("keywords").insert(insert_data).execute()
+                                
+                                if res.data:
+                                    with st.spinner(f"Обробка {len(preview_kws)} запитів..."):
+                                        if 'n8n_trigger_analysis' in globals():
+                                            my_bar = st.progress(0, text="Запуск...")
+                                            total = len(preview_kws)
+                                            for i, kw in enumerate(preview_kws):
+                                                n8n_trigger_analysis(proj["id"], [kw], proj.get("brand_name"), models=selected_models_import)
+                                                my_bar.progress((i + 1) / total)
+                                                time.sleep(0.3)
+                                    st.success("Успішно імпортовано та запущено!")
+                                    time.sleep(2)
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Помилка імпорту: {e}")
+                        else:
+                            st.warning("Список пустий.")
 
-        # --- TAB 3: ЕКСПОРТ EXCEL ---
+        # --- TAB 3: ЕКСПОРТ EXCEL (ВИПРАВЛЕНО) ---
         with tab_export:
             st.write("Натисніть кнопку нижче, щоб завантажити всі запити цього проекту в Excel.")
             
-            # Отримуємо дані для експорту
             try:
-                # Беремо лише текст запиту для простоти, або можна більше полів
-                export_resp = supabase.table("keywords").select("keyword_text, created_at, last_scan_date").eq("project_id", proj["id"]).execute()
-                if export_resp.data:
-                    df_export = pd.DataFrame(export_resp.data)
-                    # Rename for clarity
-                    df_export.rename(columns={"keyword_text": "Keyword", "created_at": "Date Added", "last_scan_date": "Last Scan"}, inplace=True)
+                # 1. Беремо тільки існуючі колонки
+                kws_resp = supabase.table("keywords").select("id, keyword_text, created_at").eq("project_id", proj["id"]).execute()
+                
+                if kws_resp.data:
+                    df_export = pd.DataFrame(kws_resp.data)
                     
-                    # Convert to Excel in memory
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                        df_export.to_excel(writer, index=False, sheet_name='Keywords')
+                    # 2. Окремо отримуємо дати сканувань для цих слів
+                    scan_resp = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
                     
-                    st.download_button(
-                        label="📥 Завантажити Excel",
-                        data=buffer.getvalue(),
-                        file_name=f"keywords_{proj.get('brand_name')}.xlsx",
-                        mime="application/vnd.ms-excel",
-                        type="primary"
+                    last_scan_map = {}
+                    if scan_resp.data:
+                        for s in scan_resp.data:
+                            if s['keyword_id'] not in last_scan_map:
+                                last_scan_map[s['keyword_id']] = s['created_at']
+                    
+                    # 3. Об'єднуємо дані в Python
+                    df_export['last_scan_date'] = df_export['id'].map(lambda x: last_scan_map.get(x, "-"))
+                    
+                    # 4. Форматуємо
+                    df_export['created_at'] = pd.to_datetime(df_export['created_at']).dt.strftime('%Y-%m-%d %H:%M')
+                    df_export['last_scan_date'] = df_export['last_scan_date'].apply(
+                        lambda x: pd.to_datetime(x).strftime('%Y-%m-%d %H:%M') if x != "-" else "-"
                     )
+                    
+                    # Прибираємо ID, перейменовуємо
+                    df_final = df_export[["keyword_text", "created_at", "last_scan_date"]].rename(columns={
+                        "keyword_text": "Keyword",
+                        "created_at": "Date Added",
+                        "last_scan_date": "Last Scan Date"
+                    })
+                    
+                    buffer = io.BytesIO()
+                    # Використовуємо xlsxwriter, який зазвичай є, або openpyxl
+                    try:
+                        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                            df_final.to_excel(writer, index=False, sheet_name='Keywords')
+                    except:
+                         # Fallback якщо немає xlsxwriter
+                         try:
+                             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                                 df_final.to_excel(writer, index=False, sheet_name='Keywords')
+                         except ImportError:
+                             st.error("Для експорту потрібна бібліотека `xlsxwriter` або `openpyxl`. Додайте їх у requirements.txt.")
+                             buffer = None
+
+                    if buffer:
+                        st.download_button(
+                            label="📥 Завантажити Excel",
+                            data=buffer.getvalue(),
+                            file_name=f"keywords_{proj.get('brand_name')}.xlsx",
+                            mime="application/vnd.ms-excel",
+                            type="primary"
+                        )
                 else:
                     st.warning("У проекті ще немає запитів для експорту.")
             except Exception as e:
@@ -2436,7 +2486,6 @@ def show_keywords_page():
         with c_models:
             bulk_models = st.multiselect("ЛЛМ для запуску:", list(MODEL_MAPPING.keys()), default=["Perplexity"], label_visibility="collapsed", key="bulk_models_main")
         with c_btn:
-            # 🔥 PRIMARY BUTTON (Яскрава)
             if st.button("🚀 Аналізувати обрані", use_container_width=True, type="primary"):
                 selected_kws_text = []
                 if select_all:
@@ -2489,7 +2538,6 @@ def show_keywords_page():
                 st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
             
             with c3:
-                # Кнопка без фону (через CSS)
                 if st.button(k['keyword_text'], key=f"link_btn_{k['id']}", help="Натисніть для детального аналізу"):
                     st.session_state["focus_keyword_id"] = k["id"]
                     st.rerun()
@@ -2529,7 +2577,6 @@ def show_keywords_page():
                 if del_key not in st.session_state: st.session_state[del_key] = False
 
                 if not st.session_state[del_key]:
-                    # Стандартна кнопка видалення
                     if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}"):
                         st.session_state[del_key] = True
                         st.rerun()
