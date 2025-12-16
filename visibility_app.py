@@ -346,34 +346,45 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         return False
 
 
-def n8n_request_recommendations(project, topic: str, brief: str):
+def trigger_ai_recommendation(user, project, category, context_text):
     """
-    Надсилає запит на n8n для генерації рекомендацій.
-    topic: 'pr' | 'digital' | 'creative'
+    Відправляє запит на AI для генерації HTML-звіту з рекомендаціями.
     """
+    import requests
+    from datetime import datetime
+    
+    headers = {
+        "virshi-auth": "hi@virshi.ai2025"
+    }
+    
+    # Формуємо розширений payload
+    payload = {
+        "timestamp": datetime.now().isoformat(),
+        "user_id": user.id if user else "unknown",
+        "user_email": user.email if user else "unknown",
+        "project_id": project.get("id"),
+        "brand_name": project.get("brand_name"),
+        "domain": project.get("domain"),
+        "category": category, # Наприклад: "Critical: Low Visibility"
+        "request_context": context_text, # Текст проблеми
+        "request_type": "html_report"
+    }
+    
     try:
-        payload = {
-            "project_id": project["id"],
-            "brand_name": project.get("brand_name"),
-            "domain": project.get("domain"),
-            "topic": topic,
-            "brief": brief,
-            "user_email": st.session_state["user"].email
-            if st.session_state.get("user")
-            else None,
-        }
-        resp = requests.post(N8N_RECO_URL, json=payload, timeout=40)
-        if resp.status_code != 200:
-            st.error(f"N8N recommendation error: {resp.status_code} - {resp.text}")
-            return []
-
-        data = resp.json()
-        if isinstance(data, list):
-            return data
-        return data.get("recommendations", [])
+        response = requests.post(N8N_REC_WEBHOOK, json=payload, headers=headers, timeout=120)
+        
+        if response.status_code == 200:
+            # Очікуємо, що n8n поверне JSON {"html": "<div>...</div>"} або просто HTML текст
+            try:
+                data = response.json()
+                return data.get("html") or data.get("report") or response.text
+            except:
+                return response.text # Якщо повернувся чистий HTML
+        else:
+            return f"<p style='color:red'>Error from AI: {response.status_code}</p>"
+            
     except Exception as e:
-        st.error(f"Помилка запиту рекомендацій: {e}")
-        return []
+        return f"<p style='color:red'>Connection Error: {e}</p>"
 
 
 # =========================
@@ -1127,6 +1138,289 @@ def show_competitors_page():
                 st.plotly_chart(fig_rank, use_container_width=True)
             else:
                 st.info("Оберіть бренд.")
+
+def show_recommendations_page():
+    """
+    Сторінка рекомендацій.
+    ВЕРСІЯ: AI GENERATION + HISTORY + HTML EXPORT.
+    """
+    import streamlit as st
+    import pandas as pd
+    import streamlit.components.v1 as components
+    from datetime import datetime
+
+    # --- ПІДКЛЮЧЕННЯ ---
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
+    else:
+        st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
+        return
+
+    proj = st.session_state.get("current_project")
+    user = st.session_state.get("user")
+    
+    if not proj:
+        st.info("Спочатку оберіть проект.")
+        return
+
+    st.title(f"💡 Рекомендації: {proj.get('brand_name')}")
+    
+    # Вкладки: Поточні рекомендації | Історія звітів AI
+    tab_current, tab_history = st.tabs(["⚡ Поточні рекомендації", "📚 Історія AI-звітів"])
+
+    # ========================================================
+    # TAB 1: АНАЛІЗ ТА ГЕНЕРАЦІЯ
+    # ========================================================
+    with tab_current:
+        with st.spinner("Аналіз метрик..."):
+            try:
+                # 1. Дані сканування
+                scan_resp = supabase.table("scan_results")\
+                    .select("id")\
+                    .eq("project_id", proj["id"])\
+                    .order("created_at", desc=True)\
+                    .limit(50)\
+                    .execute()
+                
+                scan_ids = [s['id'] for s in scan_resp.data] if scan_resp.data else []
+                
+                # 2. Згадки
+                mentions = []
+                if scan_ids:
+                    m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
+                    mentions = m_resp.data if m_resp.data else []
+
+                # 3. Whitelist
+                wl_resp = supabase.table("official_assets").select("id", count="exact").eq("project_id", proj["id"]).execute()
+                wl_count = len(wl_resp.data) if wl_resp.data else 0
+
+            except Exception as e:
+                st.error(f"Помилка завантаження: {e}")
+                return
+
+        # --- ЛОГІКА ВИЯВЛЕННЯ ПРОБЛЕМ ---
+        recommendations_list = []
+
+        # A. Whitelist
+        if wl_count == 0:
+            recommendations_list.append({
+                "id": "rec_whitelist",
+                "type": "critical",
+                "title": "Не налаштовано Whitelist",
+                "text": "Відсутні офіційні джерела. Це унеможливлює точний аналіз посилань.",
+            })
+
+        # B. Visibility
+        my_mentions = [m for m in mentions if m.get('is_my_brand') is True]
+        if not my_mentions and scan_ids:
+            recommendations_list.append({
+                "id": "rec_visibility",
+                "type": "critical",
+                "title": "Критична відсутність видимості",
+                "text": "AI-моделі не згадують ваш бренд на цільові запити.",
+            })
+        elif my_mentions:
+            df = pd.DataFrame(my_mentions)
+            # C. Sentiment
+            if 'sentiment_score' in df.columns:
+                neg_count = len(df[df['sentiment_score'] == 'Негативний'])
+                if neg_count > 0:
+                    recommendations_list.append({
+                        "id": "rec_sentiment",
+                        "type": "warning",
+                        "title": f"Виявлено негатив ({neg_count} згадок)",
+                        "text": "Знайдено негативний контекст у відповідях LLM.",
+                    })
+            # D. Rank
+            if 'rank_position' in df.columns:
+                valid_ranks = df[df['rank_position'] > 0]
+                if not valid_ranks.empty:
+                    avg = valid_ranks['rank_position'].mean()
+                    if avg > 5:
+                        recommendations_list.append({
+                            "id": "rec_rank",
+                            "type": "info",
+                            "title": "Низька середня позиція",
+                            "text": f"Ваш бренд в середньому на {avg:.1f} місці.",
+                        })
+
+        # --- ВІДОБРАЖЕННЯ КАРТОК ---
+        if not recommendations_list:
+            st.success("🎉 Чудово! Критичних проблем не виявлено.")
+        else:
+            for rec in recommendations_list:
+                # Стилі
+                color = "red" if rec["type"] == "critical" else "orange" if rec["type"] == "warning" else "blue"
+                icon = "🚨" if rec["type"] == "critical" else "⚠️" if rec["type"] == "warning" else "ℹ️"
+                
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([0.1, 1.5, 0.8])
+                    
+                    with c1: st.markdown(f"<h3>{icon}</h3>", unsafe_allow_html=True)
+                    with c2:
+                        st.markdown(f"**{rec['title']}**")
+                        st.write(rec['text'])
+                    
+                    with c3:
+                        # Кнопка генерації AI
+                        btn_key = f"gen_ai_{rec['id']}"
+                        if st.button("🤖 Отримати рішення (AI)", key=btn_key, use_container_width=True):
+                            with st.spinner("Генерую стратегію виправлення..."):
+                                # 1. Виклик Webhook
+                                html_report = trigger_ai_recommendation(
+                                    user=user,
+                                    project=proj,
+                                    category=rec['title'],
+                                    context_text=rec['text']
+                                )
+                                
+                                # 2. Збереження в сесію для відображення
+                                st.session_state[f"report_{rec['id']}"] = html_report
+                                
+                                # 3. Збереження в БД (Історія)
+                                try:
+                                    supabase.table("ai_reports").insert({
+                                        "project_id": proj["id"],
+                                        "category": rec['title'],
+                                        "html_content": html_report,
+                                        "created_at": datetime.now().isoformat()
+                                    }).execute()
+                                    st.toast("Звіт збережено в історію!")
+                                except Exception:
+                                    # Якщо таблиці немає, працюємо без збереження в БД
+                                    pass
+
+                    # Якщо звіт згенеровано - показуємо його тут
+                    report_key = f"report_{rec['id']}"
+                    if report_key in st.session_state:
+                        html_content = st.session_state[report_key]
+                        
+                        with st.expander("📄 Переглянути згенерований звіт", expanded=True):
+                            # Відображення HTML
+                            components.html(html_content, height=400, scrolling=True)
+                            
+                            # Завантаження файлу
+                            st.download_button(
+                                label="📥 Завантажити (.html)",
+                                data=html_content,
+                                file_name=f"recommendation_{rec['id']}_{proj['brand_name']}.html",
+                                mime="text/html",
+                                key=f"dl_{rec['id']}"
+                            )
+
+    # ========================================================
+    # TAB 2: ІСТОРІЯ (З БАЗИ ДАНИХ)
+    # ========================================================
+    with tab_history:
+        try:
+            # Спробуємо отримати історію з бази
+            hist_resp = supabase.table("ai_reports")\
+                .select("*")\
+                .eq("project_id", proj["id"])\
+                .order("created_at", desc=True)\
+                .execute()
+            
+            reports = hist_resp.data if hist_resp.data else []
+            
+            if not reports:
+                st.info("Історія порожня. Згенеруйте першу рекомендацію у вкладці 'Поточні рекомендації'.")
+            else:
+                for rep in reports:
+                    date_str = pd.to_datetime(rep['created_at']).strftime("%Y-%m-%d %H:%M")
+                    with st.expander(f"📑 {rep['category']} ({date_str})"):
+                        st.download_button(
+                            label="📥 Завантажити цей звіт",
+                            data=rep['html_content'],
+                            file_name=f"report_{rep['id']}.html",
+                            mime="text/html",
+                            key=f"hist_dl_{rep['id']}"
+                        )
+                        components.html(rep['html_content'], height=400, scrolling=True)
+                        
+        except Exception as e:
+            st.warning("Функція історії недоступна (потрібна таблиця 'ai_reports' у базі даних).")
+            # Fallback на сесію, якщо бази немає
+            st.write("Поточна сесія:")
+            for key, val in st.session_state.items():
+                if key.startswith("report_"):
+                    st.write(f"Тимчасовий звіт: {key}")
+
+
+def show_faq_page():
+    """Сторінка FAQ"""
+    st.title("❓ Часті запитання (FAQ)")
+    
+    with st.expander("Як працює оцінка тональності?"):
+        st.write("Ми використовуємо AI для аналізу контексту, в якому згадується ваш бренд. Оцінка може бути Позитивною, Нейтральною або Негативною.")
+    
+    with st.expander("Що таке Share of Voice (SOV)?"):
+        st.write("SOV - це відсоток згадок вашого бренду серед усіх брендів, знайдених у відповідях на ваші ключові запити.")
+    
+    with st.expander("Як часто оновлюються дані?"):
+        st.write("Якщо увімкнено автосканування, дані оновлюються згідно з обраним розкладом (щодня/щотижня). Ви також можете запустити аналіз вручну.")
+
+def show_history_page():
+    """Сторінка Історії сканувань"""
+    import pandas as pd
+    
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    else:
+        st.error("DB Error")
+        return
+
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Оберіть проект.")
+        return
+
+    st.title("📜 Історія сканувань")
+    
+    try:
+        # Запит до бази
+        resp = supabase.table("scan_results")\
+            .select("id, created_at, provider, status, keyword_id")\
+            .eq("project_id", proj["id"])\
+            .order("created_at", desc=True)\
+            .limit(100)\
+            .execute()
+            
+        if resp.data:
+            df = pd.DataFrame(resp.data)
+            df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M')
+            
+            # Підтягуємо текст запитів (опціонально, якщо треба)
+            # Можна просто показати таблицю
+            st.dataframe(
+                df, 
+                use_container_width=True,
+                column_config={
+                    "created_at": "Дата",
+                    "provider": "LLM",
+                    "status": "Статус"
+                }
+            )
+        else:
+            st.info("Історія пуста.")
+    except Exception as e:
+        st.error(f"Помилка: {e}")
+
+def show_reports_page():
+    """Сторінка Звітів"""
+    st.title("📊 Звіти")
+    st.info("Розділ знаходиться в розробці. Тут ви зможете генерувати PDF-звіти за обраний період.")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.date_input("Початок періоду")
+    with c2:
+        st.date_input("Кінець періоду")
+        
+    st.button("Згенерувати PDF (Demo)", disabled=True)
+
+
 
 def show_dashboard():
     """
@@ -3067,124 +3361,91 @@ def show_sources_page():
 
 
 def sidebar_menu():
+    """
+    Бокове меню навігації.
+    ВЕРСІЯ: ADDED NEW PAGES (HISTORY, REPORTS, FAQ).
+    """
     from streamlit_option_menu import option_menu
     
-    # Отримуємо дані
-    user = st.session_state.get("user")
-    role = st.session_state.get("role", "user")
-    current_proj = st.session_state.get("current_project")
-
-    # --- 🎨 CSS ДЛЯ АДМІНА (Заливка сайдбару) ---
-    if role == "admin":
-        st.markdown("""
-        <style>
-            [data-testid="stSidebar"] {
-                background-color: #E8F5E9; /* Світло-зелений фон для Адміна */
-                border-right: 2px solid #00C896; /* Акцентна лінія справа */
-            }
-            /* Можна підфарбувати заголовки, щоб було стильно */
-            [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-                color: #00695C;
-            }
-        </style>
-        """, unsafe_allow_html=True)
+    # Отримуємо поточний проект для відображення вгорі
+    proj = st.session_state.get("current_project")
+    proj_name = proj.get("brand_name", "No Project") if proj else "Оберіть проект"
+    proj_id = proj.get("id", "") if proj else ""
 
     with st.sidebar:
-        # 1. ЛОГОТИП
-        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150) 
-        #st.markdown("## AI Visibility by Virshi") 
-
-        # Профіль
-        user_name = "Користувач"
-        if user:
-            meta = user.user_metadata
-            user_name = meta.get("full_name") or meta.get("name") or user.email.split("@")[0]
-
-        st.caption(f"👤 {user_name}")
+        # Логотип (замініть посилання на ваше, якщо треба)
+        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=180)
         
-        # ❌ ТУТ ПРИБРАЛИ НАПИС "Admin Mode"
+        # Вибір проекту (якщо реалізовано список) або просто відображення
+        # Тут можна додати selectbox для перемикання проектів, якщо у юзера їх кілька
+        # Для спрощення поки просто показуємо поточний:
+        with st.expander(f"📁 {proj_name}", expanded=False):
+            st.caption(f"ID: {proj_id}")
+            if st.button("Змінити проект / Вийти"):
+                st.session_state["current_project"] = None
+                st.rerun()
+
+        st.write("") # Відступ
+
+        # Список сторінок
+        options = [
+            "Дашборд", 
+            "Перелік запитів", 
+            "Джерела", 
+            "Конкуренти", 
+            "Рекомендації", 
+            "Історія сканувань", # NEW
+            "Звіти",             # NEW
+            "FAQ",               # NEW
+            "GPT-Visibility"
+        ]
         
-        st.divider()
+        icons = [
+            "speedometer2", 
+            "list-task", 
+            "router", 
+            "people", 
+            "lightbulb", 
+            "clock-history", # Icon for History
+            "file-earmark-text", # Icon for Reports
+            "question-circle",   # Icon for FAQ
+            "robot"
+        ]
 
-        # 2. ВИБІР ПРОЕКТУ
-        if role == "admin":
-            try:
-                if 'supabase' in globals():
-                    projs_resp = supabase.table("projects").select("id, brand_name, status").execute()
-                    projects_list = projs_resp.data
-                else:
-                    projects_list = []
+        # Якщо адмін - додаємо адмінку
+        if st.session_state.get("role") in ["admin", "super_admin"]:
+            options.append("Адмін")
+            icons.append("shield-lock")
 
-                options_map = {f"{p['brand_name']} (ID: {p['id']})": p for p in projects_list}
-                
-                current_index = 0
-                if current_proj:
-                    current_key = f"{current_proj['brand_name']} (ID: {current_proj['id']})"
-                    if current_key in options_map:
-                        current_index = list(options_map.keys()).index(current_key)
-
-                selected_key = st.selectbox(
-                    "📂 Оберіть проект:",
-                    options=list(options_map.keys()),
-                    index=current_index,
-                    placeholder="Пошук по Назві або ID...",
-                    help="Введіть ID для пошуку"
-                )
-
-                if selected_key:
-                    new_proj = options_map[selected_key]
-                    if not current_proj or new_proj['id'] != current_proj['id']:
-                        st.session_state["current_project"] = new_proj
-                        st.rerun()
-
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-        else:
-            # ЮЗЕР
-            if current_proj:
-                st.markdown(f"### 📂 {current_proj.get('brand_name')}")
-                with st.expander("ℹ️ Project ID"):
-                    st.code(current_proj.get('id'), language=None)
-            else:
-                st.warning("Проект не обрано")
-
-        st.write("") 
-
-    # 3. НАВІГАЦІЯ
-    with st.sidebar:
         selected = option_menu(
             "Меню",
-            ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility", "Адмін"] if role == "admin" else ["Дашборд", "Перелік запитів", "Джерела", "Конкуренти", "Рекомендації", "GPT-Visibility"],
-            icons=["speedometer2", "list-task", "router", "people", "lightbulb", "robot", "shield-lock"],
+            options,
+            icons=icons,
             menu_icon="cast",
             default_index=0,
             styles={
-                "nav-link-selected": {"background-color": "#00C896"}, 
+                "container": {"padding": "0!important", "background-color": "transparent"},
+                "icon": {"color": "grey", "font-size": "16px"}, 
+                "nav-link": {"font-size": "14px", "text-align": "left", "margin":"0px", "--hover-color": "#eee"},
+                "nav-link-selected": {"background-color": "#00C896"},
             }
         )
+        
+        # Статус проекту знизу
+        if proj:
+            st.write("")
+            st.write("")
+            status = proj.get("status", "trial").upper()
+            color = "orange" if status == "TRIAL" else "green" if status == "ACTIVE" else "red"
+            st.markdown(f"Статус: **:{color}[{status}]**")
+            
+            # Якщо адмін зайшов під юзером
+            if st.session_state.get("is_impersonating"):
+                st.info("🕵️ Admin Mode")
 
-    # 4. ФУТЕР
-    with st.sidebar:
-        st.divider()
-        
-        # Статус плану
-        if st.session_state.get("current_project"):
-            status_text = st.session_state["current_project"].get("status", "TRIAL").upper()
-            color = "#FFA500" if "TRIAL" in status_text else "#00C896"
-            st.markdown(f"Статус: <span style='color:{color}; font-weight:bold;'>● {status_text}</span>", unsafe_allow_html=True)
-        
+        # Кнопка виходу в самому низу
         st.write("")
-        
-        # ✅ ТУТ ДОДАЛИ НАПИС "Admin Mode" (Тільки для адміна)
-        if role == "admin":
-            st.caption("🛡️ Admin Mode")
-
-        # Support
-        st.caption("Support: hi@virshi.ai")
-
-        # Кнопка Виходу
-        if st.button("Вийти з акаунту", key="logout_btn", use_container_width=True):
+        if st.button("Вийти з акаунту", use_container_width=True):
             logout()
 
     return selected
@@ -4056,44 +4317,53 @@ def show_chat_page():
             
 def main():
     # 1. Session Check
-    check_session()
+    if 'check_session' in globals():
+        check_session()
 
     # 2. If not logged in -> Show Auth Page
     if not st.session_state.get("user"):
-        show_auth_page()  # <--- CHANGED THIS LINE
+        # Переконайтеся, що show_auth_page визначена
+        if 'show_auth_page' in globals():
+            show_auth_page()
+        else:
+            st.error("Функція авторизації не знайдена.")
         return
 
     # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ
-    # Якщо користувач залогінений, але проект ще не завантажено в сесію - пробуємо знайти
     if not st.session_state.get("current_project"):
         try:
             user_id = st.session_state["user"].id
-            # Шукаємо проект користувача
             resp = supabase.table("projects").select("*").eq("user_id", user_id).execute()
             if resp.data:
-                # Якщо знайшли - записуємо в сесію (беремо перший)
+                # Беремо перший знайдений проект
                 st.session_state["current_project"] = resp.data[0]
-                st.rerun() # Перезавантажуємо, щоб оновити інтерфейс
+                st.rerun()
         except Exception:
             pass
 
     # 4. ЛОГІКА ONBOARDING
-    # Якщо проекту все ще немає (і це не адмін, бо адмін може не мати свого проекту)
-    if st.session_state.get("current_project") is None and st.session_state.get("role") != "admin":
-        # Показуємо кнопку виходу в сайдбарі (щоб не застряг)
+    # Якщо проекту немає і це не адмін
+    user_role = st.session_state.get("role", "user")
+    
+    if st.session_state.get("current_project") is None and user_role not in ["admin", "super_admin"]:
         with st.sidebar:
-            st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150) # Або текст
+            # Логотип
+            st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150)
             if st.button("Вийти"):
                 logout()
         
-        # Запускаємо Майстер створення
-        onboarding_wizard()
+        # Запуск майстра
+        if 'onboarding_wizard' in globals():
+            onboarding_wizard()
+        else:
+            st.error("Onboarding Wizard not found.")
     
     # 5. ОСНОВНИЙ ДОДАТОК
     else:
-        # Меню
+        # Виклик меню
         page = sidebar_menu()
 
+        # Роутинг сторінок
         if page == "Дашборд":
             show_dashboard()
         elif page == "Перелік запитів":
@@ -4101,13 +4371,33 @@ def main():
         elif page == "Джерела":
             show_sources_page()
         elif page == "Конкуренти":
-            show_competitors_page()
+            # Якщо окремої сторінки немає, можна використати частину дашборду або заглушку
+            if 'show_competitors_page' in globals():
+                show_competitors_page()
+            else:
+                st.info("Розділ у розробці (див. Дашборд).")
         elif page == "Рекомендації":
             show_recommendations_page()
+            
+        # --- НОВІ СТОРІНКИ ---
+        elif page == "Історія сканувань":
+            if 'show_history_page' in globals(): show_history_page()
+            else: st.warning("Функція show_history_page не знайдена.")
+            
+        elif page == "Звіти":
+            if 'show_reports_page' in globals(): show_reports_page()
+            else: st.warning("Функція show_reports_page не знайдена.")
+            
+        elif page == "FAQ":
+            if 'show_faq_page' in globals(): show_faq_page()
+            else: st.warning("Функція show_faq_page не знайдена.")
+        # ---------------------
+
         elif page == "GPT-Visibility":
             show_chat_page()
+            
         elif page == "Адмін":
-            if st.session_state.get("role") == "admin":
+            if user_role in ["admin", "super_admin"]:
                 show_admin_page()
             else:
                 st.error("Доступ заборонено.")
