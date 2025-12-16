@@ -235,7 +235,10 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    Оновлено: Додано авторизацію (virshi-auth).
+    Оновлено:
+    1. Status='blocked' -> Заборонено повністю.
+    2. Status='trial' -> Дозволено ТІЛЬКИ якщо модель = Gemini (для онбордингу).
+    3. Status='active' -> Дозволено все.
     """
     
     # 1. Мапінг назв (UI -> Technical)
@@ -253,10 +256,32 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     else:
         status = current_proj.get("status", "trial")
     
-    # Якщо статус заблокований або термін дії вийшов - зупиняємо
-    if status in ["blocked", "expired"]:
-        st.error(f"⛔ Дія недоступна. Ваш статус: {status.upper()}. Будь ласка, зв'яжіться з адміністратором.")
+    # Якщо статус заблокований
+    if status == "blocked":
+        st.error(f"⛔ Дія недоступна. Ваш проект заблоковано (BLOCKED). Будь ласка, зв'яжіться з адміністратором.")
         return False
+
+    # Перевірка вхідних моделей
+    if not models:
+        models = ["Perplexity"]
+
+    # 🔥 ЛОГІКА ТРІАЛУ (TRIAL)
+    if status == "trial":
+        # Перевіряємо, чи намагаються запустити щось крім Gemini
+        # (У нас "Google Gemini" мапиться на "gemini-1.5-pro")
+        
+        is_only_gemini = True
+        for m in models:
+            if "Gemini" not in m and "gemini" not in m:
+                is_only_gemini = False
+                break
+        
+        # Якщо це не чистий Gemini (тобто це ручний запуск з дашборду на GPT/Perplexity) - блокуємо
+        if not is_only_gemini:
+            st.error("⛔ У статусі TRIAL ручний запуск аналізу обмежено. Будь ласка, активуйте підписку (ACTIVE) для повного доступу.")
+            return False
+        
+        # Якщо це Gemini - пропускаємо (це сценарій Onboarding Step 2)
 
     try:
         # Отримуємо email безпечно
@@ -265,10 +290,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         
         if isinstance(keywords, str):
             keywords = [keywords]
-
-        # Якщо моделі не обрані або пусті, беремо дефолтну
-        if not models:
-            models = ["Perplexity"]
 
         success_count = 0
 
@@ -303,7 +324,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             }
             
             try:
-                # Додано headers=headers
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
@@ -324,6 +344,7 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     except Exception as e:
         st.error(f"Критична помилка запуску: {e}")
         return False
+
 
 def n8n_request_recommendations(project, topic: str, brief: str):
     """
@@ -2151,17 +2172,15 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FIX GOOGLE SHEETS IMPORT & SPLIT BUTTONS.
-    1. Import: Виправлено логіку Google Sheets (Regex ID extraction).
-    2. Import: Розділено кнопки на "Зберегти" та "Зберегти і Аналізувати".
-    3. Export: Виправлено помилку неіснуючої колонки last_scan_date.
+    ВЕРСІЯ: CRON PERMISSION CHECK.
+    1. Автосканування доступне лише якщо proj['allow_cron'] == True.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime
     import time
     import io 
-    import re # Додано для обробки посилань
+    import re 
     
     # CSS Стилізація
     st.markdown("""
@@ -2321,7 +2340,7 @@ def show_keywords_page():
                         else:
                             st.warning("Введіть хоча б один запит.")
 
-        # --- TAB 2: ІМПОРТ EXCEL / URL (FIXED) ---
+        # --- TAB 2: ІМПОРТ EXCEL / URL ---
         with tab_import:
             st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet. **Важливо:** Для Google Sheet має бути відкрито доступ (Anyone with the link). Перша колонка має називатися **Keyword**.")
             
@@ -2344,19 +2363,14 @@ def show_keywords_page():
                 import_url = st.text_input("Вставте посилання (Google Sheets або CSV):")
                 if import_url:
                     try:
-                        # 1. Спроба обробити Google Sheets через Regex
                         if "docs.google.com" in import_url:
-                            # Витягуємо ID таблиці: /d/1B.../
                             match = re.search(r'/d/([a-zA-Z0-9-_]+)', import_url)
                             if match:
                                 sheet_id = match.group(1)
-                                # Формуємо правильне посилання на експорт CSV
                                 csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
                                 df_upload = pd.read_csv(csv_url)
                             else:
                                 st.error("Не вдалося розпізнати ID Google таблиці. Перевірте посилання.")
-                        
-                        # 2. Звичайний CSV/XLSX
                         elif import_url.endswith(".csv"):
                             df_upload = pd.read_csv(import_url)
                         elif import_url.endswith(".xlsx"):
@@ -2364,16 +2378,13 @@ def show_keywords_page():
                         else:
                             st.warning("Спробуємо прочитати як CSV...")
                             df_upload = pd.read_csv(import_url)
-                            
                     except Exception as e:
                         if "400" in str(e) or "403" in str(e):
-                            st.error("🔒 Помилка доступу (HTTP 400/403). Переконайтеся, що в налаштуваннях доступу Google таблиці обрано **'Усі, хто має посилання' (Anyone with the link)**.")
+                            st.error("🔒 Помилка доступу (HTTP 400/403).")
                         else:
                             st.error(f"Не вдалося завантажити: {e}")
 
-            # Якщо дані успішно завантажені у DataFrame
             if df_upload is not None:
-                # Нормалізація колонок
                 target_col = None
                 cols_lower = [str(c).lower().strip() for c in df_upload.columns]
                 
@@ -2382,12 +2393,11 @@ def show_keywords_page():
                 elif "запит" in cols_lower:
                     target_col = df_upload.columns[cols_lower.index("запит")]
                 else:
-                    target_col = df_upload.columns[0] # Беремо першу
+                    target_col = df_upload.columns[0] 
                 
                 preview_kws = df_upload[target_col].dropna().astype(str).tolist()
                 st.write(f"✅ Знайдено **{len(preview_kws)}** запитів. Приклад: {preview_kws[:3]}")
                 
-                # --- РОЗДІЛЕНІ КНОПКИ ---
                 st.write("---")
                 st.write("Оберіть дію:")
                 
@@ -2399,7 +2409,6 @@ def show_keywords_page():
                 with c_imp_btn1:
                     st.write("")
                     st.write("")
-                    # Кнопка 1: Тільки зберегти
                     if st.button("📥 Тільки зберегти", use_container_width=True):
                         if preview_kws:
                             try:
@@ -2418,11 +2427,9 @@ def show_keywords_page():
                 with c_imp_btn2:
                     st.write("")
                     st.write("")
-                    # Кнопка 2: Зберегти і Аналізувати
                     if st.button("🚀 Зберегти та Аналізувати", type="primary", use_container_width=True):
                         if preview_kws:
                             try:
-                                # 1. Save
                                 insert_data = [{
                                     "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
                                     "is_auto_scan": False, "frequency": "daily"
@@ -2430,7 +2437,6 @@ def show_keywords_page():
                                 
                                 res = supabase.table("keywords").insert(insert_data).execute()
                                 
-                                # 2. Analyze
                                 if res.data:
                                     with st.spinner(f"Обробка {len(preview_kws)} запитів..."):
                                         if 'n8n_trigger_analysis' in globals():
@@ -2446,18 +2452,15 @@ def show_keywords_page():
                             except Exception as e:
                                 st.error(f"Помилка процесу: {e}")
 
-        # --- TAB 3: ЕКСПОРТ EXCEL (ВИПРАВЛЕНО) ---
+        # --- TAB 3: ЕКСПОРТ EXCEL ---
         with tab_export:
             st.write("Натисніть кнопку нижче, щоб завантажити всі запити цього проекту в Excel.")
             
             try:
-                # 1. Беремо тільки існуючі колонки (БЕЗ last_scan_date)
                 kws_resp = supabase.table("keywords").select("id, keyword_text, created_at").eq("project_id", proj["id"]).execute()
                 
                 if kws_resp.data:
                     df_export = pd.DataFrame(kws_resp.data)
-                    
-                    # 2. Окремо отримуємо дати сканувань для цих слів
                     scan_resp = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
                     
                     last_scan_map = {}
@@ -2466,16 +2469,12 @@ def show_keywords_page():
                             if s['keyword_id'] not in last_scan_map:
                                 last_scan_map[s['keyword_id']] = s['created_at']
                     
-                    # 3. Об'єднуємо дані в Python (вручну додаємо колонку)
                     df_export['last_scan_date'] = df_export['id'].map(lambda x: last_scan_map.get(x, "-"))
-                    
-                    # 4. Форматуємо
                     df_export['created_at'] = pd.to_datetime(df_export['created_at']).dt.strftime('%Y-%m-%d %H:%M')
                     df_export['last_scan_date'] = df_export['last_scan_date'].apply(
                         lambda x: pd.to_datetime(x).strftime('%Y-%m-%d %H:%M') if x != "-" else "-"
                     )
                     
-                    # Прибираємо ID, перейменовуємо
                     df_final = df_export[["keyword_text", "created_at", "last_scan_date"]].rename(columns={
                         "keyword_text": "Keyword",
                         "created_at": "Date Added",
@@ -2483,12 +2482,10 @@ def show_keywords_page():
                     })
                     
                     buffer = io.BytesIO()
-                    # Спроба збереження
                     try:
                         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                             df_final.to_excel(writer, index=False, sheet_name='Keywords')
                     except:
-                         # Fallback якщо немає xlsxwriter
                          try:
                              with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                                  df_final.to_excel(writer, index=False, sheet_name='Keywords')
@@ -2602,6 +2599,9 @@ def show_keywords_page():
     h_date.markdown("**Останній аналіз**")
     h_act.markdown("**Видалити**")
 
+    # 🔥 ОТРИМУЄМО ДОЗВІЛ ВІД АДМІНА
+    allow_cron_global = proj.get('allow_cron', False)
+
     for idx, k in enumerate(keywords, start=1):
         with st.container(border=True):
             c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
@@ -2624,13 +2624,18 @@ def show_keywords_page():
                 is_auto = k.get('is_auto_scan', False) 
                 
                 with cron_c1:
-                    new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}", label_visibility="collapsed")
-                    if new_auto != is_auto:
-                        update_kw_field(k['id'], "is_auto_scan", new_auto)
-                        st.rerun()
+                    # 🔥 ЛОГІКА ОБМЕЖЕННЯ (CRON)
+                    if allow_cron_global:
+                        new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}", label_visibility="collapsed")
+                        if new_auto != is_auto:
+                            update_kw_field(k['id'], "is_auto_scan", new_auto)
+                            st.rerun()
+                    else:
+                        st.write("")
+                        st.caption("🔒 Disabled")
 
                 with cron_c2:
-                    if new_auto:
+                    if new_auto and allow_cron_global:
                         current_freq = k.get('frequency', 'daily')
                         freq_options = ["daily", "weekly", "monthly"]
                         try: idx_f = freq_options.index(current_freq)
@@ -2639,7 +2644,7 @@ def show_keywords_page():
                         if new_freq != current_freq:
                             update_kw_field(k['id'], "frequency", new_freq)
                     else:
-                        st.caption("Вимкнено")
+                        st.write("")
             
             with c5:
                 st.write("")
@@ -2673,111 +2678,6 @@ def show_keywords_page():
                     if dc2.button("❌", key=f"no_del_{k['id']}"):
                         st.session_state[del_key] = False
                         st.rerun()
-
-
-# =========================
-# 8. РЕКОМЕНДАЦІЇ
-# =========================
-
-
-def show_recommendations_page():
-    proj = st.session_state.get("current_project")
-    if not proj:
-        st.info("Спочатку створіть проект.")
-        return
-
-    st.title("💡 Центр Стратегій та Дій")
-    st.caption("ШІ-аналітик аналізує ваші позиції та генерує покроковий план дій.")
-
-    # 1. Розділяємо на типи рекомендацій
-    # Ми використовуємо константи, які співпадають з ENUM в базі даних (rec_type)
-    tabs = st.tabs(["📣 PR Стратегія", "💻 Digital & SEO", "✍️ Контент-план", "📱 Social Media"])
-    types = ["pr", "digital", "content", "social"]
-
-    for tab, r_type in zip(tabs, types):
-        with tab:
-            # --- Блок Генерації (Тільки для Адміна або якщо дозволено юзеру) ---
-            # Можна додати перевірку: if st.session_state["role"] == "admin":
-            
-            with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.markdown(f"**Згенерувати новий звіт: {r_type.upper()}**")
-                    st.caption("Аналіз останніх 30 днів, пошук розривів (gaps) та план дій.")
-                with c2:
-                    if st.button(f"🚀 Запустити AI", key=f"btn_gen_{r_type}"):
-                        with st.spinner("Gemini аналізує дані та пише звіт... Це може зайняти до 30 секунд."):
-                            try:
-                                # Тут ми викликаємо n8n вебхук
-                                # Для MVP поки що робимо запис-заглушку, якщо n8n не підключений
-                                # АБО викликаємо реальну функцію n8n_request_recommendations
-                                
-                                # Варіант А: Реальний виклик (розкоментуйте, коли буде готовий n8n)
-                                # n8n_request_recommendations(proj, r_type, "Auto-generated report")
-                                
-                                # Варіант Б: Симуляція (щоб ви побачили як це виглядає зараз)
-                                fake_report = f"""
-                                # Стратегія {r_type.upper()} для {proj.get('brand_name')}
-                                **Дата:** {datetime.now().strftime('%Y-%m-%d')}
-                                
-                                ## 1. Аналіз ситуації
-                                Наразі частка голосу (SOV) складає **{proj.get('sov', '15')}%**.
-                                Основні конкуренти домінують у категорії "Депозити".
-                                
-                                ## 2. Ключові проблеми
-                                * Відсутність згадок на *Minfin.com.ua*.
-                                * Низька тональність у відповідях Perplexity.
-                                
-                                ## 3. План дій (Action Items)
-                                1. **Стаття-огляд:** Замовити розміщення на finance.ua.
-                                2. **Робота з відгуками:** Відповісти на скарги на форумах.
-                                """
-                                
-                                supabase.table("recommendation_reports").insert({
-                                    "project_id": proj["id"],
-                                    "report_type": r_type,
-                                    "report_content": fake_report
-                                }).execute()
-                                
-                                st.success("Звіт успішно згенеровано!")
-                                time.sleep(1)
-                                st.rerun()
-                                
-                            except Exception as e:
-                                st.error(f"Помилка генерації: {e}")
-
-            st.divider()
-            st.subheader("📂 Історія звітів")
-
-            # 2. Виведення історії звітів з бази
-            try:
-                reports = (
-                    supabase.table("recommendation_reports")
-                    .select("*")
-                    .eq("project_id", proj["id"])
-                    .eq("report_type", r_type)
-                    .order("created_at", desc=True)
-                    .execute()
-                    .data
-                )
-            except Exception as e:
-                st.error(f"Помилка завантаження: {e}")
-                reports = []
-
-            if not reports:
-                st.info("У цій категорії ще немає звітів.")
-            else:
-                for rep in reports:
-                    date_str = str(rep['created_at'])[:10]
-                    with st.expander(f"📄 Звіт від {date_str}"):
-                        # Кнопка видалення звіту
-                        if st.button("Видалити звіт", key=f"del_rep_{rep['id']}"):
-                            supabase.table("recommendation_reports").delete().eq("id", rep['id']).execute()
-                            st.rerun()
-                        
-                        st.markdown("---")
-                        # Рендеринг Markdown (основна фішка)
-                        st.markdown(rep['report_content'])
 
 # =========================
 # 9. SIDEBAR
