@@ -5,3 +5,4 @@ supabase
 streamlit-option-menu
 extra-streamlit-components
 requests
+openpyxl
