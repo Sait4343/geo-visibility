@@ -2111,18 +2111,19 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FIX EXPORT ERROR & ADD URL IMPORT.
-    1. Export: Виправлено запит до БД (прибрано неіснуючу колонку).
-    2. Import: Додано завантаження за посиланням (Google Sheets/CSV).
-    3. Import: Додано обробку помилки відсутності openpyxl.
+    ВЕРСІЯ: FIX GOOGLE SHEETS IMPORT & SPLIT BUTTONS.
+    1. Import: Виправлено логіку Google Sheets (Regex ID extraction).
+    2. Import: Розділено кнопки на "Зберегти" та "Зберегти і Аналізувати".
+    3. Export: Виправлено помилку неіснуючої колонки last_scan_date.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime
     import time
     import io 
+    import re # Додано для обробки посилань
     
-    # CSS Стилізація (Без змін)
+    # CSS Стилізація
     st.markdown("""
     <style>
         .green-number {
@@ -2217,7 +2218,7 @@ def show_keywords_page():
             st.error(f"Помилка оновлення: {e}")
 
     # ========================================================
-    # 2. БЛОК РЕДАГУВАННЯ (ОНОВЛЕНИЙ)
+    # 2. БЛОК РЕДАГУВАННЯ (Tabs)
     # ========================================================
     with st.expander("✏️ Редагування запитів", expanded=False): 
         
@@ -2280,15 +2281,15 @@ def show_keywords_page():
                         else:
                             st.warning("Введіть хоча б один запит.")
 
-        # --- TAB 2: ІМПОРТ EXCEL / URL (ВИПРАВЛЕНО) ---
+        # --- TAB 2: ІМПОРТ EXCEL / URL (FIXED) ---
         with tab_import:
-            st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet (має бути відкритий доступ). Перша колонка має називатися **Keyword**.")
+            st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet. **Важливо:** Для Google Sheet має бути відкрито доступ (Anyone with the link). Перша колонка має називатися **Keyword**.")
             
-            # Вибір джерела
             import_source = st.radio("Джерело:", ["Файл (.xlsx)", "Посилання (URL)"], horizontal=True)
             
             df_upload = None
             
+            # Логіка завантаження
             if import_source == "Файл (.xlsx)":
                 uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"])
                 if uploaded_file:
@@ -2300,15 +2301,22 @@ def show_keywords_page():
                         st.error(f"Не вдалося прочитати файл: {e}")
             
             else: # URL
-                import_url = st.text_input("Вставте посилання (Google Sheets або пряме посилання на CSV/XLSX):")
+                import_url = st.text_input("Вставте посилання (Google Sheets або CSV):")
                 if import_url:
                     try:
-                        # Обробка Google Sheets
+                        # 1. Спроба обробити Google Sheets через Regex
                         if "docs.google.com" in import_url:
-                            # Перетворюємо /edit на /export?format=csv
-                            import_url = import_url.replace('/edit#gid=', '/export?format=csv&gid=')
-                            import_url = import_url.replace('/edit', '/export?format=csv')
-                            df_upload = pd.read_csv(import_url)
+                            # Витягуємо ID таблиці: /d/1B.../
+                            match = re.search(r'/d/([a-zA-Z0-9-_]+)', import_url)
+                            if match:
+                                sheet_id = match.group(1)
+                                # Формуємо правильне посилання на експорт CSV
+                                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+                                df_upload = pd.read_csv(csv_url)
+                            else:
+                                st.error("Не вдалося розпізнати ID Google таблиці. Перевірте посилання.")
+                        
+                        # 2. Звичайний CSV/XLSX
                         elif import_url.endswith(".csv"):
                             df_upload = pd.read_csv(import_url)
                         elif import_url.endswith(".xlsx"):
@@ -2316,33 +2324,43 @@ def show_keywords_page():
                         else:
                             st.warning("Спробуємо прочитати як CSV...")
                             df_upload = pd.read_csv(import_url)
+                            
                     except Exception as e:
-                        st.error(f"Не вдалося завантажити за посиланням: {e}")
+                        if "400" in str(e) or "403" in str(e):
+                            st.error("🔒 Помилка доступу (HTTP 400/403). Переконайтеся, що в налаштуваннях доступу Google таблиці обрано **'Усі, хто має посилання' (Anyone with the link)**.")
+                        else:
+                            st.error(f"Не вдалося завантажити: {e}")
 
-            # Якщо дані отримано
+            # Якщо дані успішно завантажені у DataFrame
             if df_upload is not None:
-                # Шукаємо колонку
+                # Нормалізація колонок
                 target_col = None
-                cols_lower = [c.lower() for c in df_upload.columns]
+                cols_lower = [str(c).lower().strip() for c in df_upload.columns]
                 
                 if "keyword" in cols_lower:
                     target_col = df_upload.columns[cols_lower.index("keyword")]
                 elif "запит" in cols_lower:
                     target_col = df_upload.columns[cols_lower.index("запит")]
                 else:
-                    target_col = df_upload.columns[0] # Беремо першу, якщо не знайшли
+                    target_col = df_upload.columns[0] # Беремо першу
                 
                 preview_kws = df_upload[target_col].dropna().astype(str).tolist()
-                st.write(f"Знайдено **{len(preview_kws)}** запитів. Приклад: {preview_kws[:3]}")
+                st.write(f"✅ Знайдено **{len(preview_kws)}** запитів. Приклад: {preview_kws[:3]}")
                 
-                c_imp_models, c_imp_btn = st.columns([3, 1])
+                # --- РОЗДІЛЕНІ КНОПКИ ---
+                st.write("---")
+                st.write("Оберіть дію:")
+                
+                c_imp_models, c_imp_btn1, c_imp_btn2 = st.columns([2, 1.5, 1.5])
+                
                 with c_imp_models:
-                    selected_models_import = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="import_multiselect")
+                    selected_models_import = st.multiselect("LLM (тільки для кнопки аналізу):", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="import_multiselect")
                 
-                with c_imp_btn:
+                with c_imp_btn1:
                     st.write("")
                     st.write("")
-                    if st.button("🚀 Завантажити та Аналізувати", type="primary", use_container_width=True):
+                    # Кнопка 1: Тільки зберегти
+                    if st.button("📥 Тільки зберегти", use_container_width=True):
                         if preview_kws:
                             try:
                                 insert_data = [{
@@ -2350,8 +2368,29 @@ def show_keywords_page():
                                     "is_auto_scan": False, "frequency": "daily"
                                 } for kw in preview_kws]
                                 
+                                supabase.table("keywords").insert(insert_data).execute()
+                                st.success(f"Успішно збережено {len(preview_kws)} запитів!")
+                                time.sleep(1.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Помилка збереження: {e}")
+
+                with c_imp_btn2:
+                    st.write("")
+                    st.write("")
+                    # Кнопка 2: Зберегти і Аналізувати
+                    if st.button("🚀 Зберегти та Аналізувати", type="primary", use_container_width=True):
+                        if preview_kws:
+                            try:
+                                # 1. Save
+                                insert_data = [{
+                                    "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                    "is_auto_scan": False, "frequency": "daily"
+                                } for kw in preview_kws]
+                                
                                 res = supabase.table("keywords").insert(insert_data).execute()
                                 
+                                # 2. Analyze
                                 if res.data:
                                     with st.spinner(f"Обробка {len(preview_kws)} запитів..."):
                                         if 'n8n_trigger_analysis' in globals():
@@ -2361,20 +2400,18 @@ def show_keywords_page():
                                                 n8n_trigger_analysis(proj["id"], [kw], proj.get("brand_name"), models=selected_models_import)
                                                 my_bar.progress((i + 1) / total)
                                                 time.sleep(0.3)
-                                    st.success("Успішно імпортовано та запущено!")
+                                    st.success("Успішно збережено та запущено!")
                                     time.sleep(2)
                                     st.rerun()
                             except Exception as e:
-                                st.error(f"Помилка імпорту: {e}")
-                        else:
-                            st.warning("Список пустий.")
+                                st.error(f"Помилка процесу: {e}")
 
         # --- TAB 3: ЕКСПОРТ EXCEL (ВИПРАВЛЕНО) ---
         with tab_export:
             st.write("Натисніть кнопку нижче, щоб завантажити всі запити цього проекту в Excel.")
             
             try:
-                # 1. Беремо тільки існуючі колонки
+                # 1. Беремо тільки існуючі колонки (БЕЗ last_scan_date)
                 kws_resp = supabase.table("keywords").select("id, keyword_text, created_at").eq("project_id", proj["id"]).execute()
                 
                 if kws_resp.data:
@@ -2389,7 +2426,7 @@ def show_keywords_page():
                             if s['keyword_id'] not in last_scan_map:
                                 last_scan_map[s['keyword_id']] = s['created_at']
                     
-                    # 3. Об'єднуємо дані в Python
+                    # 3. Об'єднуємо дані в Python (вручну додаємо колонку)
                     df_export['last_scan_date'] = df_export['id'].map(lambda x: last_scan_map.get(x, "-"))
                     
                     # 4. Форматуємо
@@ -2406,7 +2443,7 @@ def show_keywords_page():
                     })
                     
                     buffer = io.BytesIO()
-                    # Використовуємо xlsxwriter, який зазвичай є, або openpyxl
+                    # Спроба збереження
                     try:
                         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                             df_final.to_excel(writer, index=False, sheet_name='Keywords')
@@ -2416,7 +2453,7 @@ def show_keywords_page():
                              with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                                  df_final.to_excel(writer, index=False, sheet_name='Keywords')
                          except ImportError:
-                             st.error("Для експорту потрібна бібліотека `xlsxwriter` або `openpyxl`. Додайте їх у requirements.txt.")
+                             st.error("Для експорту потрібна бібліотека `xlsxwriter` або `openpyxl`.")
                              buffer = None
 
                     if buffer:
