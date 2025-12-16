@@ -746,7 +746,7 @@ def onboarding_wizard():
                                 supabase.table("keywords").insert(kws_data).execute()
                                 
                                 # 4. Виклик функції відправки (почергово)
-                                success = process_onboarding_scan(
+                                success = n8n_trigger_analysis(
                                     project_id=proj_id,
                                     keywords_list=final_kws_to_send,
                                     brand_name=brand_name,
