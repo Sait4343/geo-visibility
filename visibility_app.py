@@ -235,54 +235,50 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    Оновлено:
-    1. Status='blocked' -> Заборонено повністю.
-    2. Status='trial' -> Дозволено ТІЛЬКИ 1 РАЗ і ТІЛЬКИ Gemini.
-    3. Status='active' -> Дозволено все.
+    ВЕРСІЯ: STRICT TRIAL LIMIT + DATA FIX.
+    1. Перевіряє, чи було вже сканування в БД. Якщо так і статус Trial -> БЛОК.
+    2. Передає покращений payload для n8n.
     """
     import requests
     import streamlit as st
     
-    # Підключення до БД (для перевірки історії)
+    # 1. ПІДКЛЮЧЕННЯ ДО БД
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
     elif 'globals' in globals() and 'supabase' in globals():
         supabase = globals()['supabase']
     else:
-        # Якщо функція викликається десь, де немає доступу до st.session_state (рідкісний кейс),
-        # краще повернути помилку, але в рамках Streamlit це спрацює.
-        pass
+        st.error("🚨 Помилка підключення до БД.")
+        return False
 
-    # 1. Мапінг назв (UI -> Technical)
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # 2. 🔒 ПЕРЕВІРКА СТАТУСУ
+    # 2. ОТРИМАННЯ СТАТУСУ
     current_proj = st.session_state.get("current_project")
     
-    # Якщо проект тільки створився (в онбордингу), його може ще не бути в сесії в повному обсязі,
-    # але project_id передається аргументом.
+    # Якщо проект тільки створюється, об'єкта може не бути, вважаємо trial
     status = "trial"
     if current_proj and current_proj.get("id") == project_id:
         status = current_proj.get("status", "trial")
     
-    # Якщо статус заблокований
+    # Якщо заблоковано
     if status == "blocked":
-        st.error(f"⛔ Дія недоступна. Ваш проект заблоковано.")
+        st.error("⛔ Проект заблоковано. Зверніться до адміністратора.")
         return False
 
-    # Перевірка вхідних моделей
+    # Дефолтна модель
     if not models:
         models = ["Perplexity"]
 
     # ==========================================
-    # 🔥 ЛОГІКА ТРІАЛУ (TRIAL)
+    # 🔥 ЖОРСТКА ЛОГІКА ТРІАЛУ
     # ==========================================
     if status == "trial":
-        # 1. Перевірка моделі (Тільки Gemini)
+        # 1. Перевірка: чи це Gemini?
         is_only_gemini = True
         for m in models:
             if "Gemini" not in m and "gemini" not in m:
@@ -290,29 +286,29 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 break
         
         if not is_only_gemini:
-            st.error("⛔ У статусі TRIAL ручний запуск обмежено. Доступно лише перше сканування через Gemini.")
+            st.warning("🔒 У статусі TRIAL доступний аналіз лише через Google Gemini.")
             return False
-        
-        # 2. Перевірка на "Одноразовість" (Чи вже сканували ми щось для цього проекту?)
+
+        # 2. Перевірка: чи вже були сканування?
         try:
-            # Перевіряємо, чи є хоча б один результат сканування для цього проекту
-            existing_scan = supabase.table("scan_results")\
+            # Шукаємо хоча б 1 запис у scan_results для цього проекту
+            existing = supabase.table("scan_results")\
                 .select("id", count="exact")\
                 .eq("project_id", project_id)\
                 .limit(1)\
                 .execute()
             
-            # Якщо count > 0, значить сканування вже було
-            if existing_scan.count and existing_scan.count > 0:
-                st.warning("🔒 Ви вже використали пробний запуск аналізу. Щоб сканувати більше запитів або використовувати інші моделі, активуйте статус ACTIVE.")
+            # Якщо count > 0 або є дані -> це вже не перший раз
+            if existing.data or (existing.count and existing.count > 0):
+                st.error("⛔ Аналіз неможливий у статусі TRIAL (ліміт вичерпано). Будь ласка, зверніться в техпідтримку на пошту hi@virshi.ai, щоб отримати статус ACTIVE.")
                 return False
                 
         except Exception as e:
-            print(f"Error checking trial limit: {e}")
-            # Якщо помилка перевірки - пропускаємо (але це погано)
+            print(f"Check error: {e}")
+            # Якщо помилка перевірки, краще пропустити (або заблокувати, залежить від ризику)
 
     try:
-        # Отримуємо email
+        # User Email
         user = st.session_state.get("user")
         user_email = user.email if user else "no-reply@virshi.ai"
         
@@ -321,22 +317,22 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         success_count = 0
 
-        # 3. ОТРИМУЄМО ОФІЦІЙНІ ДЖЕРЕЛА
+        # 3. ОТРИМАННЯ WHITELIST (Для підрахунку в n8n)
+        official_assets = []
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
                 .eq("project_id", project_id)\
                 .execute()
-            official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
+            # Перетворюємо в чистий список рядків
+            if assets_resp.data:
+                official_assets = [item["domain_or_url"].strip().lower() for item in assets_resp.data]
         except Exception as e:
-            official_assets = []
+            print(f"Assets error: {e}")
 
-        # 🔥 HEADER AUTH
-        headers = {
-            "virshi-auth": "hi@virshi.ai2025"
-        }
+        headers = {"virshi-auth": "hi@virshi.ai2025"}
 
-        # 4. ЦИКЛ ВІДПРАВКИ
+        # 4. ВІДПРАВКА
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
@@ -344,18 +340,19 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "project_id": project_id,
                 "keywords": keywords, 
                 "brand_name": brand_name,
+                "brand_name_lower": brand_name.lower(), # Допомога для n8n
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
-                "official_assets": official_assets
+                "official_assets": official_assets # Список доменів
             }
             
             try:
                 response = requests.post(
-                    N8N_ANALYZE_URL, # Переконайтеся, що ця змінна глобальна
+                    N8N_ANALYZE_URL, 
                     json=payload, 
                     headers=headers, 
-                    timeout=10
+                    timeout=20 # Трохи збільшив таймаут
                 )
                 
                 if response.status_code == 200:
