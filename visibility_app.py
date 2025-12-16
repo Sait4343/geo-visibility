@@ -2172,8 +2172,8 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FIXED UNBOUND LOCAL ERROR & CRON LOGIC.
-    1. Виправлено помилку змінної new_auto.
+    ВЕРСІЯ: AUTO-SYNC STATUS & CRON.
+    1. Примусове оновлення даних проекту з БД (щоб бачити зміни від Адміна).
     2. Якщо адмін заборонив автосканування -> тогл неактивний.
     """
     import pandas as pd
@@ -2245,6 +2245,19 @@ def show_keywords_page():
 
     if "kw_input_count" not in st.session_state:
         st.session_state["kw_input_count"] = 1
+
+    # --- 🔥 СИНХРОНІЗАЦІЯ З БД (FIX UPDATE FROM ADMIN) ---
+    # Оновлюємо дані проекту, щоб побачити зміни статусу/дозволів від Адміна
+    if "current_project" in st.session_state and st.session_state["current_project"]:
+        try:
+            curr_id = st.session_state["current_project"]["id"]
+            # Робимо запит до бази за свіжими даними
+            refresh_resp = supabase.table("projects").select("*").eq("id", curr_id).execute()
+            if refresh_resp.data:
+                # Оновлюємо сесію
+                st.session_state["current_project"] = refresh_resp.data[0]
+        except Exception:
+            pass # Якщо помилка мережі, працюємо зі старими даними
 
     proj = st.session_state.get("current_project")
     if not proj:
@@ -2589,6 +2602,100 @@ def show_keywords_page():
                 else:
                     st.warning("Оберіть хоча б один запит.")
 
+    # ========================================================
+    # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ)
+    # ========================================================
+    
+    h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
+    h_txt.markdown("**Запит**")
+    h_cron.markdown("**Автозапуск**")
+    h_date.markdown("**Останній аналіз**")
+    h_act.markdown("**Видалити**")
+
+    # 🔥 ОТРИМУЄМО ДОЗВІЛ ВІД АДМІНА
+    allow_cron_global = proj.get('allow_cron', False)
+
+    for idx, k in enumerate(keywords, start=1):
+        with st.container(border=True):
+            c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
+            
+            with c1:
+                st.write("") 
+                is_checked = select_all
+                st.checkbox("", key=f"chk_{k['id']}", value=is_checked)
+            
+            with c2:
+                st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
+            
+            with c3:
+                if st.button(k['keyword_text'], key=f"link_btn_{k['id']}", help="Натисніть для детального аналізу"):
+                    st.session_state["focus_keyword_id"] = k["id"]
+                    st.rerun()
+            
+            with c4:
+                cron_c1, cron_c2 = st.columns([0.8, 1.2])
+                is_auto = k.get('is_auto_scan', False) 
+                
+                # Ініціалізація перед перевіркою
+                new_auto = is_auto 
+
+                with cron_c1:
+                    # Відображаємо тогл тільки якщо дозволено глобально
+                    if allow_cron_global:
+                        new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}", label_visibility="collapsed")
+                        if new_auto != is_auto:
+                            update_kw_field(k['id'], "is_auto_scan", new_auto)
+                            st.rerun()
+                    else:
+                        st.toggle("Авто", value=False, key=f"auto_{k['id']}", label_visibility="collapsed", disabled=True)
+                        st.caption("🔒 Admin")
+
+                with cron_c2:
+                    if new_auto and allow_cron_global:
+                        current_freq = k.get('frequency', 'daily')
+                        freq_options = ["daily", "weekly", "monthly"]
+                        try: idx_f = freq_options.index(current_freq)
+                        except: idx_f = 0
+                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=f"freq_{k['id']}", label_visibility="collapsed")
+                        if new_freq != current_freq:
+                            update_kw_field(k['id'], "frequency", new_freq)
+                    else:
+                        st.write("")
+            
+            with c5:
+                st.write("")
+                date_iso = k.get('last_scan_date')
+                formatted_date = format_kyiv_time(date_iso)
+                st.caption(f"{formatted_date}")
+            
+            with c6:
+                st.write("")
+                
+                del_key = f"confirm_del_kw_{k['id']}"
+                if del_key not in st.session_state: st.session_state[del_key] = False
+
+                if not st.session_state[del_key]:
+                    if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}"):
+                        st.session_state[del_key] = True
+                        st.rerun()
+                else:
+                    dc1, dc2 = st.columns(2)
+                    if dc1.button("✅", key=f"yes_del_{k['id']}", type="primary"):
+                        try:
+                            supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
+                            supabase.table("keywords").delete().eq("id", k["id"]).execute()
+                            st.success("!")
+                            st.session_state[del_key] = False
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error("Помилка")
+                    
+                    if dc2.button("❌", key=f"no_del_{k['id']}"):
+                        st.session_state[del_key] = False
+                        st.rerun()
+
+    
     # ========================================================
     # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ)
     # ========================================================
