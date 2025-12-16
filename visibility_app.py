@@ -567,10 +567,9 @@ def login_page():
 def onboarding_wizard():
     """
     Майстер створення проекту.
-    ВЕРСІЯ: FIXED & FINAL.
-    1. Виправлено помилку 'process_onboarding_scan is not defined'.
-    2. Використовує існуючу функцію n8n_trigger_analysis.
-    3. Збережено редагування, нумерацію та логіку whitelist.
+    ВЕРСІЯ: REGION SELECT + TIMEOUT FIX.
+    1. Регіон: Випадаючий список (Ukraine, USA, Europe, Global).
+    2. База даних: Регіон записується динамічно.
     """
     import requests
     import time
@@ -614,7 +613,18 @@ def onboarding_wizard():
                 industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех", value=st.session_state.get("temp_industry", ""))
             with c2:
                 domain = st.text_input("Домен (офіційний сайт)", placeholder="monobank.ua", value=st.session_state.get("temp_domain", ""))
-                st.markdown("<p style='color: #6c5ce7; margin-top: 10px;'>📍 **Регіон:** UA (Фіксовано)</p>", unsafe_allow_html=True)
+                
+                # 🔥 UPDATE: Випадаючий список замість фіксованого тексту
+                region_options = ["Ukraine", "USA", "Europe", "Global"]
+                # Якщо раніше вже обирали, беремо збережене, інакше дефолт Ukraine (0 індекс)
+                saved_region = st.session_state.get("temp_region", "Ukraine")
+                try:
+                    idx = region_options.index(saved_region)
+                except:
+                    idx = 0
+                
+                region = st.selectbox("Регіон", options=region_options, index=idx)
+
             products = st.text_area("Продукти / Послуги", value=st.session_state.get("temp_products", ""))
 
             if st.button("Згенерувати запити"):
@@ -623,19 +633,19 @@ def onboarding_wizard():
                     st.session_state["temp_domain"] = domain
                     st.session_state["temp_industry"] = industry
                     st.session_state["temp_products"] = products
-                    st.session_state["temp_region"] = "UA"
+                    # 🔥 UPDATE: Зберігаємо обраний регіон
+                    st.session_state["temp_region"] = region
 
                     with st.spinner("Генеруємо релевантні запити..."):
-                        # Виклик функції генерації (має бути з Auth)
+                        # Виклик оновленої функції з таймаутом 60с
                         prompts = n8n_generate_prompts(brand, domain, industry, products)
                         if prompts:
                             st.session_state["generated_prompts"] = prompts
                             st.session_state["onboarding_step"] = 3
                             st.rerun()
-                        else:
-                            st.error("Помилка генерації. Перевірте з'єднання.")
+                        # Якщо помилка таймауту, повідомлення виведе сама функція n8n_generate_prompts
                 else:
-                    st.warning("⚠️ Будь ласка, заповніть всі 4 поля.")
+                    st.warning("⚠️ Будь ласка, заповніть всі поля.")
 
         # ========================================================
         # КРОК 2: ПЕРЕВІРКА ТА ЗАПУСК
@@ -711,13 +721,15 @@ def onboarding_wizard():
                             user_id = st.session_state["user"].id
                             brand_name = st.session_state.get("temp_brand")
                             domain_name = st.session_state.get("temp_domain")
+                            # 🔥 UPDATE: Беремо регіон зі стейту
+                            region_val = st.session_state.get("temp_region", "Ukraine")
                             
                             # 2. СТВОРЮЄМО ПРОЕКТ
                             res = supabase.table("projects").insert({
                                 "user_id": user_id, 
                                 "brand_name": brand_name,
                                 "domain": domain_name,
-                                "region": "UA", 
+                                "region": region_val,  # <--- Записуємо обраний регіон
                                 "status": "trial"
                             }).execute()
 
@@ -725,11 +737,9 @@ def onboarding_wizard():
                                 proj_data = res.data[0]
                                 proj_id = proj_data["id"]
                                 
-                                # Оновлюємо сесію, щоб функції нижче бачили проект
                                 st.session_state["current_project"] = proj_data
 
-                                # 3. ЗАПИСУЄМО WHITELIST (Official Assets)
-                                # Це критично, бо n8n_trigger_analysis читає з цієї таблиці
+                                # 3. ЗАПИСУЄМО WHITELIST
                                 clean_d = domain_name.replace("https://", "").replace("http://", "").strip().rstrip("/")
                                 try:
                                     supabase.table("official_assets").insert({
@@ -738,29 +748,27 @@ def onboarding_wizard():
                                         "type": "website"
                                     }).execute()
                                 except Exception:
-                                    pass # Якщо вже існує, ігноруємо
+                                    pass 
 
                                 # 4. ЗАПИСУЄМО KEYWORDS
                                 kws_data = [{"project_id": proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_to_send]
                                 supabase.table("keywords").insert(kws_data).execute()
                                 
-                                # 5. ВІДПРАВКА НА N8N (ЦИКЛ ПРЯМО ТУТ)
+                                # 5. ВІДПРАВКА НА N8N
                                 my_bar = st.progress(0, text="Ініціалізація AI-аналітика...")
                                 total_kws = len(final_kws_to_send)
 
                                 for i, single_kw in enumerate(final_kws_to_send):
-                                    # Оновлюємо прогрес
                                     progress_pct = (i + 1) / total_kws
                                     my_bar.progress(progress_pct, text=f"Аналіз запиту: {single_kw}...")
                                     
-                                    # Використовуємо існуючу функцію!
                                     n8n_trigger_analysis(
                                         project_id=proj_id, 
-                                        keywords=[single_kw],     # Відправляємо по одному
+                                        keywords=[single_kw],     
                                         brand_name=brand_name,
-                                        models=["Google Gemini"]  # Тільки Gemini
+                                        models=["Google Gemini"]  
                                     )
-                                    time.sleep(0.5) # Пауза для стабільності
+                                    time.sleep(0.5) 
 
                                 my_bar.progress(1.0, text="✅ Проект створено успішно!")
                                 time.sleep(1)
