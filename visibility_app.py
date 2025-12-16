@@ -237,10 +237,22 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     Відправляє запит на n8n для аналізу.
     Оновлено:
     1. Status='blocked' -> Заборонено повністю.
-    2. Status='trial' -> Дозволено ТІЛЬКИ якщо модель = Gemini (для онбордингу).
+    2. Status='trial' -> Дозволено ТІЛЬКИ 1 РАЗ і ТІЛЬКИ Gemini.
     3. Status='active' -> Дозволено все.
     """
+    import requests
+    import streamlit as st
     
+    # Підключення до БД (для перевірки історії)
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'globals' in globals() and 'supabase' in globals():
+        supabase = globals()['supabase']
+    else:
+        # Якщо функція викликається десь, де немає доступу до st.session_state (рідкісний кейс),
+        # краще повернути помилку, але в рамках Streamlit це спрацює.
+        pass
+
     # 1. Мапінг назв (UI -> Technical)
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
@@ -248,43 +260,59 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # 2. 🔒 ПЕРЕВІРКА СТАТУСУ (БЛОКУВАННЯ)
+    # 2. 🔒 ПЕРЕВІРКА СТАТУСУ
     current_proj = st.session_state.get("current_project")
     
-    if current_proj is None:
-        status = "trial" 
-    else:
+    # Якщо проект тільки створився (в онбордингу), його може ще не бути в сесії в повному обсязі,
+    # але project_id передається аргументом.
+    status = "trial"
+    if current_proj and current_proj.get("id") == project_id:
         status = current_proj.get("status", "trial")
     
     # Якщо статус заблокований
     if status == "blocked":
-        st.error(f"⛔ Дія недоступна. Ваш проект заблоковано (BLOCKED). Будь ласка, зв'яжіться з адміністратором.")
+        st.error(f"⛔ Дія недоступна. Ваш проект заблоковано.")
         return False
 
     # Перевірка вхідних моделей
     if not models:
         models = ["Perplexity"]
 
+    # ==========================================
     # 🔥 ЛОГІКА ТРІАЛУ (TRIAL)
+    # ==========================================
     if status == "trial":
-        # Перевіряємо, чи намагаються запустити щось крім Gemini
-        # (У нас "Google Gemini" мапиться на "gemini-1.5-pro")
-        
+        # 1. Перевірка моделі (Тільки Gemini)
         is_only_gemini = True
         for m in models:
             if "Gemini" not in m and "gemini" not in m:
                 is_only_gemini = False
                 break
         
-        # Якщо це не чистий Gemini (тобто це ручний запуск з дашборду на GPT/Perplexity) - блокуємо
         if not is_only_gemini:
-            st.error("⛔ У статусі TRIAL ручний запуск аналізу обмежено. Будь ласка, активуйте підписку (ACTIVE) для повного доступу.")
+            st.error("⛔ У статусі TRIAL ручний запуск обмежено. Доступно лише перше сканування через Gemini.")
             return False
         
-        # Якщо це Gemini - пропускаємо (це сценарій Onboarding Step 2)
+        # 2. Перевірка на "Одноразовість" (Чи вже сканували ми щось для цього проекту?)
+        try:
+            # Перевіряємо, чи є хоча б один результат сканування для цього проекту
+            existing_scan = supabase.table("scan_results")\
+                .select("id", count="exact")\
+                .eq("project_id", project_id)\
+                .limit(1)\
+                .execute()
+            
+            # Якщо count > 0, значить сканування вже було
+            if existing_scan.count and existing_scan.count > 0:
+                st.warning("🔒 Ви вже використали пробний запуск аналізу. Щоб сканувати більше запитів або використовувати інші моделі, активуйте статус ACTIVE.")
+                return False
+                
+        except Exception as e:
+            print(f"Error checking trial limit: {e}")
+            # Якщо помилка перевірки - пропускаємо (але це погано)
 
     try:
-        # Отримуємо email безпечно
+        # Отримуємо email
         user = st.session_state.get("user")
         user_email = user.email if user else "no-reply@virshi.ai"
         
@@ -293,7 +321,7 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         success_count = 0
 
-        # 3. ОТРИМУЄМО ОФІЦІЙНІ ДЖЕРЕЛА (WHITELIST)
+        # 3. ОТРИМУЄМО ОФІЦІЙНІ ДЖЕРЕЛА
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
@@ -301,7 +329,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 .execute()
             official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
         except Exception as e:
-            print(f"Error fetching assets: {e}")
             official_assets = []
 
         # 🔥 HEADER AUTH
@@ -325,7 +352,7 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             
             try:
                 response = requests.post(
-                    N8N_ANALYZE_URL, 
+                    N8N_ANALYZE_URL, # Переконайтеся, що ця змінна глобальна
                     json=payload, 
                     headers=headers, 
                     timeout=10
