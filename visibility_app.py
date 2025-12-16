@@ -2560,10 +2560,10 @@ def show_recommendations_page():
 def show_sources_page():
     """
     Сторінка джерел.
-    ВЕРСІЯ: FIX TABLE READING (OFFICIAL_ASSETS).
-    1. Читає дані з таблиці official_assets (замість колонки projects).
-    2. Зберігає зміни в таблицю official_assets.
-    3. Виправлено відображення домену з реєстрації.
+    ВЕРСІЯ: FIXED & REDESIGNED.
+    1. Читає з таблиці official_assets (тепер домен з реєстрації буде видно).
+    2. Дизайн таблиці Whitelist приведено до стилю інших таблиць.
+    3. Виправлено логіку збереження при редагуванні.
     """
     import pandas as pd
     import plotly.express as px
@@ -2589,7 +2589,7 @@ def show_sources_page():
     st.title("🔗 Джерела")
 
     # ==============================================================================
-    # 1. ОТРИМАННЯ ДАНИХ (Сканування)
+    # 1. ОТРИМАННЯ ДАНИХ (Скан результати)
     # ==============================================================================
     try:
         # Keywords
@@ -2645,26 +2645,26 @@ def show_sources_page():
         df_master = pd.DataFrame()
 
     # ==============================================================================
-    # 2. WHITELIST LOGIC (ВИПРАВЛЕНО ЧИТАННЯ)
+    # 2. WHITELIST LOGIC (ПРАВИЛЬНЕ ЧИТАННЯ)
     # ==============================================================================
     try:
-        # 🔥 FIX: Читаємо з правильної таблиці official_assets
+        # 🔥 FIX: Читаємо з таблиці official_assets
         oa_resp = supabase.table("official_assets").select("domain_or_url, type").eq("project_id", proj["id"]).execute()
         raw_assets = oa_resp.data if oa_resp.data else []
     except Exception as e:
         raw_assets = []
 
-    # Формуємо список для відображення
+    # Формуємо список для логіки
     assets_list_dicts = []
     for item in raw_assets:
         assets_list_dicts.append({
             "Домен": item.get("domain_or_url", ""), 
-            "Мітка": item.get("type", "website")
+            "Мітка": item.get("type", "Веб-сайт")
         })
     
     OFFICIAL_DOMAINS = [d["Домен"].lower().strip() for d in assets_list_dicts if d["Домен"]]
 
-    # Перевірка
+    # Функція перевірки
     def check_is_official(url):
         if not url: return False
         u_str = str(url).lower()
@@ -2712,8 +2712,7 @@ def show_sources_page():
                     )
                     fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=350, showlegend=True)
                     fig.update_traces(textposition='inside', textinfo='percent+label')
-                    # 🔥 FIX: Додано key
-                    st.plotly_chart(fig, use_container_width=True, key="sources_pie_chart_unique")
+                    st.plotly_chart(fig, use_container_width=True, key="unique_chart_key_sources_1")
                 else:
                     st.info("Немає даних.")
 
@@ -2747,59 +2746,75 @@ def show_sources_page():
 
         st.divider()
 
-        # --- РЕДАКТОР WHITELIST (ВИПРАВЛЕНО ЗБЕРЕЖЕННЯ) ---
+        # --- РЕДАКТОР WHITELIST (З ОНОВЛЕНИМ ДИЗАЙНОМ) ---
         st.subheader("⚙️ Керування списком (Whitelist)")
         
         if "edit_whitelist_mode" not in st.session_state:
             st.session_state["edit_whitelist_mode"] = False
 
+        # Готуємо DataFrame
         if assets_list_dicts:
             df_assets = pd.DataFrame(assets_list_dicts)
         else:
             df_assets = pd.DataFrame(columns=["Домен", "Мітка"])
-        
-        df_assets.index = df_assets.index + 1
 
-        # Статистика по кожному
+        # Рахуємо статистику (скільки разів цей домен зустрічався в скануванні)
         if not df_master.empty:
             def get_stat_whitelist(dom):
                 matches = df_master[df_master['url'].astype(str).str.contains(dom.lower(), case=False, na=False)]
-                return len(matches), len(matches[matches['provider']=='Perplexity']), len(matches[matches['provider']=='OpenAI GPT']), len(matches[matches['provider']=='Google Gemini'])
+                return len(matches)
             
-            stats = df_assets['Домен'].apply(get_stat_whitelist)
-            df_assets['Всього'] = stats.apply(lambda x: x[0])
-            df_assets['Perplexity'] = stats.apply(lambda x: x[1])
-            df_assets['GPT'] = stats.apply(lambda x: x[2])
-            df_assets['Gemini'] = stats.apply(lambda x: x[3])
+            df_assets['Згадок'] = df_assets['Домен'].apply(get_stat_whitelist)
         else:
-            for c in ['Всього', 'Perplexity', 'GPT', 'Gemini']: df_assets[c] = 0
+            df_assets['Згадок'] = 0
 
+        # --- ВІДОБРАЖЕННЯ ТАБЛИЦІ (View Mode) ---
         if not st.session_state["edit_whitelist_mode"]:
-            st.dataframe(df_assets, use_container_width=True)
+            st.dataframe(
+                df_assets,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Домен": st.column_config.TextColumn("Домен / URL", width="medium"),
+                    "Мітка": st.column_config.TextColumn("Тип ресурсу", width="small"),
+                    "Згадок": st.column_config.NumberColumn("Знайдено разів", format="%d")
+                }
+            )
+            
             if st.button("✏️ Редагувати список"):
                 st.session_state["edit_whitelist_mode"] = True
                 st.rerun()
+        
+        # --- РЕЖИМ РЕДАГУВАННЯ (Edit Mode) ---
         else:
-            st.info("Режим редагування. Внесіть зміни та натисніть 'Зберегти'.")
-            if df_assets.empty: df_assets = pd.DataFrame([{"Домен": "", "Мітка": "Веб-сайт"}])
+            st.info("Додайте або видаліть домени. Натисніть 'Зберегти' для застосування змін.")
             
-            edit_df_input = df_assets[["Домен", "Мітка"]]
+            # Якщо таблиця пуста, додаємо рядок
+            if df_assets.empty: 
+                edit_df_input = pd.DataFrame([{"Домен": "", "Мітка": "Веб-сайт"}])
+            else:
+                edit_df_input = df_assets[["Домен", "Мітка"]]
             
             edited_df = st.data_editor(
                 edit_df_input,
                 num_rows="dynamic",
                 use_container_width=True,
+                hide_index=True, # Чисто, як просили
                 column_config={
-                    "Домен": st.column_config.TextColumn(required=True),
-                    "Мітка": st.column_config.SelectboxColumn(options=["Веб-сайт", "Соціальні мережі", "Автор", "Інше"], required=True)
+                    "Домен": st.column_config.TextColumn("Домен / URL", required=True),
+                    "Мітка": st.column_config.SelectboxColumn(
+                        "Тип ресурсу",
+                        options=["Веб-сайт", "Соціальні мережі", "Стаття", "Інше"],
+                        required=True
+                    )
                 }
             )
+            
             c1, c2 = st.columns([1, 4])
             with c1:
                 if st.button("💾 Зберегти", type="primary"):
-                    # 🔥 FIX: Збереження в таблицю official_assets
                     try:
-                        # 1. Видаляємо старі
+                        # 1. Видаляємо старі записи для цього проекту
                         supabase.table("official_assets").delete().eq("project_id", proj["id"]).execute()
                         
                         # 2. Формуємо нові
@@ -2813,25 +2828,24 @@ def show_sources_page():
                                     "type": row["Мітка"]
                                 })
                         
-                        # 3. Вставляємо нові
+                        # 3. Вставляємо
                         if insert_data:
                             supabase.table("official_assets").insert(insert_data).execute()
                             
-                        st.success("Збережено!")
+                        st.success("Список оновлено!")
                         st.session_state["edit_whitelist_mode"] = False
                         time.sleep(1)
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Помилка при збереженні: {e}")
+                        st.error(f"Помилка збереження: {e}")
             with c2:
                 if st.button("❌ Скасувати"):
                     st.session_state["edit_whitelist_mode"] = False
                     st.rerun()
 
-    # --- TAB 2: РЕНКІНГ ДОМЕНІВ ---
+    # --- TAB 2: РЕНКІНГ ---
     with tab2:
         st.markdown("#### 🏆 Ренкінг доменів")
-        
         if not df_master.empty:
             all_kws = sorted(df_master['keyword_text'].unique())
             sel_kws_rank = st.multiselect("🔍 Фільтр по запитах:", all_kws, key="rank_kw_filter")
@@ -2862,7 +2876,6 @@ def show_sources_page():
 
                 pivot_df[['Тип', 'Вперше знайдено']] = pivot_df['domain'].apply(lambda x: pd.Series(get_meta(x)))
                 pivot_df = pivot_df.sort_values("Всього", ascending=False).reset_index(drop=True)
-                pivot_df.index = pivot_df.index + 1
                 
                 cols_order = ["domain", "Тип", "Всього", "Perplexity", "OpenAI GPT", "Google Gemini", "Вперше знайдено"]
                 final_cols = [c for c in cols_order if c in pivot_df.columns]
@@ -2870,6 +2883,7 @@ def show_sources_page():
                 st.dataframe(
                     pivot_df[final_cols],
                     use_container_width=True,
+                    hide_index=True,
                     column_config={
                         "domain": "Домен",
                         "Всього": st.column_config.NumberColumn(format="%d"),
@@ -2912,7 +2926,6 @@ def show_sources_page():
                 
                 pivot_links['Тип'] = pivot_links['is_official_dynamic'].apply(lambda x: "Офіційні" if x else "Зовнішні")
                 pivot_links = pivot_links.sort_values("Всього", ascending=False).reset_index(drop=True)
-                pivot_links.index = pivot_links.index + 1
                 
                 cols_order = ["url", "domain", "Тип", "Всього", "Perplexity", "OpenAI GPT", "Google Gemini"]
                 final_cols = [c for c in cols_order if c in pivot_links.columns]
@@ -2920,6 +2933,7 @@ def show_sources_page():
                 st.dataframe(
                     pivot_links[final_cols],
                     use_container_width=True,
+                    hide_index=True,
                     column_config={
                         "url": st.column_config.LinkColumn("Посилання", width="large"),
                         "Всього": st.column_config.NumberColumn(format="%d"),
