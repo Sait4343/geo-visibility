@@ -1149,13 +1149,12 @@ def show_competitors_page():
 def show_recommendations_page():
     """
     Сторінка рекомендацій.
-    ВЕРСІЯ: TABLE FIX -> 'strategy_reports'.
-    Використовує нову таблицю strategy_reports замість ai_reports.
+    ВЕРСІЯ: PERMISSION FIX & DATE FILTERS.
     """
     import streamlit as st
     import pandas as pd
     import streamlit.components.v1 as components
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     # --- 1. ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
@@ -1203,7 +1202,6 @@ def show_recommendations_page():
         }
     }
 
-    # Вкладки
     main_tab, history_tab = st.tabs(["🚀 Замовити рекомендацію", "📚 Історія рекомендацій"])
 
     # ========================================================
@@ -1222,75 +1220,68 @@ def show_recommendations_page():
                     st.subheader(info["title"])
                     st.markdown(f"**Що це:** {info['desc']}")
                     st.info(f"💎 **Навіщо це вам:**\n\n{info['value']}")
-                    
                     st.write("") 
                     
-                    # Кнопка генерації
                     if st.button(f"✨ Згенерувати стратегію ({cat_key})", key=f"btn_rec_{cat_key}", type="primary", use_container_width=True):
-                        
                         if proj.get('status') == 'blocked':
                             st.error("Проект заблоковано.")
                         else:
                             with st.spinner("Аналізуємо дані та формуємо звіт... Це займе близько хвилини."):
                                 if 'trigger_ai_recommendation' in globals():
-                                    # 1. Вебхук
                                     html_res = trigger_ai_recommendation(
-                                        user=user,
-                                        project=proj,
-                                        category=info["title"],
-                                        context_text=info["prompt_context"]
+                                        user=user, project=proj, category=info["title"], context_text=info["prompt_context"]
                                     )
-                                    
-                                    # 2. Збереження (НОВА ТАБЛИЦЯ)
                                     try:
-                                        # Використовуємо strategy_reports замість ai_reports
                                         supabase.table("strategy_reports").insert({
-                                            "project_id": proj["id"],
-                                            "category": cat_key,
-                                            "html_content": html_res,
-                                            "created_at": datetime.now().isoformat()
+                                            "project_id": proj["id"], "category": cat_key, "html_content": html_res, "created_at": datetime.now().isoformat()
                                         }).execute()
-                                        
                                         st.success("✅ Рекомендації успішно сформовано!")
                                         st.markdown(f"""
                                             <div style="padding:15px; border:1px solid #00C896; border-radius:5px; background-color:#f0fff4;">
                                                 <p>Ваш звіт збережено. Перейдіть у вкладку <b>"Історія рекомендацій"</b>, щоб переглянути його.</p>
                                             </div>
                                         """, unsafe_allow_html=True)
-                                        
                                     except Exception as e:
                                         st.error(f"Помилка збереження в БД: {e}")
-                                        # Резервний показ, якщо база знову підведе
                                         with st.expander("Резервний перегляд", expanded=True):
                                             components.html(html_res, height=600, scrolling=True)
                                 else:
                                     st.error("Функція trigger_ai_recommendation не знайдена.")
 
     # ========================================================
-    # TAB 2: ІСТОРІЯ
+    # TAB 2: ІСТОРІЯ (НОВИЙ ФІЛЬТР ДАТИ)
     # ========================================================
     with history_tab:
         c_h1, c_h2 = st.columns(2)
         with c_h1:
             sel_cat_hist = st.multiselect("Фільтр по категорії", list(CATEGORIES.keys()), default=[])
         with c_h2:
-            sel_date_hist = st.date_input("Фільтр по даті", value=None)
+            # 🔥 Оновлений селектбокс замість календаря
+            date_filter_options = ["Весь час", "Сьогодні", "Останні 7 днів", "Останні 30 днів"]
+            sel_date_range = st.selectbox("Період", date_filter_options)
 
         try:
-            # Читаємо з нової таблиці strategy_reports
             query = supabase.table("strategy_reports").select("*").eq("project_id", proj["id"]).order("created_at", desc=True)
             hist_resp = query.execute()
             reports = hist_resp.data if hist_resp.data else []
             
             if reports:
                 df_rep = pd.DataFrame(reports)
-                df_rep['date'] = pd.to_datetime(df_rep['created_at']).dt.date
+                df_rep['created_at_dt'] = pd.to_datetime(df_rep['created_at'])
                 
-                # Фільтрація
+                # Фільтрація по категорії
                 if sel_cat_hist:
                     df_rep = df_rep[df_rep['category'].isin(sel_cat_hist)]
-                if sel_date_hist:
-                    df_rep = df_rep[df_rep['date'] == sel_date_hist]
+                
+                # 🔥 Фільтрація по даті (Логіка)
+                now = datetime.now(df_rep['created_at_dt'].dt.tz) # Беремо таймзону з даних
+                
+                if sel_date_range == "Сьогодні":
+                    df_rep = df_rep[df_rep['created_at_dt'].dt.date == now.date()]
+                elif sel_date_range == "Останні 7 днів":
+                    df_rep = df_rep[df_rep['created_at_dt'] >= (now - timedelta(days=7))]
+                elif sel_date_range == "Останні 30 днів":
+                    df_rep = df_rep[df_rep['created_at_dt'] >= (now - timedelta(days=30))]
                 
                 if df_rep.empty:
                     st.info("За обраними критеріями звітів не знайдено.")
@@ -1312,10 +1303,8 @@ def show_recommendations_page():
                                 )
                             with c_del:
                                 if st.button("🗑️", key=f"del_rep_{row['id']}"):
-                                    # Видаляємо з нової таблиці
                                     supabase.table("strategy_reports").delete().eq("id", row['id']).execute()
                                     st.rerun()
-                            
                             st.divider()
                             components.html(row['html_content'], height=500, scrolling=True)
             else:
@@ -1323,7 +1312,6 @@ def show_recommendations_page():
                 
         except Exception as e:
             st.warning(f"Неможливо завантажити історію: {e}")
-
 
 
 def show_faq_page():
