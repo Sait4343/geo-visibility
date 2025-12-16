@@ -3420,10 +3420,10 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    ВЕРСІЯ: ULTIMATE (STATS, SEARCH, CHARTS).
-    1. Tab 1: Повернуто ID, додано кількість запитів.
-    2. Tab 2: Fix user_id при створенні, чистий домен у whitelist.
-    3. Tab 3: Пошук юзерів, статистика, графік реєстрацій, ручне збереження.
+    ВЕРСІЯ: FINAL REFINED UI & LOGIC.
+    1. Tab 1: Rename Cron -> Автосканування.
+    2. Tab 2: Region Select, Excel Import, Green Numbers UI for Keywords.
+    3. Tab 3: User Projects List (Name+Date), Removed Last Login.
     """
     import pandas as pd
     import streamlit as st
@@ -3432,6 +3432,7 @@ def show_admin_page():
     import json
     import time
     import plotly.express as px
+    import io 
 
     # --- КОНСТАНТИ ---
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
@@ -3445,6 +3446,26 @@ def show_admin_page():
             return
     else:
         supabase = globals()['supabase']
+
+    # --- CSS ---
+    st.markdown("""
+    <style>
+        .green-number { 
+            background-color: #00C896; 
+            color: white; 
+            width: 24px; 
+            height: 24px; 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-weight: bold; 
+            font-size: 12px; 
+        }
+        /* Стиль для кнопки видалення запиту */
+        .del-kw-btn { color: #FF4B4B; cursor: pointer; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
     # --- ХЕЛПЕРИ ---
     def clean_data_for_json(data):
@@ -3478,7 +3499,7 @@ def show_admin_page():
         payload = { "brand": brand, "domain": domain, "industry": industry, "products": products }
         headers = {"virshi-auth": "hi@virshi.ai2025"}
         try:
-            response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=25)
+            response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=60)
             if response.status_code == 200:
                 try:
                     data = response.json()
@@ -3498,26 +3519,23 @@ def show_admin_page():
             st.error(f"Connection error: {e}")
             return []
 
+    # Ініціалізація списку запитів для створення
     if "new_proj_keywords" not in st.session_state:
-        st.session_state["new_proj_keywords"] = []
+        st.session_state["new_proj_keywords"] = [] # Список словників [{'keyword': 'text'}]
 
     st.title("🛡️ Admin Panel (CRM)")
 
     # --- 1. ОТРИМАННЯ ДАНИХ ---
     try:
-        # Проекти
         projects_resp = supabase.table("projects").select("*").execute()
         projects_data = projects_resp.data if projects_resp.data else []
 
-        # Кількість запитів по проектах
-        kws_count_resp = supabase.table("keywords").select("project_id", count="exact").execute()
-        # Щоб отримати count group by, в Supabase іноді простіше витягнути id або використати rpc.
-        # Для простоти завантажимо всі keywords (id, project_id) - якщо їх не мільйони
+        # Count keywords
         kws_resp = supabase.table("keywords").select("project_id").execute()
         kws_df = pd.DataFrame(kws_resp.data) if kws_resp.data else pd.DataFrame()
         kw_counts = kws_df['project_id'].value_counts().to_dict() if not kws_df.empty else {}
 
-        # Юзери
+        # Users
         users_resp = supabase.table("profiles").select("*").execute()
         users_data = users_resp.data if users_resp.data else []
         
@@ -3530,8 +3548,7 @@ def show_admin_page():
                 "full_name": full_name,
                 "role": u.get('role', 'user'),
                 "email": u.get('email', '-'),
-                "created_at": u.get('created_at', ''),
-                "last_sign_in": u.get('last_sign_in_at', '-') # Якщо є колонка
+                "created_at": u.get('created_at', '')
             }
 
     except Exception as e:
@@ -3573,7 +3590,6 @@ def show_admin_page():
 
         st.divider()
         
-        # Фільтрація
         filtered_projects = []
         if projects_data:
             for p in projects_data:
@@ -3600,8 +3616,8 @@ def show_admin_page():
         h1.markdown("**Проект / Користувач**")
         h_dash.markdown("") 
         h2.markdown("**Статус**")
-        h3.markdown("**Авто (Cron)**")
-        h_cnt.markdown("**Запитів**") # NEW
+        h3.markdown("**Автосканування**") # ЗМІНЕНО НАЗВУ
+        h_cnt.markdown("**Запитів**")
         h4.markdown("**Дата**")
         h5.markdown("**Дії**")
         st.markdown("<hr style='margin: 5px 0'>", unsafe_allow_html=True)
@@ -3613,7 +3629,6 @@ def show_admin_page():
             u_id = p.get('user_id')
             owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            # Назва
             raw_name = p.get('brand_name') or p.get('project_name')
             domain = p.get('domain', '')
             if raw_name:
@@ -3621,7 +3636,6 @@ def show_admin_page():
             else:
                 clean_name = domain.replace('https://', '').replace('www.', '').split('/')[0] if domain else "Без назви"
 
-            # Кількість запитів
             k_count = kw_counts.get(p_id, 0)
 
             with st.container():
@@ -3631,7 +3645,7 @@ def show_admin_page():
 
                 with c1:
                     st.markdown(f"**{clean_name}**")
-                    st.caption(f"ID: `{p_id}`") # ID ПОВЕРНУТО
+                    st.caption(f"ID: `{p_id}`")
                     if domain: st.caption(f"🌐 {domain}")
                     st.caption(f"👤 {owner_info['full_name']} | {owner_info['email']}")
 
@@ -3659,7 +3673,7 @@ def show_admin_page():
                         update_project_field(p_id, "allow_cron", new_cron)
 
                 with c_cnt:
-                    st.markdown(f"**{k_count}**") # Кількість запитів
+                    st.markdown(f"**{k_count}**")
 
                 with c4:
                     raw_date = p.get('created_at', '')
@@ -3687,7 +3701,7 @@ def show_admin_page():
                 st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
     # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ
+    # TAB 2: СТВОРИТИ ПРОЕКТ (ОНОВЛЕНИЙ UI)
     # ========================================================
     with tab_create:
         st.markdown("##### Створення нового проекту")
@@ -3698,8 +3712,14 @@ def show_admin_page():
         
         c3, c4 = st.columns(2)
         new_industry_val = c3.text_input("Галузь (Обов'язково)", key="new_proj_ind", placeholder="напр. авіаперевезення")
-        new_desc_val = c4.text_area("Продукти/Послуги", placeholder="напр. лоукостер, квитки", height=68, key="new_proj_desc")
         
+        # ДОДАНО РЕГІОН
+        region_options = ["Ukraine", "USA", "Europe", "Global"]
+        new_region_val = c4.selectbox("Регіон", region_options, key="new_proj_region")
+
+        new_desc_val = st.text_area("Продукти/Послуги", placeholder="напр. лоукостер, квитки", height=68, key="new_proj_desc")
+        
+        # АВТОМАТИЧНА ГЕНЕРАЦІЯ
         if st.button("✨ Згенерувати 10 запитів (AI)"):
             if new_domain_val and new_industry_val and new_desc_val: 
                 brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
@@ -3713,42 +3733,90 @@ def show_admin_page():
                     )
                 
                 if generated_kws:
-                    st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in generated_kws]
-                    st.success(f"Успішно згенеровано {len(generated_kws)} запитів!")
+                    # Додаємо до існуючих
+                    current_kws = st.session_state["new_proj_keywords"]
+                    for kw in generated_kws:
+                        current_kws.append({"keyword": kw})
+                    st.session_state["new_proj_keywords"] = current_kws
+                    st.success(f"Додано {len(generated_kws)} запитів!")
                 else:
-                    st.warning("Вебхук не повернув даних. Перевірте логи.")
+                    st.warning("Вебхук не повернув даних.")
             else:
                 st.warning("⚠️ Заповніть: Домен, Галузь та Продукти.")
 
         st.divider()
         st.markdown("###### 📝 Редагування запитів перед створенням")
+        
+        # ----------------------------------------------------
+        # БЛОК ІМПОРТУ (ЯК НА СТОРІНЦІ ЗАПИТІВ)
+        # ----------------------------------------------------
+        with st.expander("📥 Імпорт з Excel", expanded=False):
+            st.info("💡 Завантажте файл .xlsx. Перша колонка має називатися **Keyword**.")
+            uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"], key="admin_kw_import")
+            
+            if uploaded_file:
+                try:
+                    df_upload = pd.read_excel(uploaded_file)
+                    # Нормалізація
+                    target_col = None
+                    cols_lower = [str(c).lower().strip() for c in df_upload.columns]
+                    if "keyword" in cols_lower: target_col = df_upload.columns[cols_lower.index("keyword")]
+                    elif "запит" in cols_lower: target_col = df_upload.columns[cols_lower.index("запит")]
+                    else: target_col = df_upload.columns[0]
+                    
+                    imp_kws = df_upload[target_col].dropna().astype(str).tolist()
+                    
+                    if st.button(f"Додати {len(imp_kws)} запитів з файлу"):
+                        current_kws = st.session_state["new_proj_keywords"]
+                        for kw in imp_kws:
+                            current_kws.append({"keyword": kw})
+                        st.session_state["new_proj_keywords"] = current_kws
+                        st.success("Імпортовано!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Помилка імпорту: {e}")
 
-        df_initial = pd.DataFrame(st.session_state["new_proj_keywords"])
-        if df_initial.empty:
-            df_initial = pd.DataFrame(columns=["keyword"])
+        # ----------------------------------------------------
+        # ТАБЛИЦЯ ЗАПИТІВ (ЗЕЛЕНІ КРУЖЕЧКИ)
+        # ----------------------------------------------------
+        keywords_list = st.session_state["new_proj_keywords"]
+        
+        if not keywords_list:
+            st.info("Список запитів порожній. Додайте вручну або згенеруйте.")
+        else:
+            for i, item in enumerate(keywords_list):
+                with st.container(border=True):
+                    c_num, c_txt, c_act = st.columns([0.5, 8, 1])
+                    
+                    with c_num:
+                        st.markdown(f"<div class='green-number'>{i+1}</div>", unsafe_allow_html=True)
+                    
+                    with c_txt:
+                        # Редагування "на льоту"
+                        new_val = st.text_input("kw", value=item['keyword'], key=f"edit_kw_adm_{i}", label_visibility="collapsed")
+                        if new_val != item['keyword']:
+                            st.session_state["new_proj_keywords"][i]['keyword'] = new_val
+                    
+                    with c_act:
+                        if st.button("🗑️", key=f"del_kw_adm_{i}"):
+                            st.session_state["new_proj_keywords"].pop(i)
+                            st.rerun()
 
-        edited_df = st.data_editor(
-            df_initial,
-            num_rows="dynamic",
-            column_config={
-                "keyword": st.column_config.TextColumn("Список запитів", width="large", required=True)
-            },
-            use_container_width=True,
-            key="editor_new_kws"
-        )
+        if st.button("➕ Додати порожній рядок"):
+            st.session_state["new_proj_keywords"].append({"keyword": ""})
+            st.rerun()
 
-        st.write("")
+        st.divider()
         c_st, c_cr = st.columns(2)
         new_status = c_st.selectbox("Початковий статус", ["trial", "active", "blocked"], key="new_proj_status")
         new_cron = c_cr.checkbox("Дозволити автосканування одразу?", value=False, key="new_proj_cron")
 
         if st.button("🚀 Створити проект та зберегти запити", type="primary"):
-            # Беремо назву
             final_name = new_name_val if new_name_val else new_domain_val.split('.')[0].capitalize()
             
             if new_domain_val:
                 try:
-                    # Поточний адмін стає власником (Fix null user_id)
+                    # Поточний адмін стає власником
                     current_user_id = st.session_state["user"].id
                     
                     new_proj_data = {
@@ -3757,7 +3825,7 @@ def show_admin_page():
                         "domain": new_domain_val,
                         "status": new_status,
                         "allow_cron": new_cron,
-                        "region": "Ukraine" # Default
+                        "region": new_region_val # <--- Зберігаємо регіон
                     }
                     res_proj = supabase.table("projects").insert(new_proj_data).execute()
                     
@@ -3774,16 +3842,16 @@ def show_admin_page():
                             }).execute()
                         except: pass
 
-                        final_kws_list = edited_df["keyword"].dropna().tolist()
-                        final_kws_list = [str(k).strip() for k in final_kws_list if str(k).strip()]
+                        # Збереження запитів
+                        final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
                         
-                        if final_kws_list:
+                        if final_kws_clean:
                             kws_data = [
                                 {
                                     "project_id": new_proj_id, 
                                     "keyword_text": kw,
                                     "is_active": True
-                                } for kw in final_kws_list
+                                } for kw in final_kws_clean
                             ]
                             supabase.table("keywords").insert(kws_data).execute()
                         
@@ -3797,7 +3865,7 @@ def show_admin_page():
                 st.warning("Домен обов'язковий.")
 
     # ========================================================
-    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА (МАСШТАБНЕ ОНОВЛЕННЯ)
+    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА (ОНОВЛЕНО)
     # ========================================================
     with tab_users:
         st.markdown("##### 👥 База користувачів")
@@ -3811,13 +3879,9 @@ def show_admin_page():
 
         # --- Підготовка даних ---
         if users_data:
-            # Рахуємо проекти для кожного юзера
+            # Отримуємо проекти для кожного юзера
             proj_df = pd.DataFrame(projects_data)
-            if not proj_df.empty and 'user_id' in proj_df.columns:
-                proj_counts = proj_df['user_id'].value_counts().to_dict()
-            else:
-                proj_counts = {}
-
+            
             # Формуємо таблицю
             user_table_data = []
             for u in users_data:
@@ -3829,14 +3893,24 @@ def show_admin_page():
                 if u_search and u_search.lower() not in search_target: continue
                 if role_filter and u.get('role', 'user') not in role_filter: continue
 
+                # Список проектів користувача (Назва + Дата)
+                user_projs = []
+                if not proj_df.empty and 'user_id' in proj_df.columns:
+                    my_projs = proj_df[proj_df['user_id'] == u['id']]
+                    for _, p_row in my_projs.iterrows():
+                        p_nm = p_row.get('brand_name') or p_row.get('project_name') or 'NoName'
+                        p_dt = p_row.get('created_at', '')[:10]
+                        user_projs.append(f"{p_nm} ({p_dt})")
+                
+                projs_str = ", ".join(user_projs) if user_projs else "-"
+
                 user_table_data.append({
                     "id": u['id'],
                     "Ім'я": full_name,
                     "Email": email,
                     "Роль": u.get('role', 'user'),
-                    "Проектів": proj_counts.get(u['id'], 0),
-                    "Зареєстрований": u.get('created_at', '')[:10],
-                    "Останній вхід": u.get('last_sign_in_at', '')[:16].replace('T', ' ') if u.get('last_sign_in_at') else '-'
+                    "Проекти": projs_str, # <--- Змінено: список назв
+                    "Зареєстрований": u.get('created_at', '')[:10]
                 })
             
             df_users_view = pd.DataFrame(user_table_data)
@@ -3852,13 +3926,12 @@ def show_admin_page():
                         "id": st.column_config.TextColumn("User ID", disabled=True, width="small"),
                         "Email": st.column_config.TextColumn("Email", disabled=True),
                         "Ім'я": st.column_config.TextColumn("Ім'я", disabled=True),
-                        "Проектів": st.column_config.NumberColumn("Проектів", disabled=True),
+                        "Проекти": st.column_config.TextColumn("Проекти (Дата)", disabled=True, width="large"),
                         "Зареєстрований": st.column_config.TextColumn("Дата реєстрації", disabled=True),
-                        "Останній вхід": st.column_config.TextColumn("Last Login", disabled=True),
                         "Роль": st.column_config.SelectboxColumn("Роль", options=["user", "admin", "super_admin"], required=True)
                     },
                     use_container_width=True,
-                    key="admin_users_final"
+                    key="admin_users_final_v2"
                 )
 
                 # Кнопка збереження
@@ -3866,14 +3939,12 @@ def show_admin_page():
                     try:
                         changes_count = 0
                         # Порівнюємо і зберігаємо
-                        updated_rows = edited_users.to_dict('index') # index -> row dict
+                        updated_rows = edited_users.to_dict('index') 
                         
-                        # Проходимо по оригінальних даних, щоб знайти зміни
                         for idx, row in updated_rows.items():
                             uid = row['id']
                             new_role = row['Роль']
                             
-                            # Знаходимо стару роль
                             old_user = next((u for u in users_data if u['id'] == uid), None)
                             if old_user and old_user.get('role') != new_role:
                                 supabase.table("profiles").update({"role": new_role}).eq("id", uid).execute()
@@ -3893,12 +3964,11 @@ def show_admin_page():
                 st.divider()
                 st.markdown("##### 📈 Динаміка реєстрацій")
                 
-                # Підготовка даних для графіка
                 df_chart = pd.DataFrame(users_data)
                 if 'created_at' in df_chart.columns:
                     df_chart['date'] = pd.to_datetime(df_chart['created_at']).dt.date
                     
-                    # Фільтр часу
+                    from datetime import timedelta
                     time_filter = st.selectbox("Період", ["Останні 7 днів", "Останні 30 днів", "Останні 90 днів", "Весь час"], index=1)
                     
                     today = pd.to_datetime("today").date()
@@ -3909,7 +3979,6 @@ def show_admin_page():
                     
                     df_chart_filtered = df_chart[df_chart['date'] >= start_date]
                     
-                    # Групування
                     reg_counts = df_chart_filtered.groupby('date').size().reset_index(name='count')
                     
                     if not reg_counts.empty:
