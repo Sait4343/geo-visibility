@@ -3356,6 +3356,194 @@ def show_sources_page():
             st.info("Дані відсутні.")
 
 
+def show_history_page():
+    """
+    Сторінка історії сканувань.
+    ВЕРСІЯ: ADVANCED METRICS & FILTERS.
+    Відображає детальну таблицю з агрегованими даними по кожному скануванню.
+    """
+    import pandas as pd
+    import streamlit as st
+    from datetime import datetime, timedelta
+
+    # --- ПІДКЛЮЧЕННЯ ---
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    else:
+        st.error("🚨 DB Connection Error")
+        return
+
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Спочатку оберіть проект.")
+        return
+
+    st.title("📜 Історія сканувань")
+
+    # --- 1. ОТРИМАННЯ ДАНИХ (ОПТИМІЗОВАНО) ---
+    with st.spinner("Завантаження історії..."):
+        try:
+            # 1.1. Keywords Mapping (ID -> Text)
+            kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+            kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
+
+            # 1.2. Scan Results (Base)
+            # Беремо останні 500 сканувань, щоб не перевантажити
+            scans_resp = supabase.table("scan_results")\
+                .select("id, created_at, provider, keyword_id")\
+                .eq("project_id", proj["id"])\
+                .order("created_at", desc=True)\
+                .limit(500)\
+                .execute()
+            
+            scans_data = scans_resp.data if scans_resp.data else []
+            
+            if not scans_data:
+                st.info("Історія сканувань порожня.")
+                return
+
+            scan_ids = [s['id'] for s in scans_data]
+
+            # 1.3. Aggregations (Mentions & Sources)
+            # Замість N запитів, робимо 2 великих запити і агрегуємо в Pandas
+            
+            # Mentions: Count Brands & My Mentions
+            m_resp = supabase.table("brand_mentions")\
+                .select("scan_result_id, is_my_brand, mention_count")\
+                .in_("scan_result_id", scan_ids)\
+                .execute()
+            mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
+
+            # Sources: Count Total Links & Official Links
+            s_resp = supabase.table("extracted_sources")\
+                .select("scan_result_id, is_official")\
+                .in_("scan_result_id", scan_ids)\
+                .execute()
+            sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
+
+        except Exception as e:
+            st.error(f"Помилка завантаження: {e}")
+            return
+
+    # --- 2. ОБРОБКА ДАНИХ (PANDAS) ---
+    df_scans = pd.DataFrame(scans_data)
+    
+    # Додаємо текст запиту
+    df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Видалений запит")
+    
+    # Форматуємо дату
+    df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
+    
+    # --- Агрегація Mentions ---
+    if not mentions_df.empty:
+        # Всього брендів (кількість рядків на скан)
+        brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
+        
+        # Згадки нашого бренду (сума mention_count для is_my_brand=True)
+        my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
+        
+        df_scans = pd.merge(df_scans, brands_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        df_scans = pd.merge(df_scans, my_mentions, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+    else:
+        df_scans['total_brands'] = 0
+        df_scans['my_mentions_count'] = 0
+
+    # --- Агрегація Sources ---
+    if not sources_df.empty:
+        # Всього посилань
+        links_count = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
+        
+        # Офіційні джерела
+        official_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
+        
+        df_scans = pd.merge(df_scans, links_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        df_scans = pd.merge(df_scans, official_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+    else:
+        df_scans['total_links'] = 0
+        df_scans['official_links'] = 0
+
+    # --- 3. ФІЛЬТРИ ТА СОРТУВАННЯ ---
+    st.markdown("### 🔍 Фільтрація")
+    
+    c1, c2, c3 = st.columns([1, 1, 1.5])
+    
+    with c1:
+        # Filter: LLM
+        all_providers = df_scans['provider'].unique().tolist()
+        sel_providers = st.multiselect("Модель (LLM)", all_providers, default=all_providers)
+    
+    with c2:
+        # Filter: Date
+        date_options = ["Весь час", "Сьогодні", "Останні 7 днів", "Останні 30 днів"]
+        sel_date = st.selectbox("Період", date_options)
+        
+    with c3:
+        # Sort: 6 Options
+        sort_opts = [
+            "Найновіші спочатку", 
+            "Найстаріші спочатку", 
+            "Найбільше згадок бренду", 
+            "Найменше згадок бренду",
+            "Найбільше офіційних джерел",
+            "Найбільше знайдених брендів"
+        ]
+        sel_sort = st.selectbox("Сортування", sort_opts)
+
+    # Застосування фільтрів
+    mask = df_scans['provider'].isin(sel_providers)
+    
+    now = datetime.now()
+    if sel_date == "Сьогодні":
+        mask &= (df_scans['created_at_dt'].dt.date == now.date())
+    elif sel_date == "Останні 7 днів":
+        mask &= (df_scans['created_at_dt'] >= (now - timedelta(days=7)))
+    elif sel_date == "Останні 30 днів":
+        mask &= (df_scans['created_at_dt'] >= (now - timedelta(days=30)))
+        
+    df_final = df_scans[mask].copy()
+
+    # Застосування сортування
+    if sel_sort == "Найновіші спочатку":
+        df_final = df_final.sort_values('created_at_dt', ascending=False)
+    elif sel_sort == "Найстаріші спочатку":
+        df_final = df_final.sort_values('created_at_dt', ascending=True)
+    elif sel_sort == "Найбільше згадок бренду":
+        df_final = df_final.sort_values('my_mentions_count', ascending=False)
+    elif sel_sort == "Найменше згадок бренду":
+        df_final = df_final.sort_values('my_mentions_count', ascending=True)
+    elif sel_sort == "Найбільше офіційних джерел":
+        df_final = df_final.sort_values('official_links', ascending=False)
+    elif sel_sort == "Найбільше знайдених брендів":
+        df_final = df_final.sort_values('total_brands', ascending=False)
+
+    # --- 4. ВІДОБРАЖЕННЯ ТАБЛИЦІ ---
+    st.divider()
+    st.markdown(f"**Знайдено записів:** {len(df_final)}")
+    
+    # Підготовка фінальної таблиці для відображення
+    df_display = df_final[[
+        'created_at_dt', 'keyword', 'provider', 
+        'total_brands', 'total_links', 'my_mentions_count', 'official_links'
+    ]].copy()
+    
+    # Форматування дати для краси
+    df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
+
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "created_at_dt": "Дата та Час",
+            "keyword": st.column_config.TextColumn("Запит", width="medium"),
+            "provider": "LLM",
+            "total_brands": st.column_config.NumberColumn("Всього брендів", help="Скільки унікальних брендів знайшов AI"),
+            "total_links": st.column_config.NumberColumn("Всього посилань", help="Загальна кількість посилань у відповіді"),
+            "my_mentions_count": st.column_config.NumberColumn("Згадок нас", help="Кількість згадок вашого цільового бренду"),
+            "official_links": st.column_config.NumberColumn("Офіц. джерела", help="Кількість знайдених посилань з вашого Whitelist")
+        }
+    )
+
 def sidebar_menu():
     """
     Бокове меню навігації.
