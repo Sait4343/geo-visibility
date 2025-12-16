@@ -27,7 +27,7 @@ st.set_page_config(
 N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 N8N_ANALYZE_URL = "https://virshi.app.n8n.cloud/webhook/webhook/run-analysis_prod"
 N8N_RECO_URL = "https://virshi.app.n8n.cloud/webhook/recommendations"  # за потреби заміниш
-N8N_CHAT_WEBHOOK = "https://virshi.app.n8n.cloud/webhook/webhook/chat-bot" 
+N8N_CHAT_WEBHOOK = "https://virshi.app.n8n.cloud/webhook-test/webhook/chat-bot" 
 
 
 # Custom CSS
@@ -3794,53 +3794,87 @@ def show_admin_page():
 def show_chat_page():
     """
     Сторінка AI-асистента (GPT-Visibility).
-    Виправлено: 
-    - Змінено назву заголовка авторизації на валідну (без спецсимволів).
-    - Передача контексту (user_id, project_id, role).
+    ВЕРСІЯ: ADDED CONTEXT (SOURCES, BRAND, USER NAME).
+    1. Передає official_sources (список доменів з бази).
+    2. Передає user_name (з метаданих або email).
+    3. Передає target_brand.
     """
     import requests
     import streamlit as st
 
-    # --- КОНФІГУРАЦІЯ ---    
-    # 🔥 ВИПРАВЛЕНА АВТОРИЗАЦІЯ
-    # Назва заголовка не повинна містити '@'. 
-    # Змініть 'Name' в n8n Credentials на 'virshi-auth'
+    # --- КОНФІГУРАЦІЯ ---
+    # Перевірка наявності URL
+    if 'N8N_CHAT_WEBHOOK' not in globals():
+        target_url = st.secrets.get("N8N_CHAT_WEBHOOK", "")
+        if not target_url:
+            st.error("🚨 Не задано посилання N8N_CHAT_WEBHOOK.")
+            return
+    else:
+        target_url = N8N_CHAT_WEBHOOK
+
+    # Підключення до бази (для отримання джерел)
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
+    else:
+        st.error("🚨 Змінна 'supabase' не знайдена.")
+        return
+
     headers = {
         "virshi-auth": "hi@virshi.ai2025" 
     }
 
     st.title("🤖 GPT-Visibility Assistant")
     
-    # 1. Отримуємо контекст
+    # 1. Отримуємо контекст користувача та проекту
     user = st.session_state.get("user")
     role = st.session_state.get("role", "user") 
     proj = st.session_state.get("current_project", {})
     
     if not proj:
         st.warning("⚠️ Будь ласка, оберіть проект у меню зліва.")
+        return
 
-    # 2. Ініціалізація локальної історії
+    # 2. Логіка отримання імені користувача
+    user_name = "Користувач"
+    if user:
+        # Спроба дістати ім'я з метаданих Supabase, інакше email
+        meta = getattr(user, "user_metadata", {})
+        user_name = meta.get("full_name") or meta.get("name") or user.email.split("@")[0]
+
+    # 3. Логіка отримання офіційних джерел (Whitelist)
+    official_sources_list = []
+    try:
+        # Робимо запит до бази, щоб агент знав "білий список"
+        assets_resp = supabase.table("official_assets")\
+            .select("domain_or_url")\
+            .eq("project_id", proj.get("id"))\
+            .execute()
+        
+        if assets_resp.data:
+            official_sources_list = [item["domain_or_url"] for item in assets_resp.data]
+    except Exception:
+        official_sources_list = [] # Якщо помилка, просто пустий список
+
+    # 4. Ініціалізація історії
     if "messages" not in st.session_state:
-        brand_name = proj.get('brand_name', 'вашого бренду') if proj else 'вашого бренду'
-        welcome_text = f"Привіт! Я аналітик проекту **{brand_name}**. Готовий допомогти."
+        brand_name = proj.get('brand_name', 'вашого бренду')
+        welcome_text = f"Привіт, {user_name}! Я аналітик проекту **{brand_name}**. Готовий допомогти з аналізом видимості та конкурентів."
         st.session_state["messages"] = [
             {"role": "assistant", "content": welcome_text}
         ]
 
-    # 3. Відображення історії
+    # 5. Відображення історії
     for msg in st.session_state["messages"]:
-        if msg["role"] == "user":
-            avatar_icon = "👤"
-        else:
-            avatar_icon = "🤖"
-            
+        avatar_icon = "👤" if msg["role"] == "user" else "🤖"
         with st.chat_message(msg["role"], avatar=avatar_icon):
             st.markdown(msg["content"])
 
-    # 4. Обробка вводу
+    # 6. Обробка вводу
     if prompt := st.chat_input("Напишіть ваше запитання..."):
         
-        # A. Показуємо повідомлення користувача
+        # A. Користувач
         st.session_state["messages"].append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
@@ -3851,25 +3885,29 @@ def show_chat_page():
             
             with st.spinner("Аналізую дані..."):
                 try:
-                    # --- FORM PAYLOAD ---
+                    # --- 🔥 РОЗШИРЕНИЙ PAYLOAD ---
                     payload = {
                         "query": prompt,
                         
-                        # Дані користувача + РОЛЬ
+                        # Користувач
                         "user_id": user.id if user else "guest",
                         "user_email": user.email if user else None,
+                        "user_name": user_name,  # <--- Ім'я
                         "role": role,
                         
-                        # Дані проекту
+                        # Проект
                         "project_id": proj.get("id"),
                         "project_name": proj.get("brand_name"),
+                        "target_brand": proj.get("brand_name"), # <--- Цільовий бренд
                         "domain": proj.get("domain"),
-                        "status": proj.get("status")
+                        "status": proj.get("status"),
+                        
+                        # Контекст
+                        "official_sources": official_sources_list # <--- Список джерел
                     }
 
-                    # 🔥 ЗАПИТ З ВИПРАВЛЕНИМ ЗАГОЛОВКОМ
                     response = requests.post(
-                        N8N_CHAT_WEBHOOK, 
+                        target_url, 
                         json=payload, 
                         headers=headers, 
                         timeout=60
@@ -3879,22 +3917,26 @@ def show_chat_page():
                         data = response.json()
                         bot_reply = data.get("output") or data.get("answer") or data.get("text")
                         
+                        if isinstance(bot_reply, dict):
+                            bot_reply = str(bot_reply)
+                        
                         if not bot_reply:
-                            bot_reply = f"⚠️ Отримана пуста відповідь. (Raw: {data})"
+                            bot_reply = "⚠️ Отримана пуста відповідь від AI."
+                            
                     elif response.status_code == 403:
-                        bot_reply = "⛔ Помилка 403: Доступ заборонено. Перевірте назву заголовка (Header Name) в n8n."
+                        bot_reply = "⛔ Помилка 403: Доступ заборонено. Перевірте Header Name 'virshi-auth' в n8n."
                     elif response.status_code == 404:
-                        bot_reply = "⚠️ Помилка 404: Вебхук не знайдено. Переконайтеся, що Worklow в n8n увімкнено (Active)."
+                        bot_reply = f"⚠️ Помилка 404 (Not Found).\n\n1. Перевірте метод **POST** в n8n.\n2. Перевірте, що Workflow **Active**."
                     else:
-                        bot_reply = f"⚠️ Помилка сервера: {response.status_code}"
+                        bot_reply = f"⚠️ Помилка сервера: {response.status_code} - {response.text}"
 
                 except Exception as e:
                     bot_reply = f"⚠️ Помилка з'єднання: {e}"
 
-                # C. Вивід відповіді
+                # C. Вивід
                 message_placeholder.markdown(bot_reply)
         
-        # D. Збереження відповіді
+        # D. Збереження
         st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
         
             
