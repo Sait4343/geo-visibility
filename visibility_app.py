@@ -1142,18 +1142,21 @@ def show_competitors_page():
 def show_recommendations_page():
     """
     Сторінка рекомендацій (Advanced).
-    ВЕРСІЯ: CATEGORIES + WEBHOOK GENERATION + HISTORY HTML.
+    ВЕРСІЯ: FIX DB CONNECTION.
+    Виправлено помилку підключення (DB Error).
     """
     import streamlit as st
     import pandas as pd
     import streamlit.components.v1 as components
     from datetime import datetime
 
-    # --- ПІДКЛЮЧЕННЯ ---
+    # --- 1. ПІДКЛЮЧЕННЯ (FIXED) ---
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
     else:
-        st.error("🚨 DB Error")
+        st.error("🚨 DB Error: Немає з'єднання з базою даних.")
         return
 
     proj = st.session_state.get("current_project")
@@ -1276,10 +1279,6 @@ def show_recommendations_page():
         try:
             query = supabase.table("ai_reports").select("*").eq("project_id", proj["id"]).order("created_at", desc=True)
             
-            # Note: Supabase Python lib filtering is somewhat limited for advanced queries directly, 
-            # usually better to fetch and filter in pandas for small datasets, 
-            # or apply .eq if specific. Here we fetch all for project.
-            
             hist_resp = query.execute()
             reports = hist_resp.data if hist_resp.data else []
             
@@ -1297,7 +1296,13 @@ def show_recommendations_page():
                     st.info("За обраними фільтрами звітів не знайдено.")
                 else:
                     for _, row in df_rep.iterrows():
-                        with st.expander(f"📑 {CATEGORIES.get(row['category'], {}).get('title', row['category'])} | {row['created_at'][:16].replace('T', ' ')}"):
+                        # Безпечне форматування дати
+                        try:
+                            date_str = row['created_at'][:16].replace('T', ' ')
+                        except:
+                            date_str = row['created_at']
+
+                        with st.expander(f"📑 {CATEGORIES.get(row['category'], {}).get('title', row['category'])} | {date_str}"):
                             c_dl, c_del = st.columns([4, 1])
                             with c_dl:
                                 st.download_button(
