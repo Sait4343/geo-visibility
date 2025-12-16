@@ -566,18 +566,38 @@ def login_page():
 
 def onboarding_wizard():
     """
-    Майстер створення першого проекту (2 етапи).
-    ВЕРСІЯ: FINAL CORRECTED.
-    1. Запис official_assets в окрему таблицю (fix DB error).
-    2. Почергова відправка запитів на n8n (fix workflow loop).
-    3. Використовується тільки Google Gemini.
+    Майстер створення проекту.
+    ВЕРСІЯ: FIX EDITING & NUMBERING.
+    1. Редагування запитів працює (кнопка олівець + зберегти).
+    2. Додано зелену нумерацію запитів.
+    3. Домен і Бренд передаються коректно з попереднього кроку.
     """
     import requests
     import time
     
+    # Ініціалізація змінних сесії
     if "onboarding_stage" not in st.session_state:
         st.session_state["onboarding_stage"] = 2
         st.session_state["generated_prompts"] = []
+    
+    # CSS для зелених номерів
+    st.markdown("""
+    <style>
+        .green-number-small {
+            background-color: #00C896;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 12px;
+            margin-top: 8px; /* Вирівнювання по центру з текстом */
+        }
+    </style>
+    """, unsafe_allow_html=True)
     
     st.markdown("## 🚀 Налаштування Проекту")
     step = st.session_state.get("onboarding_step", 2) 
@@ -589,7 +609,7 @@ def onboarding_wizard():
             c1, c2 = st.columns(2)
             with c1:
                 brand = st.text_input("Назва бренду", placeholder="Monobank", value=st.session_state.get("temp_brand", ""))
-                industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех, Банкінг", value=st.session_state.get("temp_industry", ""))
+                industry = st.text_input("Галузь бренду / ніша", placeholder="Фінтех", value=st.session_state.get("temp_industry", ""))
             with c2:
                 domain = st.text_input("Домен (офіційний сайт)", placeholder="monobank.ua", value=st.session_state.get("temp_domain", ""))
                 st.markdown("<p style='color: #6c5ce7; margin-top: 10px;'>📍 **Регіон:** UA (Фіксовано)</p>", unsafe_allow_html=True)
@@ -604,98 +624,144 @@ def onboarding_wizard():
                     st.session_state["temp_region"] = "UA"
 
                     with st.spinner("Генеруємо релевантні запити..."):
-                        # Функція генерації має бути вже оновлена (з Auth Header)
+                        # Тут викликаємо вашу функцію генерації (вона має бути вже з Auth)
                         prompts = n8n_generate_prompts(brand, domain, industry, products)
                         if prompts:
                             st.session_state["generated_prompts"] = prompts
                             st.session_state["onboarding_step"] = 3
                             st.rerun()
                         else:
-                            st.error("Помилка генерації. Спробуйте ще раз.")
+                            st.error("Помилка генерації. Перевірте з'єднання.")
                 else:
-                    st.warning("⚠️ Заповніть всі поля.")
+                    st.warning("⚠️ Будь ласка, заповніть всі 4 поля.")
 
-        # --- КРОК 2: ПЕРЕВІРКА ТА ЗАПУСК ---
+        # --- КРОК 2: ПЕРЕВІРКА ТА ЗАПУСК (З РЕДАГУВАННЯМ) ---
         elif step == 3:
             st.subheader("Крок 2: Перевірка та запуск")
             
             prompts_list = st.session_state.get("generated_prompts", [])
+            
+            if not prompts_list:
+                st.warning("Список запитів порожній.")
+                if st.button("Назад"):
+                    st.session_state["onboarding_step"] = 2
+                    st.rerun()
+                return
+
+            st.markdown("Перевірте та відредагуйте запити перед запуском:")
+            st.write("") 
+
             selected_indices = []
 
-            # (Блок редагування карток - скорочено для ясності, залишайте свій код візуалізації тут)
-            # ... припустимо, тут вибір карток ...
-            # Для прикладу беремо всі, якщо не реалізовано вибір:
-            final_kws_to_send = prompts_list 
-
-            # Або ваш код вибору:
+            # --- ЦИКЛ ВИВОДУ КАРТОК З РЕДАГУВАННЯМ ---
             for i, kw in enumerate(prompts_list):
+                # Ключ для стану редагування цього рядка
+                edit_key = f"edit_mode_row_{i}"
+                if edit_key not in st.session_state:
+                    st.session_state[edit_key] = False
+
                 with st.container(border=True):
-                    c_chk, c_txt = st.columns([0.1, 0.9])
-                    if c_chk.checkbox("", value=True, key=f"chk_final_{i}"):
-                        selected_indices.append(i)
-                    c_txt.text_input("", value=kw, key=f"ed_{i}", disabled=True, label_visibility="collapsed")
+                    # Розмітка: [Чекбокс] [Номер] [Текст/Поле] [Кнопка]
+                    c_chk, c_num, c_text, c_btn = st.columns([0.5, 0.5, 8, 1])
+                    
+                    # 1. Чекбокс вибору
+                    with c_chk:
+                        st.write("") # Відступ
+                        if st.checkbox("", value=True, key=f"chk_final_{i}"):
+                            selected_indices.append(i)
+                    
+                    # 2. Зелений номер
+                    with c_num:
+                        st.markdown(f"<div class='green-number-small'>{i+1}</div>", unsafe_allow_html=True)
+
+                    # 3. Текст або Поле вводу
+                    with c_text:
+                        if st.session_state[edit_key]:
+                            # Режим редагування
+                            new_val = st.text_input("", value=kw, key=f"input_kw_{i}", label_visibility="collapsed")
+                        else:
+                            # Режим перегляду
+                            st.markdown(f"<div style='padding-top: 8px; font-size: 15px;'>{kw}</div>", unsafe_allow_html=True)
+
+                    # 4. Кнопка (Редагувати / Зберегти)
+                    with c_btn:
+                        st.write("") # Відступ
+                        if st.session_state[edit_key]:
+                            if st.button("💾", key=f"save_kw_{i}", help="Зберегти зміни"):
+                                # Зберігаємо нове значення в список
+                                st.session_state["generated_prompts"][i] = new_val
+                                st.session_state[edit_key] = False
+                                st.rerun()
+                        else:
+                            if st.button("✏️", key=f"edit_kw_{i}", help="Редагувати текст"):
+                                st.session_state[edit_key] = True
+                                st.rerun()
+
+            # Фінальний список обраних
+            final_kws_to_send = [st.session_state["generated_prompts"][idx] for idx in selected_indices]
             
-            if selected_indices:
-                final_kws_to_send = [prompts_list[i] for i in selected_indices]
-
-            st.write(f"Готово до запуску: {len(final_kws_to_send)} запитів")
-
-            if st.button("🚀 Зберегти та Запустити аналіз", type="primary", use_container_width=True):
-                if final_kws_to_send:
-                    try:
-                        user_id = st.session_state["user"].id
-                        brand_name = st.session_state.get("temp_brand")
-                        domain_name = st.session_state.get("temp_domain")
-                        
-                        # 1. Створення проекту (БЕЗ official_assets, бо це окрема таблиця)
-                        res = supabase.table("projects").insert({
-                            "user_id": user_id, "brand_name": brand_name, "domain": domain_name,
-                            "region": "UA", "status": "trial"
-                        }).execute()
-
-                        if res.data:
-                            proj_data = res.data[0]
-                            proj_id = proj_data["id"]
+            st.divider()
+            c_info, c_launch = st.columns([2, 1])
+            with c_info:
+                st.markdown(f"**Готово до запуску:** {len(final_kws_to_send)} запитів")
+            
+            with c_launch:
+                if st.button("🚀 Зберегти та Запустити аналіз", type="primary", use_container_width=True):
+                    if final_kws_to_send:
+                        try:
+                            # Беремо дані з сесії (те, що ввели на кроці 1)
+                            user_id = st.session_state["user"].id
+                            brand_name = st.session_state.get("temp_brand")
+                            domain_name = st.session_state.get("temp_domain")
                             
-                            # Оновлюємо сесію, щоб n8n функція бачила домен
-                            st.session_state["current_project"] = proj_data
-
-                            # 2. 🔥 FIX: Записуємо official_assets в ОКРЕМУ таблицю
-                            clean_d = domain_name.replace("https://", "").replace("http://", "").strip().rstrip("/")
-                            supabase.table("official_assets").insert({
-                                "project_id": proj_id, "domain_or_url": clean_d, "type": "website"
+                            # 1. Створення проекту
+                            res = supabase.table("projects").insert({
+                                "user_id": user_id, 
+                                "brand_name": brand_name,  # <--- Назва бренду
+                                "domain": domain_name,     # <--- Домен
+                                "region": "UA", 
+                                "status": "trial"
                             }).execute()
 
-                            # 3. Записуємо Keywords
-                            kws_data = [{"project_id": proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_to_send]
-                            supabase.table("keywords").insert(kws_data).execute()
-                            
-                            # 4. 🔥 FIX: Почерговий запуск (Loop)
-                            my_bar = st.progress(0, text="Запуск аналізу...")
-                            total = len(final_kws_to_send)
-                            
-                            for i, kw in enumerate(final_kws_to_send):
-                                my_bar.progress((i + 1) / total, text=f"Аналіз запиту: {kw}...")
+                            if res.data:
+                                proj_data = res.data[0]
+                                proj_id = proj_data["id"]
                                 
-                                # Відправляємо по одному!
-                                n8n_trigger_analysis(
-                                    project_id=proj_id, 
-                                    keywords=[kw],  # Список з 1 елемента
-                                    brand_name=brand_name, 
-                                    models=["Google Gemini"]
-                                )
-                                time.sleep(0.5) # Пауза для стабільності
+                                # Оновлюємо сесію
+                                st.session_state["current_project"] = proj_data
 
-                            my_bar.progress(1.0, text="Готово!")
-                            
-                            st.session_state["onboarding_step"] = 2 
-                            st.success("Успіх! Проект створено.")
-                            time.sleep(1)
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Помилка: {e}")
-                else:
-                    st.warning("Оберіть хоча б один запит.")
+                                # 2. Запис official_assets (чистий домен)
+                                clean_d = domain_name.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                                try:
+                                    supabase.table("official_assets").insert({
+                                        "project_id": proj_id, 
+                                        "domain_or_url": clean_d, # <--- Whitelist
+                                        "type": "website"
+                                    }).execute()
+                                except Exception:
+                                    pass # Ігноруємо якщо вже є
+
+                                # 3. Запис Keywords
+                                kws_data = [{"project_id": proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_to_send]
+                                supabase.table("keywords").insert(kws_data).execute()
+                                
+                                # 4. Виклик функції відправки (почергово)
+                                success = process_onboarding_scan(
+                                    project_id=proj_id,
+                                    keywords_list=final_kws_to_send,
+                                    brand_name=brand_name,
+                                    domain=domain_name
+                                )
+
+                                if success:
+                                    st.session_state["onboarding_step"] = 2 
+                                    st.success("Успіх! Проект створено.")
+                                    time.sleep(1)
+                                    st.rerun()
+                        except Exception as e:
+                            st.error(f"Помилка створення: {e}")
+                    else:
+                        st.warning("Оберіть хоча б один запит.")
                     
 # =========================
 # 6. DASHBOARD
