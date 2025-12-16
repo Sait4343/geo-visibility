@@ -2172,9 +2172,9 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: AUTO-SYNC STATUS & CRON.
-    1. Примусове оновлення даних проекту з БД (щоб бачити зміни від Адміна).
-    2. Якщо адмін заборонив автосканування -> тогл неактивний.
+    ВЕРСІЯ: FIX DUPLICATE KEY ERROR.
+    1. Виправлено DuplicateElementKey (додано idx до ключів чекбоксів).
+    2. Синхронізація дозволів автосканування.
     """
     import pandas as pd
     import streamlit as st
@@ -2246,18 +2246,15 @@ def show_keywords_page():
     if "kw_input_count" not in st.session_state:
         st.session_state["kw_input_count"] = 1
 
-    # --- 🔥 СИНХРОНІЗАЦІЯ З БД (FIX UPDATE FROM ADMIN) ---
-    # Оновлюємо дані проекту, щоб побачити зміни статусу/дозволів від Адміна
+    # --- СИНХРОНІЗАЦІЯ З БД ---
     if "current_project" in st.session_state and st.session_state["current_project"]:
         try:
             curr_id = st.session_state["current_project"]["id"]
-            # Робимо запит до бази за свіжими даними
             refresh_resp = supabase.table("projects").select("*").eq("id", curr_id).execute()
             if refresh_resp.data:
-                # Оновлюємо сесію
                 st.session_state["current_project"] = refresh_resp.data[0]
         except Exception:
-            pass # Якщо помилка мережі, працюємо зі старими даними
+            pass 
 
     proj = st.session_state.get("current_project")
     if not proj:
@@ -2291,7 +2288,7 @@ def show_keywords_page():
             st.error(f"Помилка оновлення: {e}")
 
     # ========================================================
-    # 2. БЛОК РЕДАГУВАННЯ (Tabs)
+    # 2. БЛОК РЕДАГУВАННЯ
     # ========================================================
     with st.expander("✏️ Редагування запитів", expanded=False): 
         
@@ -2359,7 +2356,6 @@ def show_keywords_page():
             st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet. **Важливо:** Для Google Sheet має бути відкрито доступ (Anyone with the link). Перша колонка має називатися **Keyword**.")
             
             import_source = st.radio("Джерело:", ["Файл (.xlsx)", "Посилання (URL)"], horizontal=True)
-            
             df_upload = None
             
             if import_source == "Файл (.xlsx)":
@@ -2371,7 +2367,6 @@ def show_keywords_page():
                         st.error("🚨 Відсутня бібліотека `openpyxl`. Будь ласка, додайте `openpyxl` у requirements.txt вашого проекту.")
                     except Exception as e:
                         st.error(f"Не вдалося прочитати файл: {e}")
-            
             else: # URL
                 import_url = st.text_input("Вставте посилання (Google Sheets або CSV):")
                 if import_url:
@@ -2449,7 +2444,6 @@ def show_keywords_page():
                                 } for kw in preview_kws]
                                 
                                 res = supabase.table("keywords").insert(insert_data).execute()
-                                
                                 if res.data:
                                     with st.spinner(f"Обробка {len(preview_kws)} запитів..."):
                                         if 'n8n_trigger_analysis' in globals():
@@ -2468,10 +2462,8 @@ def show_keywords_page():
         # --- TAB 3: ЕКСПОРТ EXCEL ---
         with tab_export:
             st.write("Натисніть кнопку нижче, щоб завантажити всі запити цього проекту в Excel.")
-            
             try:
                 kws_resp = supabase.table("keywords").select("id, keyword_text, created_at").eq("project_id", proj["id"]).execute()
-                
                 if kws_resp.data:
                     df_export = pd.DataFrame(kws_resp.data)
                     scan_resp = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
@@ -2484,15 +2476,9 @@ def show_keywords_page():
                     
                     df_export['last_scan_date'] = df_export['id'].map(lambda x: last_scan_map.get(x, "-"))
                     df_export['created_at'] = pd.to_datetime(df_export['created_at']).dt.strftime('%Y-%m-%d %H:%M')
-                    df_export['last_scan_date'] = df_export['last_scan_date'].apply(
-                        lambda x: pd.to_datetime(x).strftime('%Y-%m-%d %H:%M') if x != "-" else "-"
-                    )
+                    df_export['last_scan_date'] = df_export['last_scan_date'].apply(lambda x: pd.to_datetime(x).strftime('%Y-%m-%d %H:%M') if x != "-" else "-")
                     
-                    df_final = df_export[["keyword_text", "created_at", "last_scan_date"]].rename(columns={
-                        "keyword_text": "Keyword",
-                        "created_at": "Date Added",
-                        "last_scan_date": "Last Scan Date"
-                    })
+                    df_final = df_export[["keyword_text", "created_at", "last_scan_date"]].rename(columns={"keyword_text": "Keyword", "created_at": "Date Added", "last_scan_date": "Last Scan Date"})
                     
                     buffer = io.BytesIO()
                     try:
@@ -2507,13 +2493,7 @@ def show_keywords_page():
                              buffer = None
 
                     if buffer:
-                        st.download_button(
-                            label="📥 Завантажити Excel",
-                            data=buffer.getvalue(),
-                            file_name=f"keywords_{proj.get('brand_name')}.xlsx",
-                            mime="application/vnd.ms-excel",
-                            type="primary"
-                        )
+                        st.download_button(label="📥 Завантажити Excel", data=buffer.getvalue(), file_name=f"keywords_{proj.get('brand_name')}.xlsx", mime="application/vnd.ms-excel", type="primary")
                 else:
                     st.warning("У проекті ще немає запитів для експорту.")
             except Exception as e:
@@ -2550,20 +2530,12 @@ def show_keywords_page():
     # ========================================================
     c_sort, _ = st.columns([2, 4])
     with c_sort:
-        sort_option = st.selectbox(
-            "Сортувати за:", 
-            ["Найновіші (Додані)", "Найстаріші (Додані)", "Нещодавно проскановані", "Давно не скановані"],
-            label_visibility="collapsed"
-        )
+        sort_option = st.selectbox("Сортувати за:", ["Найновіші (Додані)", "Найстаріші (Додані)", "Нещодавно проскановані", "Давно не скановані"], label_visibility="collapsed")
 
-    if sort_option == "Найновіші (Додані)":
-        keywords.sort(key=lambda x: x['created_at'], reverse=True)
-    elif sort_option == "Найстаріші (Додані)":
-        keywords.sort(key=lambda x: x['created_at'], reverse=False)
-    elif sort_option == "Нещодавно проскановані":
-        keywords.sort(key=lambda x: x['last_scan_date'], reverse=True)
-    elif sort_option == "Давно не скановані":
-        keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
+    if sort_option == "Найновіші (Додані)": keywords.sort(key=lambda x: x['created_at'], reverse=True)
+    elif sort_option == "Найстаріші (Додані)": keywords.sort(key=lambda x: x['created_at'], reverse=False)
+    elif sort_option == "Нещодавно проскановані": keywords.sort(key=lambda x: x['last_scan_date'], reverse=True)
+    elif sort_option == "Давно не скановані": keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
     with st.container(border=True):
         c_check, c_models, c_btn = st.columns([0.5, 3, 1.5])
@@ -2578,8 +2550,9 @@ def show_keywords_page():
                 if select_all:
                     selected_kws_text = [k['keyword_text'] for k in keywords]
                 else:
-                    for k in keywords:
-                        if st.session_state.get(f"chk_{k['id']}", False):
+                    # 🔥 FIX: Збір обраних з унікальним ключем
+                    for idx, k in enumerate(keywords, start=1):
+                        if st.session_state.get(f"chk_{k['id']}_{idx}", False):
                             selected_kws_text.append(k['keyword_text'])
                 
                 if selected_kws_text:
@@ -2622,13 +2595,14 @@ def show_keywords_page():
             with c1:
                 st.write("") 
                 is_checked = select_all
-                st.checkbox("", key=f"chk_{k['id']}", value=is_checked)
+                # 🔥 FIX: Унікальний ключ з idx
+                st.checkbox("", key=f"chk_{k['id']}_{idx}", value=is_checked)
             
             with c2:
                 st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
             
             with c3:
-                if st.button(k['keyword_text'], key=f"link_btn_{k['id']}", help="Натисніть для детального аналізу"):
+                if st.button(k['keyword_text'], key=f"link_btn_{k['id']}_{idx}", help="Натисніть для детального аналізу"):
                     st.session_state["focus_keyword_id"] = k["id"]
                     st.rerun()
             
@@ -2642,12 +2616,12 @@ def show_keywords_page():
                 with cron_c1:
                     # Відображаємо тогл тільки якщо дозволено глобально
                     if allow_cron_global:
-                        new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}", label_visibility="collapsed")
+                        new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}_{idx}", label_visibility="collapsed")
                         if new_auto != is_auto:
                             update_kw_field(k['id'], "is_auto_scan", new_auto)
                             st.rerun()
                     else:
-                        st.toggle("Авто", value=False, key=f"auto_{k['id']}", label_visibility="collapsed", disabled=True)
+                        st.toggle("Авто", value=False, key=f"auto_{k['id']}_{idx}", label_visibility="collapsed", disabled=True)
                         st.caption("🔒 Admin")
 
                 with cron_c2:
@@ -2656,7 +2630,7 @@ def show_keywords_page():
                         freq_options = ["daily", "weekly", "monthly"]
                         try: idx_f = freq_options.index(current_freq)
                         except: idx_f = 0
-                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=f"freq_{k['id']}", label_visibility="collapsed")
+                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=f"freq_{k['id']}_{idx}", label_visibility="collapsed")
                         if new_freq != current_freq:
                             update_kw_field(k['id'], "frequency", new_freq)
                     else:
@@ -2670,17 +2644,16 @@ def show_keywords_page():
             
             with c6:
                 st.write("")
-                
-                del_key = f"confirm_del_kw_{k['id']}"
+                del_key = f"confirm_del_kw_{k['id']}_{idx}"
                 if del_key not in st.session_state: st.session_state[del_key] = False
 
                 if not st.session_state[del_key]:
-                    if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}"):
+                    if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}_{idx}"):
                         st.session_state[del_key] = True
                         st.rerun()
                 else:
                     dc1, dc2 = st.columns(2)
-                    if dc1.button("✅", key=f"yes_del_{k['id']}", type="primary"):
+                    if dc1.button("✅", key=f"yes_del_{k['id']}_{idx}", type="primary"):
                         try:
                             supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
                             supabase.table("keywords").delete().eq("id", k["id"]).execute()
@@ -2691,105 +2664,11 @@ def show_keywords_page():
                         except Exception as e:
                             st.error("Помилка")
                     
-                    if dc2.button("❌", key=f"no_del_{k['id']}"):
+                    if dc2.button("❌", key=f"no_del_{k['id']}_{idx}"):
                         st.session_state[del_key] = False
                         st.rerun()
 
-    
-    # ========================================================
-    # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ)
-    # ========================================================
-    
-    h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
-    h_txt.markdown("**Запит**")
-    h_cron.markdown("**Автозапуск**")
-    h_date.markdown("**Останній аналіз**")
-    h_act.markdown("**Видалити**")
 
-    # 🔥 ОТРИМУЄМО ДОЗВІЛ ВІД АДМІНА
-    allow_cron_global = proj.get('allow_cron', False)
-
-    for idx, k in enumerate(keywords, start=1):
-        with st.container(border=True):
-            c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
-            
-            with c1:
-                st.write("") 
-                is_checked = select_all
-                st.checkbox("", key=f"chk_{k['id']}", value=is_checked)
-            
-            with c2:
-                st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
-            
-            with c3:
-                if st.button(k['keyword_text'], key=f"link_btn_{k['id']}", help="Натисніть для детального аналізу"):
-                    st.session_state["focus_keyword_id"] = k["id"]
-                    st.rerun()
-            
-            with c4:
-                cron_c1, cron_c2 = st.columns([0.8, 1.2])
-                is_auto = k.get('is_auto_scan', False) 
-                
-                # 🔥 FIX: Ініціалізуємо змінну ПЕРЕД перевіркою
-                new_auto = is_auto 
-
-                with cron_c1:
-                    # Відображаємо тогл тільки якщо дозволено глобально
-                    if allow_cron_global:
-                        new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}", label_visibility="collapsed")
-                        if new_auto != is_auto:
-                            update_kw_field(k['id'], "is_auto_scan", new_auto)
-                            st.rerun()
-                    else:
-                        # Якщо заборонено - відображаємо вимкнений стан
-                        st.toggle("Авто", value=False, key=f"auto_{k['id']}", label_visibility="collapsed", disabled=True)
-                        st.caption("🔒 Admin")
-
-                with cron_c2:
-                    # Вибір частоти - тільки якщо увімкнено І дозволено глобально
-                    if new_auto and allow_cron_global:
-                        current_freq = k.get('frequency', 'daily')
-                        freq_options = ["daily", "weekly", "monthly"]
-                        try: idx_f = freq_options.index(current_freq)
-                        except: idx_f = 0
-                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=f"freq_{k['id']}", label_visibility="collapsed")
-                        if new_freq != current_freq:
-                            update_kw_field(k['id'], "frequency", new_freq)
-                    else:
-                        st.write("") # Пусте місце
-            
-            with c5:
-                st.write("")
-                date_iso = k.get('last_scan_date')
-                formatted_date = format_kyiv_time(date_iso)
-                st.caption(f"{formatted_date}")
-            
-            with c6:
-                st.write("")
-                
-                del_key = f"confirm_del_kw_{k['id']}"
-                if del_key not in st.session_state: st.session_state[del_key] = False
-
-                if not st.session_state[del_key]:
-                    if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}"):
-                        st.session_state[del_key] = True
-                        st.rerun()
-                else:
-                    dc1, dc2 = st.columns(2)
-                    if dc1.button("✅", key=f"yes_del_{k['id']}", type="primary"):
-                        try:
-                            supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
-                            supabase.table("keywords").delete().eq("id", k["id"]).execute()
-                            st.success("!")
-                            st.session_state[del_key] = False
-                            time.sleep(0.5)
-                            st.rerun()
-                        except Exception as e:
-                            st.error("Помилка")
-                    
-                    if dc2.button("❌", key=f"no_del_{k['id']}"):
-                        st.session_state[del_key] = False
-                        st.rerun()
 
 
 # =========================
