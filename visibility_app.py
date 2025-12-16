@@ -3420,10 +3420,10 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    ВЕРСІЯ: FILTERS + SEARCH + FIXED DASHBOARD LINK.
-    1. Додано пошук (Назва, Домен, User).
-    2. Додано фільтри (Статус, Сортування).
-    3. Виправлено перехід на Дашборд.
+    ВЕРСІЯ: FILTERS + SEARCH + DASHBOARD REDIRECT FIX.
+    1. Tab 1: Додано пошук (назва, юзер), фільтр статусів, сортування дати.
+    2. Fix: Кнопка переходу на дашборд тепер коректно перемикає сторінку.
+    3. Fix: Назва проекту береться з brand_name.
     """
     import pandas as pd
     import streamlit as st
@@ -3460,21 +3460,22 @@ def show_admin_page():
             val = clean_data_for_json(value)
             supabase.table("projects").update({field: val}).eq("id", proj_id).execute()
             
-            # Очистка кешу
+            # Очищення кешу
             if "my_projects" in st.session_state: del st.session_state["my_projects"]
             if "all_projects_admin" in st.session_state: del st.session_state["all_projects_admin"]
             
-            # Якщо редагуємо поточний проект, оновлюємо його в сесії миттєво
-            if st.session_state.get("current_project", {}).get("id") == proj_id:
-                st.session_state["current_project"][field] = val
+            # Якщо редагуємо поточний проект, оновлюємо його в сесії
+            if "current_project" in st.session_state and st.session_state["current_project"]:
+                if st.session_state["current_project"]["id"] == proj_id:
+                    st.session_state["current_project"][field] = val
                 
-            st.success(f"Оновлено: {value}")
+            st.toast(f"✅ Оновлено: {field} -> {value}")
             time.sleep(0.5)
-            st.rerun()
+            # st.rerun() # Можна розкоментувати, якщо треба миттєве оновлення всієї таблиці
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
-    # --- ЛОГІКА ВЕБХУКА ---
+    # --- ВЕБХУК ---
     def trigger_keyword_generation(brand, domain, industry, products):
         payload = { "brand": brand, "domain": domain, "industry": industry, "products": products }
         headers = {"virshi-auth": "hi@virshi.ai2025"}
@@ -3506,9 +3507,11 @@ def show_admin_page():
 
     # --- 1. ОТРИМАННЯ ДАНИХ ---
     try:
+        # Завантажуємо проекти
         projects_resp = supabase.table("projects").select("*").execute()
         projects_data = projects_resp.data if projects_resp.data else []
 
+        # Завантажуємо юзерів
         users_resp = supabase.table("profiles").select("*").execute()
         users_data = users_resp.data if users_resp.data else []
         
@@ -3536,7 +3539,7 @@ def show_admin_page():
         trial = len(df_stats[df_stats['status'] == 'trial'])
         
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Всього", total)
+        k1.metric("Всього проектів", total)
         k2.metric("Active", active)
         k3.metric("Trial", trial)
         k4.metric("Blocked", blocked)
@@ -3547,108 +3550,96 @@ def show_admin_page():
     tab_list, tab_create, tab_users = st.tabs(["📂 Список проектів", "➕ Створити проект", "👥 Користувачі & Права"])
 
     # ========================================================
-    # TAB 1: СПИСОК ПРОЕКТІВ (З ФІЛЬТРАМИ)
+    # TAB 1: СПИСОК ПРОЕКТІВ (З ПОШУКОМ І ФІЛЬТРАМИ)
     # ========================================================
     with tab_list:
-        st.markdown("##### Керування проектами")
+        st.markdown("##### 🔍 Фільтрація та Пошук")
         
-        # --- ФІЛЬТРИ ---
-        with st.container(border=True):
-            c_search, c_filter, c_sort = st.columns([2, 1.5, 1.5])
-            
-            with c_search:
-                search_q = st.text_input("🔍 Пошук (Назва, Домен, Користувач)", placeholder="Введіть текст...", key="adm_search")
-            
-            with c_filter:
-                status_filter = st.multiselect("Статус", ["active", "trial", "blocked", "expired"], default=[], key="adm_status_filter")
-            
-            with c_sort:
-                sort_order = st.selectbox("Сортування (Дата)", ["Спочатку нові", "Спочатку старі"], key="adm_sort")
+        # --- Фільтри ---
+        fc1, fc2, fc3 = st.columns([2, 1.5, 1])
+        with fc1:
+            search_query = st.text_input("Пошук", placeholder="Назва, домен, ім'я або email користувача", key="adm_search")
+        with fc2:
+            status_filter = st.multiselect("Статус", ["active", "trial", "blocked", "expired"], default=[], key="adm_status_filter", placeholder="Всі статуси")
+        with fc3:
+            sort_order = st.selectbox("Сортування", ["Найновіші", "Найстаріші"], key="adm_sort")
 
-        # --- ОБРОБКА СПИСКУ ---
-        filtered_projects = []
-        
-        # Підготовка даних для фільтрації
-        for p in projects_data:
-            u_id = p.get('user_id')
-            owner = user_map.get(u_id, {"full_name": "Unknown"})
-            
-            # Нормалізація імені
-            raw_name = p.get('brand_name') or p.get('project_name')
-            domain = p.get('domain', '')
-            clean_name = str(raw_name).replace('*', '').strip() if raw_name else domain
-            
-            p['_display_name'] = clean_name
-            p['_owner_name'] = owner['full_name']
-            
-            # Логіка фільтрації
-            # 1. Пошук
-            if search_q:
-                q = search_q.lower()
-                if (q not in clean_name.lower()) and (q not in domain.lower()) and (q not in owner['full_name'].lower()):
-                    continue
-            
-            # 2. Статус
-            if status_filter:
-                if p.get('status') not in status_filter:
-                    continue
-            
-            filtered_projects.append(p)
-
-        # Логіка сортування
-        reverse_sort = True if sort_order == "Спочатку нові" else False
-        filtered_projects.sort(key=lambda x: x.get('created_at', ''), reverse=reverse_sort)
-
-        st.caption(f"Знайдено: {len(filtered_projects)}")
         st.divider()
+        
+        # --- Логіка фільтрації ---
+        filtered_projects = []
+        if projects_data:
+            # Створюємо розширений список для фільтрації
+            for p in projects_data:
+                u_id = p.get('user_id')
+                owner = user_map.get(u_id, {"full_name": "", "email": ""})
+                
+                # Визначаємо ім'я для пошуку
+                p_name = p.get('brand_name') or p.get('project_name') or ""
+                p_domain = p.get('domain') or ""
+                
+                # Текст для пошуку (все в нижньому регістрі)
+                search_text = f"{p_name} {p_domain} {owner['full_name']} {owner['email']}".lower()
+                
+                # 1. Фільтр по тексту
+                if search_query and search_query.lower() not in search_text:
+                    continue
+                
+                # 2. Фільтр по статусу
+                if status_filter and p.get('status', 'trial') not in status_filter:
+                    continue
+                
+                filtered_projects.append(p)
 
-        # --- ВІДОБРАЖЕННЯ ТАБЛИЦІ ---
-        h0, h1, h_dash, h2, h3, h4, h5 = st.columns([0.3, 2, 0.5, 1.5, 1.5, 1, 0.5])
+            # 3. Сортування
+            reverse_sort = True if sort_order == "Найновіші" else False
+            filtered_projects.sort(key=lambda x: x.get('created_at', ''), reverse=reverse_sort)
+
+        # --- Заголовки таблиці ---
+        h0, h1, h_dash, h2, h3, h4, h5 = st.columns([0.3, 2.2, 0.5, 1.5, 1.2, 1, 0.5])
         h0.markdown("**#**")
         h1.markdown("**Проект / Користувач**")
         h_dash.markdown("") 
         h2.markdown("**Статус**")
-        h3.markdown("**Авто сканування**")
+        h3.markdown("**Авто (Cron)**")
         h4.markdown("**Дата**")
         h5.markdown("**Дії**")
-        st.divider()
+        st.markdown("<hr style='margin: 5px 0'>", unsafe_allow_html=True)
 
         if not filtered_projects:
-            st.info("Проектів не знайдено за вашим запитом.")
+            st.info("Проектів не знайдено.")
 
+        # --- Вивід списку ---
         for idx, p in enumerate(filtered_projects, 1):
             p_id = p['id']
             u_id = p.get('user_id')
-            owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user"})
+            owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            p_name = p['_display_name']
+            # Назва
+            raw_name = p.get('brand_name') or p.get('project_name')
             domain = p.get('domain', '')
+            if raw_name:
+                clean_name = str(raw_name).replace('*', '').strip()
+            else:
+                clean_name = domain.replace('https://', '').replace('www.', '').split('/')[0] if domain else "Без назви"
 
             with st.container():
-                c0, c1, c_dash, c2, c3, c4, c5 = st.columns([0.3, 2, 0.5, 1.5, 1.5, 1, 0.5])
+                c0, c1, c_dash, c2, c3, c4, c5 = st.columns([0.3, 2.2, 0.5, 1.5, 1.2, 1, 0.5])
 
                 with c0: st.caption(f"{idx}")
 
                 with c1:
-                    st.markdown(f"**{p_name}**")
-                    if domain.startswith("http"):
-                        st.markdown(f"[{domain}]({domain})", unsafe_allow_html=True)
-                    else:
-                        st.caption(domain)
-                    st.caption(f"👤 {owner_info['full_name']}")
+                    st.markdown(f"**{clean_name}**")
+                    if domain:
+                        st.caption(f"🌐 {domain}")
+                    st.caption(f"👤 {owner_info['full_name']} | {owner_info['email']}")
 
                 with c_dash:
                     # 🔥 FIX: Перехід на дашборд
-                    if st.button("↗️", key=f"goto_{p_id}", help="Відкрити дашборд"):
-                        # 1. Встановлюємо проект
+                    if st.button("↗️", key=f"goto_{p_id}", help="Відкрити дашборд цього проекту"):
                         st.session_state["current_project"] = p
-                        # 2. Скидаємо фокус
+                        st.session_state["selected_page"] = "Дашборд" # Примусово перемикаємо сторінку
                         st.session_state["focus_keyword_id"] = None
-                        # 3. Примусово перемикаємо сторінку (якщо у вас є механізм навігації)
-                        # Якщо ви використовуєте sidebar_menu або option_menu, треба оновити змінну
-                        if "selected_page" in st.session_state:
-                            st.session_state["selected_page"] = "Дашборд"
-                        # 4. Перезавантаження
                         st.rerun()
 
                 with c2:
@@ -3662,6 +3653,7 @@ def show_admin_page():
                         update_project_field(p_id, "status", new_status)
 
                 with c3:
+                    # 🔥 FIX: Чекбокс дозволу автосканування
                     allow_cron = p.get('allow_cron', False)
                     new_cron = st.checkbox("Дозволити", value=allow_cron, key=f"cr_{p_id}")
                     if new_cron != allow_cron:
@@ -3672,6 +3664,7 @@ def show_admin_page():
                     if raw_date: st.caption(raw_date[:10])
 
                 with c5:
+                    # Кнопка видалення з підтвердженням
                     confirm_key = f"confirm_del_{p_id}"
                     if not st.session_state.get(confirm_key, False):
                         if st.button("🗑", key=f"del_btn_{p_id}"):
@@ -3682,13 +3675,15 @@ def show_admin_page():
                             try:
                                 supabase.table("projects").delete().eq("id", p_id).execute()
                                 st.success("Видалено!")
+                                time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
                                 st.error(str(e))
                         if st.button("❌", key=f"no_{p_id}"):
                             st.session_state[confirm_key] = False
                             st.rerun()
-                st.divider()
+                
+                st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
     # ========================================================
     # TAB 2: СТВОРИТИ ПРОЕКТ
@@ -3697,73 +3692,109 @@ def show_admin_page():
         st.markdown("##### Створення нового проекту")
         
         c1, c2 = st.columns(2)
-        new_name_val = c1.text_input("Назва проекту (Бренд)", key="new_proj_name")
-        new_domain_val = c2.text_input("Домен", key="new_proj_domain")
+        new_name_val = c1.text_input("Назва проекту (Бренд)", key="new_proj_name", placeholder="Наприклад: SkyUp")
+        new_domain_val = c2.text_input("Домен", key="new_proj_domain", placeholder="skyup.aero")
         
         c3, c4 = st.columns(2)
-        new_industry_val = c3.text_input("Галузь", key="new_proj_ind")
-        new_desc_val = c4.text_area("Продукти/Послуги", height=68, key="new_proj_desc")
+        new_industry_val = c3.text_input("Галузь (Обов'язково)", key="new_proj_ind", placeholder="напр. авіаперевезення")
+        new_desc_val = c4.text_area("Продукти/Послуги", placeholder="напр. лоукостер, квитки", height=68, key="new_proj_desc")
         
         if st.button("✨ Згенерувати 10 запитів (AI)"):
-            if new_domain_val and new_industry_val: 
+            if new_domain_val and new_industry_val and new_desc_val: 
                 brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
-                with st.spinner("Генеруємо..."):
-                    generated_kws = trigger_keyword_generation(brand_for_ai, new_domain_val, new_industry_val, new_desc_val)
+                
+                with st.spinner("Звертаємось до n8n для генерації..."):
+                    generated_kws = trigger_keyword_generation(
+                        brand=brand_for_ai,
+                        domain=new_domain_val,
+                        industry=new_industry_val,
+                        products=new_desc_val
+                    )
+                
                 if generated_kws:
                     st.session_state["new_proj_keywords"] = [{"keyword": kw} for kw in generated_kws]
-                    st.success(f"Згенеровано {len(generated_kws)}!")
+                    st.success(f"Успішно згенеровано {len(generated_kws)} запитів!")
                 else:
-                    st.warning("Пуста відповідь.")
+                    st.warning("Вебхук не повернув даних. Перевірте логи.")
             else:
-                st.warning("Заповніть поля.")
+                st.warning("⚠️ Заповніть: Домен, Галузь та Продукти.")
 
         st.divider()
-        st.markdown("###### 📝 Редагування запитів")
+        st.markdown("###### 📝 Редагування запитів перед створенням")
+
         df_initial = pd.DataFrame(st.session_state["new_proj_keywords"])
-        if df_initial.empty: df_initial = pd.DataFrame(columns=["keyword"])
+        if df_initial.empty:
+            df_initial = pd.DataFrame(columns=["keyword"])
 
         edited_df = st.data_editor(
-            df_initial, num_rows="dynamic",
-            column_config={"keyword": st.column_config.TextColumn("Список запитів", width="large", required=True)},
-            use_container_width=True, key="editor_new_kws"
+            df_initial,
+            num_rows="dynamic",
+            column_config={
+                "keyword": st.column_config.TextColumn("Список запитів", width="large", required=True)
+            },
+            use_container_width=True,
+            key="editor_new_kws"
         )
 
         st.write("")
         c_st, c_cr = st.columns(2)
-        new_status = c_st.selectbox("Статус", ["trial", "active", "blocked"], key="new_proj_status")
-        new_cron = c_cr.checkbox("Автосканування?", value=False, key="new_proj_cron")
+        new_status = c_st.selectbox("Початковий статус", ["trial", "active", "blocked"], key="new_proj_status")
+        new_cron = c_cr.checkbox("Дозволити автосканування одразу?", value=False, key="new_proj_cron")
 
-        if st.button("🚀 Створити проект", type="primary"):
+        if st.button("🚀 Створити проект та зберегти запити", type="primary"):
             final_name = new_name_val if new_name_val else new_domain_val.split('.')[0].capitalize()
+            
             if new_domain_val:
                 try:
                     new_proj_data = {
-                        "brand_name": final_name,
+                        "brand_name": final_name, 
                         "domain": new_domain_val,
                         "status": new_status,
                         "allow_cron": new_cron
                     }
                     res_proj = supabase.table("projects").insert(new_proj_data).execute()
+                    
                     if res_proj.data:
-                        pid = res_proj.data[0]['id']
-                        kws = edited_df["keyword"].dropna().tolist()
-                        if kws:
-                            kws_data = [{"project_id": pid, "keyword_text": k, "is_active": True} for k in kws]
+                        new_proj_id = res_proj.data[0]['id']
+                        
+                        # Whitelist
+                        try:
+                            clean_d = new_domain_val.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                            supabase.table("official_assets").insert({
+                                "project_id": new_proj_id, 
+                                "domain_or_url": clean_d, 
+                                "type": "website"
+                            }).execute()
+                        except: pass
+
+                        final_kws_list = edited_df["keyword"].dropna().tolist()
+                        final_kws_list = [str(k).strip() for k in final_kws_list if str(k).strip()]
+                        
+                        if final_kws_list:
+                            kws_data = [
+                                {
+                                    "project_id": new_proj_id, 
+                                    "keyword_text": kw,
+                                    "is_active": True
+                                } for kw in final_kws_list
+                            ]
                             supabase.table("keywords").insert(kws_data).execute()
-                        st.success("Проект створено!")
+                        
+                        st.success(f"Проект '{final_name}' створено!")
                         st.session_state["new_proj_keywords"] = [] 
                         if "my_projects" in st.session_state: del st.session_state["my_projects"]
                         st.rerun()
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Помилка створення: {e}")
             else:
                 st.warning("Домен обов'язковий.")
 
     # ========================================================
-    # TAB 3: КОРИСТУВАЧІ
+    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА
     # ========================================================
     with tab_users:
         st.markdown("##### 👥 База користувачів")
+
         if users_data:
             df_users = pd.DataFrame(users_data)
             required_cols = ['id', 'email', 'first_name', 'last_name', 'role']
@@ -3773,15 +3804,21 @@ def show_admin_page():
             edited_users = st.data_editor(
                 df_users[required_cols],
                 column_config={
-                    "id": st.column_config.TextColumn("ID", disabled=True, width="small"),
+                    "id": st.column_config.TextColumn("User ID", disabled=True, width="small"),
                     "email": st.column_config.TextColumn("Email", disabled=True),
+                    "first_name": "Ім'я",
+                    "last_name": "Прізвище",
                     "role": st.column_config.SelectboxColumn("Роль", options=["user", "admin", "super_admin"], required=True)
                 },
-                hide_index=True, use_container_width=True, key="admin_users_editor"
+                hide_index=True,
+                use_container_width=True,
+                key="admin_users_editor_v3"
             )
-            if st.button("💾 Зберегти права"):
+
+            if st.button("💾 Зберегти зміни прав"):
                 try:
-                    for row in edited_users.to_dict('records'):
+                    updated_rows = edited_users.to_dict('records')
+                    for row in updated_rows:
                         clean_row = clean_data_for_json(row)
                         uid = clean_row.pop('id')
                         if 'email' in clean_row: del clean_row['email']
@@ -3789,7 +3826,9 @@ def show_admin_page():
                     st.success("Оновлено!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Помилка: {e}")
+        else:
+            st.warning("Користувачів не знайдено.")
 
 def show_chat_page():
     """
