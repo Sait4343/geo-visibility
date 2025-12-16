@@ -3420,10 +3420,10 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    ВЕРСІЯ: FINAL REFINED UI & LOGIC.
-    1. Tab 1: Rename Cron -> Автосканування.
-    2. Tab 2: Region Select, Excel Import, Green Numbers UI for Keywords.
-    3. Tab 3: User Projects List (Name+Date), Removed Last Login.
+    ВЕРСІЯ: ULTIMATE FINAL.
+    1. Tab 1: Fix Enum Error (removed expired), Rename Cron column.
+    2. Tab 2: Clear inputs after create, Import from URL, Region Select.
+    3. Tab 3: Projects list with newlines, removed last login.
     """
     import pandas as pd
     import streamlit as st
@@ -3432,7 +3432,8 @@ def show_admin_page():
     import json
     import time
     import plotly.express as px
-    import io 
+    import io
+    import re # Для regex (Google Sheets ID)
 
     # --- КОНСТАНТИ ---
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
@@ -3521,7 +3522,7 @@ def show_admin_page():
 
     # Ініціалізація списку запитів для створення
     if "new_proj_keywords" not in st.session_state:
-        st.session_state["new_proj_keywords"] = [] # Список словників [{'keyword': 'text'}]
+        st.session_state["new_proj_keywords"] = [] 
 
     st.title("🛡️ Admin Panel (CRM)")
 
@@ -3530,12 +3531,10 @@ def show_admin_page():
         projects_resp = supabase.table("projects").select("*").execute()
         projects_data = projects_resp.data if projects_resp.data else []
 
-        # Count keywords
         kws_resp = supabase.table("keywords").select("project_id").execute()
         kws_df = pd.DataFrame(kws_resp.data) if kws_resp.data else pd.DataFrame()
         kw_counts = kws_df['project_id'].value_counts().to_dict() if not kws_df.empty else {}
 
-        # Users
         users_resp = supabase.table("profiles").select("*").execute()
         users_data = users_resp.data if users_resp.data else []
         
@@ -3584,7 +3583,8 @@ def show_admin_page():
         with fc1:
             search_query = st.text_input("Пошук", placeholder="Назва, ID, домен, email власника", key="adm_search")
         with fc2:
-            status_filter = st.multiselect("Статус", ["active", "trial", "blocked", "expired"], default=[], key="adm_status_filter", placeholder="Всі статуси")
+            # 🔥 FIX: Прибрано expired, бо це ламає базу
+            status_filter = st.multiselect("Статус", ["active", "trial", "blocked"], default=[], key="adm_status_filter", placeholder="Всі статуси")
         with fc3:
             sort_order = st.selectbox("Сортування", ["Найновіші", "Найстаріші"], key="adm_sort")
 
@@ -3616,7 +3616,7 @@ def show_admin_page():
         h1.markdown("**Проект / Користувач**")
         h_dash.markdown("") 
         h2.markdown("**Статус**")
-        h3.markdown("**Автосканування**") # ЗМІНЕНО НАЗВУ
+        h3.markdown("**Автосканування**") # 🔥 FIX: Змінено назву
         h_cnt.markdown("**Запитів**")
         h4.markdown("**Дата**")
         h5.markdown("**Дії**")
@@ -3658,7 +3658,8 @@ def show_admin_page():
 
                 with c2:
                     curr_status = p.get('status', 'trial')
-                    opts = ["trial", "active", "blocked", "expired"]
+                    # 🔥 FIX: Прибрано expired зі списку, щоб не було помилки
+                    opts = ["trial", "active", "blocked"]
                     try: idx_s = opts.index(curr_status)
                     except: idx_s = 0
                     
@@ -3701,19 +3702,20 @@ def show_admin_page():
                 st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
     # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ (ОНОВЛЕНИЙ UI)
+    # TAB 2: СТВОРИТИ ПРОЕКТ (ОНОВЛЕНИЙ UI + IMPORT URL)
     # ========================================================
     with tab_create:
         st.markdown("##### Створення нового проекту")
         
         c1, c2 = st.columns(2)
+        # Ключі для input, щоб потім очистити їх
         new_name_val = c1.text_input("Назва проекту (Бренд)", key="new_proj_name", placeholder="Наприклад: SkyUp")
         new_domain_val = c2.text_input("Домен", key="new_proj_domain", placeholder="skyup.aero")
         
         c3, c4 = st.columns(2)
         new_industry_val = c3.text_input("Галузь (Обов'язково)", key="new_proj_ind", placeholder="напр. авіаперевезення")
         
-        # ДОДАНО РЕГІОН
+        # Регіон
         region_options = ["Ukraine", "USA", "Europe", "Global"]
         new_region_val = c4.selectbox("Регіон", region_options, key="new_proj_region")
 
@@ -3733,7 +3735,6 @@ def show_admin_page():
                     )
                 
                 if generated_kws:
-                    # Додаємо до існуючих
                     current_kws = st.session_state["new_proj_keywords"]
                     for kw in generated_kws:
                         current_kws.append({"keyword": kw})
@@ -3747,38 +3748,64 @@ def show_admin_page():
         st.divider()
         st.markdown("###### 📝 Редагування запитів перед створенням")
         
-        # ----------------------------------------------------
-        # БЛОК ІМПОРТУ (ЯК НА СТОРІНЦІ ЗАПИТІВ)
-        # ----------------------------------------------------
-        with st.expander("📥 Імпорт з Excel", expanded=False):
-            st.info("💡 Завантажте файл .xlsx. Перша колонка має називатися **Keyword**.")
-            uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"], key="admin_kw_import")
+        # --- БЛОК ІМПОРТУ (Excel + URL) ---
+        with st.expander("📥 Імпорт (Excel / URL)", expanded=False):
+            st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet. Перша колонка має називатися **Keyword**.")
             
-            if uploaded_file:
-                try:
-                    df_upload = pd.read_excel(uploaded_file)
-                    # Нормалізація
-                    target_col = None
-                    cols_lower = [str(c).lower().strip() for c in df_upload.columns]
-                    if "keyword" in cols_lower: target_col = df_upload.columns[cols_lower.index("keyword")]
-                    elif "запит" in cols_lower: target_col = df_upload.columns[cols_lower.index("запит")]
-                    else: target_col = df_upload.columns[0]
-                    
-                    imp_kws = df_upload[target_col].dropna().astype(str).tolist()
-                    
-                    if st.button(f"Додати {len(imp_kws)} запитів з файлу"):
-                        current_kws = st.session_state["new_proj_keywords"]
-                        for kw in imp_kws:
-                            current_kws.append({"keyword": kw})
-                        st.session_state["new_proj_keywords"] = current_kws
-                        st.success("Імпортовано!")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Помилка імпорту: {e}")
+            import_source = st.radio("Джерело:", ["Файл (.xlsx)", "Посилання (URL)"], horizontal=True, key="admin_imp_src")
+            df_upload = None
+            
+            if import_source == "Файл (.xlsx)":
+                uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"], key="admin_kw_import_file")
+                if uploaded_file:
+                    try:
+                        df_upload = pd.read_excel(uploaded_file)
+                    except Exception as e:
+                        st.error(f"Помилка файлу: {e}")
+            else:
+                import_url = st.text_input("Вставте посилання (Google Sheets або CSV):", key="admin_kw_import_url")
+                if import_url:
+                    try:
+                        if "docs.google.com" in import_url:
+                            match = re.search(r'/d/([a-zA-Z0-9-_]+)', import_url)
+                            if match:
+                                sheet_id = match.group(1)
+                                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+                                df_upload = pd.read_csv(csv_url)
+                            else:
+                                st.error("Невірне посилання Google Sheets")
+                        elif import_url.endswith(".csv"):
+                            df_upload = pd.read_csv(import_url)
+                        elif import_url.endswith(".xlsx"):
+                            df_upload = pd.read_excel(import_url)
+                        else:
+                            st.warning("Пробуємо як CSV...")
+                            df_upload = pd.read_csv(import_url)
+                    except Exception as e:
+                        if "400" in str(e) or "403" in str(e):
+                            st.error("🔒 Помилка доступу. Відкрийте доступ 'Anyone with the link'.")
+                        else:
+                            st.error(f"Помилка URL: {e}")
 
-        # ----------------------------------------------------
-        # ТАБЛИЦЯ ЗАПИТІВ (ЗЕЛЕНІ КРУЖЕЧКИ)
-        # ----------------------------------------------------
+            if df_upload is not None:
+                # Нормалізація
+                target_col = None
+                cols_lower = [str(c).lower().strip() for c in df_upload.columns]
+                if "keyword" in cols_lower: target_col = df_upload.columns[cols_lower.index("keyword")]
+                elif "запит" in cols_lower: target_col = df_upload.columns[cols_lower.index("запит")]
+                else: target_col = df_upload.columns[0]
+                
+                imp_kws = df_upload[target_col].dropna().astype(str).tolist()
+                
+                if st.button(f"Додати {len(imp_kws)} запитів"):
+                    current_kws = st.session_state["new_proj_keywords"]
+                    for kw in imp_kws:
+                        current_kws.append({"keyword": kw})
+                    st.session_state["new_proj_keywords"] = current_kws
+                    st.success("Імпортовано!")
+                    st.rerun()
+
+        # --- ТАБЛИЦЯ ЗАПИТІВ (ЗЕЛЕНІ КРУЖЕЧКИ) ---
         keywords_list = st.session_state["new_proj_keywords"]
         
         if not keywords_list:
@@ -3792,7 +3819,6 @@ def show_admin_page():
                         st.markdown(f"<div class='green-number'>{i+1}</div>", unsafe_allow_html=True)
                     
                     with c_txt:
-                        # Редагування "на льоту"
                         new_val = st.text_input("kw", value=item['keyword'], key=f"edit_kw_adm_{i}", label_visibility="collapsed")
                         if new_val != item['keyword']:
                             st.session_state["new_proj_keywords"][i]['keyword'] = new_val
@@ -3802,13 +3828,15 @@ def show_admin_page():
                             st.session_state["new_proj_keywords"].pop(i)
                             st.rerun()
 
-        if st.button("➕ Додати порожній рядок"):
+        if st.button("➕ Додати рядок"):
             st.session_state["new_proj_keywords"].append({"keyword": ""})
             st.rerun()
 
         st.divider()
         c_st, c_cr = st.columns(2)
+        # Статус
         new_status = c_st.selectbox("Початковий статус", ["trial", "active", "blocked"], key="new_proj_status")
+        # Cron
         new_cron = c_cr.checkbox("Дозволити автосканування одразу?", value=False, key="new_proj_cron")
 
         if st.button("🚀 Створити проект та зберегти запити", type="primary"):
@@ -3816,7 +3844,6 @@ def show_admin_page():
             
             if new_domain_val:
                 try:
-                    # Поточний адмін стає власником
                     current_user_id = st.session_state["user"].id
                     
                     new_proj_data = {
@@ -3825,14 +3852,14 @@ def show_admin_page():
                         "domain": new_domain_val,
                         "status": new_status,
                         "allow_cron": new_cron,
-                        "region": new_region_val # <--- Зберігаємо регіон
+                        "region": new_region_val
                     }
                     res_proj = supabase.table("projects").insert(new_proj_data).execute()
                     
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
                         
-                        # Whitelist (Clean Domain)
+                        # Whitelist Clean
                         try:
                             clean_d = new_domain_val.replace("https://", "").replace("http://", "").replace("www.", "").strip().rstrip("/")
                             supabase.table("official_assets").insert({
@@ -3842,7 +3869,6 @@ def show_admin_page():
                             }).execute()
                         except: pass
 
-                        # Збереження запитів
                         final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
                         
                         if final_kws_clean:
@@ -3855,9 +3881,20 @@ def show_admin_page():
                             ]
                             supabase.table("keywords").insert(kws_data).execute()
                         
-                        st.success(f"Проект '{final_name}' створено! ID: {new_proj_id}")
+                        # 🔥 FIX: Очищення полів
+                        st.success(f"Проект '{final_name}' успішно створено! ID: {new_proj_id}")
                         st.session_state["new_proj_keywords"] = [] 
+                        
+                        # Скидаємо значення інпутів (через сесію не вийде для text_input без on_change, 
+                        # але можна просто rerun, і вони скинуться, якщо ключ не тримає значення)
+                        # Краще просто очистити сесію, якщо ключі прив'язані
+                        if "new_proj_name" in st.session_state: st.session_state["new_proj_name"] = ""
+                        if "new_proj_domain" in st.session_state: st.session_state["new_proj_domain"] = ""
+                        if "new_proj_ind" in st.session_state: st.session_state["new_proj_ind"] = ""
+                        if "new_proj_desc" in st.session_state: st.session_state["new_proj_desc"] = ""
+
                         if "my_projects" in st.session_state: del st.session_state["my_projects"]
+                        time.sleep(1.5)
                         st.rerun()
                 except Exception as e:
                     st.error(f"Помилка створення: {e}")
@@ -3865,35 +3902,31 @@ def show_admin_page():
                 st.warning("Домен обов'язковий.")
 
     # ========================================================
-    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА (ОНОВЛЕНО)
+    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА (FIXED LIST)
     # ========================================================
     with tab_users:
         st.markdown("##### 👥 База користувачів")
 
-        # --- Фільтри Юзерів ---
         uf1, uf2 = st.columns(2)
         with uf1:
             u_search = st.text_input("🔍 Пошук користувача", placeholder="Ім'я або email")
         with uf2:
             role_filter = st.multiselect("Роль", ["user", "admin", "super_admin"], default=[])
 
-        # --- Підготовка даних ---
         if users_data:
-            # Отримуємо проекти для кожного юзера
+            # Отримуємо проекти
             proj_df = pd.DataFrame(projects_data)
             
-            # Формуємо таблицю
             user_table_data = []
             for u in users_data:
                 full_name = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
                 email = u.get('email', '')
                 
-                # Фільтрація
                 search_target = f"{full_name} {email}".lower()
                 if u_search and u_search.lower() not in search_target: continue
                 if role_filter and u.get('role', 'user') not in role_filter: continue
 
-                # Список проектів користувача (Назва + Дата)
+                # Список проектів користувача (з нового рядка)
                 user_projs = []
                 if not proj_df.empty and 'user_id' in proj_df.columns:
                     my_projs = proj_df[proj_df['user_id'] == u['id']]
@@ -3902,22 +3935,21 @@ def show_admin_page():
                         p_dt = p_row.get('created_at', '')[:10]
                         user_projs.append(f"{p_nm} ({p_dt})")
                 
-                projs_str = ", ".join(user_projs) if user_projs else "-"
+                # 🔥 FIX: Join з переходом на новий рядок
+                projs_str = "\n".join(user_projs) if user_projs else "-"
 
                 user_table_data.append({
                     "id": u['id'],
                     "Ім'я": full_name,
                     "Email": email,
                     "Роль": u.get('role', 'user'),
-                    "Проекти": projs_str, # <--- Змінено: список назв
+                    "Проекти": projs_str, # Тепер з переходом рядка
                     "Зареєстрований": u.get('created_at', '')[:10]
                 })
             
             df_users_view = pd.DataFrame(user_table_data)
             
-            # --- Таблиця (Data Editor) ---
             if not df_users_view.empty:
-                # Додаємо нумерацію
                 df_users_view.index = np.arange(1, len(df_users_view) + 1)
                 
                 edited_users = st.data_editor(
@@ -3931,14 +3963,12 @@ def show_admin_page():
                         "Роль": st.column_config.SelectboxColumn("Роль", options=["user", "admin", "super_admin"], required=True)
                     },
                     use_container_width=True,
-                    key="admin_users_final_v2"
+                    key="admin_users_final_v3"
                 )
 
-                # Кнопка збереження
                 if st.button("💾 Зберегти зміни прав"):
                     try:
                         changes_count = 0
-                        # Порівнюємо і зберігаємо
                         updated_rows = edited_users.to_dict('index') 
                         
                         for idx, row in updated_rows.items():
@@ -3960,14 +3990,13 @@ def show_admin_page():
                     except Exception as e:
                         st.error(f"Помилка збереження: {e}")
 
-                # --- Графік реєстрацій ---
+                # Графік
                 st.divider()
                 st.markdown("##### 📈 Динаміка реєстрацій")
                 
                 df_chart = pd.DataFrame(users_data)
                 if 'created_at' in df_chart.columns:
                     df_chart['date'] = pd.to_datetime(df_chart['created_at']).dt.date
-                    
                     from datetime import timedelta
                     time_filter = st.selectbox("Період", ["Останні 7 днів", "Останні 30 днів", "Останні 90 днів", "Весь час"], index=1)
                     
@@ -3978,7 +4007,6 @@ def show_admin_page():
                     else: start_date = df_chart['date'].min()
                     
                     df_chart_filtered = df_chart[df_chart['date'] >= start_date]
-                    
                     reg_counts = df_chart_filtered.groupby('date').size().reset_index(name='count')
                     
                     if not reg_counts.empty:
@@ -3991,6 +4019,7 @@ def show_admin_page():
                 st.warning("Користувачів не знайдено.")
         else:
             st.warning("База користувачів пуста.")
+
 
 def show_chat_page():
     """
