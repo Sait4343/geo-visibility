@@ -2111,14 +2111,15 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FINAL UI (NO BG ON NAME, PRIMARY ANALYZE BUTTON).
+    ВЕРСІЯ: IMPORT/EXPORT EXCEL + TABS IN ACCORDION.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime
     import time
+    import io  # Додано для роботи з файлами в пам'яті
     
-    # CSS Стилізація
+    # CSS Стилізація (ЗБЕРЕЖЕНО)
     st.markdown("""
     <style>
         /* 1. Зелені номери */
@@ -2146,7 +2147,7 @@ def show_keywords_page():
             color: #31333F;
             box-shadow: none;
         }
-        /* Ефект наведення - тільки колір тексту */
+        /* Ефект наведення */
         div[data-testid="stColumn"]:nth-of-type(3) button[kind="secondary"]:hover {
             color: #00C896;
             background: transparent;
@@ -2158,8 +2159,6 @@ def show_keywords_page():
             background: transparent;
             box-shadow: none;
         }
-
-        /* 3. Інші кнопки (Видалити/Деталі) залишаються стандартними */
     </style>
     """, unsafe_allow_html=True)
 
@@ -2195,10 +2194,13 @@ def show_keywords_page():
 
     # Перехід на деталі
     if st.session_state.get("focus_keyword_id"):
-        show_keyword_details(st.session_state["focus_keyword_id"])
-        return
+        # Передбачаємо, що show_keyword_details визначена десь в іншому місці
+        # Якщо ні - треба імпортувати або передати
+        if 'show_keyword_details' in globals():
+            show_keyword_details(st.session_state["focus_keyword_id"])
+            return
 
-    # --- 1. ЗАГОЛОВОК (Зменшений) ---
+    # --- 1. ЗАГОЛОВОК ---
     st.markdown("<h3 style='padding-top:0;'>📋 Перелік запитів</h3>", unsafe_allow_html=True)
 
     # Хелпери
@@ -2222,68 +2224,168 @@ def show_keywords_page():
             st.error(f"Помилка оновлення: {e}")
 
     # ========================================================
-    # 2. БЛОК ДОДАВАННЯ
+    # 2. БЛОК РЕДАГУВАННЯ (Tabs: Manual, Import, Export)
     # ========================================================
-    with st.expander("➕ Додати нові запити", expanded=False): 
-        with st.container(border=True):
-            st.markdown("##### 📝 Введіть нові запити")
-            for i in range(st.session_state["kw_input_count"]):
-                st.text_input(f"Запит #{i+1}", key=f"new_kw_input_{i}", placeholder="Наприклад: Купити квитки...")
+    with st.expander("✏️ Редагування запитів", expanded=False): 
+        
+        tab_manual, tab_import, tab_export = st.tabs(["✍️ Ввести вручну", "📥 Завантажити Excel", "📤 Експорт (Excel)"])
 
-            col_plus, col_minus, _ = st.columns([1, 1, 5])
-            with col_plus:
-                if st.button("➕ Ще рядок"):
-                    st.session_state["kw_input_count"] += 1
-                    st.rerun()
-            with col_minus:
-                if st.session_state["kw_input_count"] > 1:
-                    if st.button("➖ Прибрати"):
-                        st.session_state["kw_input_count"] -= 1
+        # --- TAB 1: ВРУЧНУ ---
+        with tab_manual:
+            with st.container(border=True):
+                st.markdown("##### 📝 Введіть нові запити")
+                for i in range(st.session_state["kw_input_count"]):
+                    st.text_input(f"Запит #{i+1}", key=f"new_kw_input_{i}", placeholder="Наприклад: Купити квитки...")
+
+                col_plus, col_minus, _ = st.columns([1, 1, 5])
+                with col_plus:
+                    if st.button("➕ Ще рядок"):
+                        st.session_state["kw_input_count"] += 1
                         st.rerun()
+                with col_minus:
+                    if st.session_state["kw_input_count"] > 1:
+                        if st.button("➖ Прибрати"):
+                            st.session_state["kw_input_count"] -= 1
+                            st.rerun()
 
-            st.divider()
-            c_models, c_submit = st.columns([3, 1])
-            with c_models:
-                selected_models_add = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="add_multiselect")
+                st.divider()
+                c_models, c_submit = st.columns([3, 1])
+                with c_models:
+                    selected_models_manual = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="manual_multiselect")
+                
+                with c_submit:
+                    st.write("")
+                    st.write("")
+                    if st.button("🚀 Додати", use_container_width=True, type="primary", key="btn_add_manual"):
+                        new_keywords_list = []
+                        for i in range(st.session_state["kw_input_count"]):
+                            val = st.session_state.get(f"new_kw_input_{i}", "").strip()
+                            if val: new_keywords_list.append(val)
+                        
+                        if new_keywords_list:
+                            try:
+                                insert_data = [{
+                                    "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                    "is_auto_scan": False, "frequency": "daily"
+                                } for kw in new_keywords_list]
+                                
+                                res = supabase.table("keywords").insert(insert_data).execute()
+                                if res.data:
+                                    with st.spinner(f"Зберігаємо та запускаємо аналіз..."):
+                                        if 'n8n_trigger_analysis' in globals():
+                                            for new_kw in new_keywords_list:
+                                                n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models_manual)
+                                                time.sleep(0.5) 
+                                    st.success(f"Додано {len(new_keywords_list)} запитів!")
+                                    st.session_state["kw_input_count"] = 1
+                                    # Очистка
+                                    for key in list(st.session_state.keys()):
+                                        if key.startswith("new_kw_input_"): del st.session_state[key]
+                                    time.sleep(1)
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Помилка: {e}")
+                        else:
+                            st.warning("Введіть хоча б один запит.")
+
+        # --- TAB 2: ІМПОРТ EXCEL ---
+        with tab_import:
+            st.info("💡 Завантажте файл .xlsx. Перша колонка має називатися **Keyword** (або просто бути першою). Всі запити з цієї колонки будуть додані.")
             
-            with c_submit:
-                st.write("")
-                st.write("")
-                if st.button("🚀 Додати", use_container_width=True, type="primary"):
-                    new_keywords_list = []
-                    for i in range(st.session_state["kw_input_count"]):
-                        val = st.session_state.get(f"new_kw_input_{i}", "").strip()
-                        if val: new_keywords_list.append(val)
-                    
-                    if new_keywords_list:
-                        try:
-                            insert_data = [{
-                                "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
-                                "is_auto_scan": False, "frequency": "daily"
-                            } for kw in new_keywords_list]
-                            
-                            res = supabase.table("keywords").insert(insert_data).execute()
-                            if res.data:
-                                with st.spinner(f"Запускаємо аналіз..."):
-                                    if 'n8n_trigger_analysis' in globals():
-                                        for new_kw in new_keywords_list:
-                                            n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models_add)
-                                            time.sleep(0.5) 
-                                st.success(f"Додано {len(new_keywords_list)} запитів!")
-                                st.session_state["kw_input_count"] = 1
-                                for key in list(st.session_state.keys()):
-                                    if key.startswith("new_kw_input_"): del st.session_state[key]
-                                time.sleep(1)
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Помилка: {e}")
+            uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"])
+            
+            if uploaded_file:
+                try:
+                    df_upload = pd.read_excel(uploaded_file)
+                    # Шукаємо колонку
+                    target_col = None
+                    if "Keyword" in df_upload.columns:
+                        target_col = "Keyword"
+                    elif "keyword" in df_upload.columns:
+                        target_col = "keyword"
+                    elif "Запит" in df_upload.columns:
+                        target_col = "Запит"
                     else:
-                        st.warning("Введіть хоча б один запит.")
+                        # Беремо першу
+                        target_col = df_upload.columns[0]
+                    
+                    preview_kws = df_upload[target_col].dropna().astype(str).tolist()
+                    st.write(f"Знайдено **{len(preview_kws)}** запитів. Перші 3: {preview_kws[:3]}")
+                    
+                    c_imp_models, c_imp_btn = st.columns([3, 1])
+                    with c_imp_models:
+                        selected_models_import = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="import_multiselect")
+                    
+                    with c_imp_btn:
+                        st.write("")
+                        st.write("")
+                        if st.button("🚀 Завантажити та Аналізувати", type="primary", use_container_width=True):
+                            if preview_kws:
+                                try:
+                                    # 1. Insert to DB
+                                    insert_data = [{
+                                        "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                        "is_auto_scan": False, "frequency": "daily"
+                                    } for kw in preview_kws]
+                                    
+                                    # Insert batches to avoid limits if list is huge
+                                    res = supabase.table("keywords").insert(insert_data).execute()
+                                    
+                                    # 2. Trigger Analysis
+                                    if res.data:
+                                        with st.spinner(f"Обробка {len(preview_kws)} запитів..."):
+                                            if 'n8n_trigger_analysis' in globals():
+                                                my_bar = st.progress(0, text="Запуск...")
+                                                total = len(preview_kws)
+                                                for i, kw in enumerate(preview_kws):
+                                                    n8n_trigger_analysis(proj["id"], [kw], proj.get("brand_name"), models=selected_models_import)
+                                                    my_bar.progress((i + 1) / total)
+                                                    time.sleep(0.3) # Anti-spam delay
+                                        st.success("Успішно імпортовано та запущено!")
+                                        time.sleep(2)
+                                        st.rerun()
+                                except Exception as e:
+                                    st.error(f"Помилка імпорту: {e}")
+                            else:
+                                st.warning("Файл порожній або не знайдено запитів.")
+
+                except Exception as e:
+                    st.error(f"Не вдалося прочитати файл: {e}")
+
+        # --- TAB 3: ЕКСПОРТ EXCEL ---
+        with tab_export:
+            st.write("Натисніть кнопку нижче, щоб завантажити всі запити цього проекту в Excel.")
+            
+            # Отримуємо дані для експорту
+            try:
+                # Беремо лише текст запиту для простоти, або можна більше полів
+                export_resp = supabase.table("keywords").select("keyword_text, created_at, last_scan_date").eq("project_id", proj["id"]).execute()
+                if export_resp.data:
+                    df_export = pd.DataFrame(export_resp.data)
+                    # Rename for clarity
+                    df_export.rename(columns={"keyword_text": "Keyword", "created_at": "Date Added", "last_scan_date": "Last Scan"}, inplace=True)
+                    
+                    # Convert to Excel in memory
+                    buffer = io.BytesIO()
+                    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                        df_export.to_excel(writer, index=False, sheet_name='Keywords')
+                    
+                    st.download_button(
+                        label="📥 Завантажити Excel",
+                        data=buffer.getvalue(),
+                        file_name=f"keywords_{proj.get('brand_name')}.xlsx",
+                        mime="application/vnd.ms-excel",
+                        type="primary"
+                    )
+                else:
+                    st.warning("У проекті ще немає запитів для експорту.")
+            except Exception as e:
+                st.error(f"Помилка підготовки експорту: {e}")
 
     st.divider()
     
     # ========================================================
-    # 3. ОТРИМАННЯ ДАНИХ
+    # 3. ОТРИМАННЯ ДАНИХ (ДЛЯ ТАБЛИЦІ НИЖЧЕ)
     # ========================================================
     try:
         keywords = supabase.table("keywords").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute().data
@@ -2307,7 +2409,7 @@ def show_keywords_page():
         return
 
     # ========================================================
-    # 4. ПАНЕЛЬ УПРАВЛІННЯ
+    # 4. ПАНЕЛЬ УПРАВЛІННЯ (СОРТУВАННЯ)
     # ========================================================
     c_sort, _ = st.columns([2, 4])
     with c_sort:
@@ -2365,7 +2467,7 @@ def show_keywords_page():
                     st.warning("Оберіть хоча б один запит.")
 
     # ========================================================
-    # 5. СПИСОК ЗАПИТІВ (ОНОВЛЕНИЙ)
+    # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ)
     # ========================================================
     
     h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
