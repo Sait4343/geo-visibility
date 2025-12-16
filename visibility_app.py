@@ -235,9 +235,9 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    ВЕРСІЯ: FIX METRICS (CLEAN DATA).
-    1. Очищує official_assets (видаляє https://, www) для коректного підрахунку.
-    2. Зберігає логіку Trial (блокування повторів).
+    ВЕРСІЯ: RESTORED ORIGINAL PAYLOAD + TRIAL LIMIT.
+    1. Формат даних повернуто до робочого стану (без brand_name_lower, без чистки URL).
+    2. Працює блокування повторних запусків для Trial.
     """
     import requests
     import streamlit as st
@@ -265,7 +265,7 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         status = current_proj.get("status", "trial")
     
     if status == "blocked":
-        st.error("⛔ Проект заблоковано. Зверніться до адміністратора.")
+        st.error("⛔ Проект заблоковано (BLOCKED). Зверніться до адміністратора.")
         return False
 
     if not models:
@@ -282,23 +282,28 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 break
         
         if not is_only_gemini:
-            st.warning("🔒 У статусі TRIAL доступний аналіз лише через Google Gemini.")
+            st.error("⛔ У статусі TRIAL ручний запуск обмежено. Доступно лише через Google Gemini.")
             return False
 
+        # Перевірка на повторний запуск (чи є записи в scan_results)
         try:
-            # Перевірка на повторний запуск
             existing = supabase.table("scan_results")\
                 .select("id", count="exact")\
                 .eq("project_id", project_id)\
                 .limit(1)\
                 .execute()
             
+            # Якщо count > 0 -> вже сканували -> Блокуємо
             if existing.data or (existing.count and existing.count > 0):
                 st.error("⛔ Аналіз неможливий у статусі TRIAL (ліміт вичерпано). Будь ласка, зверніться в техпідтримку на пошту hi@virshi.ai, щоб отримати статус ACTIVE.")
                 return False
         except Exception as e:
+            # Не блокуємо при помилці запиту, щоб не ламати логіку, але виводимо в консоль
             print(f"Trial check error: {e}")
 
+    # ==========================================
+    # 🚀 ВІДПРАВКА (РОБОЧИЙ ВАРІАНТ)
+    # ==========================================
     try:
         user = st.session_state.get("user")
         user_email = user.email if user else "no-reply@virshi.ai"
@@ -308,45 +313,39 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         success_count = 0
 
-        # --- 3. ОТРИМАННЯ ТА ЧИСТКА WHITELIST (ВАЖЛИВО!) ---
-        clean_assets = []
+        # 3. ОТРИМУЄМО ОФІЦІЙНІ ДЖЕРЕЛА (Без змін, як у робочому варіанті)
+        official_assets = []
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
                 .eq("project_id", project_id)\
                 .execute()
-            
-            if assets_resp.data:
-                for item in assets_resp.data:
-                    raw_url = item.get("domain_or_url", "").lower().strip()
-                    # Видаляємо сміття, щоб n8n міг знайти цей домен у тексті
-                    clean = raw_url.replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
-                    if clean:
-                        clean_assets.append(clean)
+            # Беремо як є, без .lower() і без replace(), бо n8n очікує оригінал
+            official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
         except Exception as e:
             print(f"Error fetching assets: {e}")
-            clean_assets = []
+            official_assets = []
 
         headers = {"virshi-auth": "hi@virshi.ai2025"}
 
-        # 4. ВІДПРАВКА
+        # 4. ЦИКЛ ВІДПРАВКИ
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
+            # Формуємо JSON точнісінько як у вашому прикладі "working JSON"
             payload = {
                 "project_id": project_id,
                 "keywords": keywords, 
                 "brand_name": brand_name,
+                # "brand_name_lower" ПРИБРАНО - це ламало n8n
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
-                
-                # 🔥 ВІДПРАВЛЯЄМО ЧИСТІ ДОМЕНИ
-                "official_assets": clean_assets 
+                "official_assets": official_assets 
             }
             
             try:
-                # Переконайтеся, що змінна N8N_ANALYZE_URL доступна
+                # Переконайтеся, що змінна N8N_ANALYZE_URL доступна глобально
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
