@@ -235,56 +235,71 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    Оновлено:
-    1. Status='blocked' -> Заборонено повністю.
-    2. Status='trial' -> Дозволено ТІЛЬКИ якщо модель = Gemini (для онбордингу).
-    3. Status='active' -> Дозволено все.
+    ВЕРСІЯ: FIX METRICS (CLEAN DATA).
+    1. Очищує official_assets (видаляє https://, www) для коректного підрахунку.
+    2. Зберігає логіку Trial (блокування повторів).
     """
+    import requests
+    import streamlit as st
     
-    # 1. Мапінг назв (UI -> Technical)
+    # --- 1. ПІДКЛЮЧЕННЯ ДО БД ---
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
+    else:
+        st.error("🚨 Помилка: Немає підключення до БД.")
+        return False
+
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
         "Google Gemini": "gemini-1.5-pro"
     }
 
-    # 2. 🔒 ПЕРЕВІРКА СТАТУСУ (БЛОКУВАННЯ)
+    # 2. ОТРИМАННЯ СТАТУСУ
     current_proj = st.session_state.get("current_project")
     
-    if current_proj is None:
-        status = "trial" 
-    else:
+    status = "trial"
+    if current_proj and current_proj.get("id") == project_id:
         status = current_proj.get("status", "trial")
     
-    # Якщо статус заблокований
     if status == "blocked":
-        st.error(f"⛔ Дія недоступна. Ваш проект заблоковано (BLOCKED). Будь ласка, зв'яжіться з адміністратором.")
+        st.error("⛔ Проект заблоковано. Зверніться до адміністратора.")
         return False
 
-    # Перевірка вхідних моделей
     if not models:
         models = ["Perplexity"]
 
-    # 🔥 ЛОГІКА ТРІАЛУ (TRIAL)
+    # ==========================================
+    # 🔥 ЛОГІКА ТРІАЛУ (ЗАХИСТ)
+    # ==========================================
     if status == "trial":
-        # Перевіряємо, чи намагаються запустити щось крім Gemini
-        # (У нас "Google Gemini" мапиться на "gemini-1.5-pro")
-        
         is_only_gemini = True
         for m in models:
             if "Gemini" not in m and "gemini" not in m:
                 is_only_gemini = False
                 break
         
-        # Якщо це не чистий Gemini (тобто це ручний запуск з дашборду на GPT/Perplexity) - блокуємо
         if not is_only_gemini:
-            st.error("⛔ У статусі TRIAL ручний запуск аналізу обмежено. Будь ласка, активуйте підписку (ACTIVE) для повного доступу.")
+            st.warning("🔒 У статусі TRIAL доступний аналіз лише через Google Gemini.")
             return False
-        
-        # Якщо це Gemini - пропускаємо (це сценарій Onboarding Step 2)
+
+        try:
+            # Перевірка на повторний запуск
+            existing = supabase.table("scan_results")\
+                .select("id", count="exact")\
+                .eq("project_id", project_id)\
+                .limit(1)\
+                .execute()
+            
+            if existing.data or (existing.count and existing.count > 0):
+                st.error("⛔ Аналіз неможливий у статусі TRIAL (ліміт вичерпано). Будь ласка, зверніться в техпідтримку на пошту hi@virshi.ai, щоб отримати статус ACTIVE.")
+                return False
+        except Exception as e:
+            print(f"Trial check error: {e}")
 
     try:
-        # Отримуємо email безпечно
         user = st.session_state.get("user")
         user_email = user.email if user else "no-reply@virshi.ai"
         
@@ -293,23 +308,28 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         success_count = 0
 
-        # 3. ОТРИМУЄМО ОФІЦІЙНІ ДЖЕРЕЛА (WHITELIST)
+        # --- 3. ОТРИМАННЯ ТА ЧИСТКА WHITELIST (ВАЖЛИВО!) ---
+        clean_assets = []
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
                 .eq("project_id", project_id)\
                 .execute()
-            official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
+            
+            if assets_resp.data:
+                for item in assets_resp.data:
+                    raw_url = item.get("domain_or_url", "").lower().strip()
+                    # Видаляємо сміття, щоб n8n міг знайти цей домен у тексті
+                    clean = raw_url.replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
+                    if clean:
+                        clean_assets.append(clean)
         except Exception as e:
             print(f"Error fetching assets: {e}")
-            official_assets = []
+            clean_assets = []
 
-        # 🔥 HEADER AUTH
-        headers = {
-            "virshi-auth": "hi@virshi.ai2025"
-        }
+        headers = {"virshi-auth": "hi@virshi.ai2025"}
 
-        # 4. ЦИКЛ ВІДПРАВКИ
+        # 4. ВІДПРАВКА
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
@@ -320,15 +340,18 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
-                "official_assets": official_assets
+                
+                # 🔥 ВІДПРАВЛЯЄМО ЧИСТІ ДОМЕНИ
+                "official_assets": clean_assets 
             }
             
             try:
+                # Переконайтеся, що змінна N8N_ANALYZE_URL доступна
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
                     headers=headers, 
-                    timeout=10
+                    timeout=20
                 )
                 
                 if response.status_code == 200:
