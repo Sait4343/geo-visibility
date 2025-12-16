@@ -3420,9 +3420,10 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    ВЕРСІЯ: FIX PROJECT NAME & STATUS UPDATE.
-    1. Назва проекту береться з 'brand_name' (як у базі).
-    2. Оновлення статусу тепер коректно перезавантажує інтерфейс.
+    ВЕРСІЯ: FIX NAME DISPLAY (CLEAN BRAND NAME).
+    1. Назва проекту береться строго з 'brand_name'.
+    2. Очищаються зайві символи (зірочки), якщо вони потрапили в БД.
+    3. Оновлення статусу оновлює кеш.
     """
     import pandas as pd
     import streamlit as st
@@ -3457,30 +3458,26 @@ def show_admin_page():
     def update_project_field(proj_id, field, value):
         try:
             val = clean_data_for_json(value)
-            # Оновлюємо в базі
             supabase.table("projects").update({field: val}).eq("id", proj_id).execute()
             
-            # 🔥 FIX: Очищаємо кеш проектів у сесії, щоб сайдбар оновився
-            if "my_projects" in st.session_state:
-                del st.session_state["my_projects"]
-            if "all_projects_admin" in st.session_state:
-                del st.session_state["all_projects_admin"]
+            # Очищаємо кеш проектів
+            if "my_projects" in st.session_state: del st.session_state["my_projects"]
+            if "all_projects_admin" in st.session_state: del st.session_state["all_projects_admin"]
+            if "current_project" in st.session_state:
+                # Якщо оновили поточний проект, оновлюємо його в стейті
+                if st.session_state["current_project"]["id"] == proj_id:
+                    st.session_state["current_project"][field] = val
                 
-            st.success(f"Оновлено {field} -> {value}")
+            st.success(f"Оновлено: {value}")
             time.sleep(0.5)
+            st.rerun() # Перезавантаження для відображення змін
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
     # --- ЛОГІКА ВЕБХУКА ---
     def trigger_keyword_generation(brand, domain, industry, products):
-        payload = {
-            "brand": brand,
-            "domain": domain,
-            "industry": industry,
-            "products": products
-        }
+        payload = { "brand": brand, "domain": domain, "industry": industry, "products": products }
         headers = {"virshi-auth": "hi@virshi.ai2025"}
-        
         try:
             response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=25)
             if response.status_code == 200:
@@ -3492,8 +3489,7 @@ def show_admin_page():
                         return list(data.values()) if data else []
                     elif isinstance(data, list):
                         return data
-                    else:
-                        return []
+                    return []
                 except ValueError:
                     return []
             else:
@@ -3541,7 +3537,7 @@ def show_admin_page():
         
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Всього", total)
-        k2.metric("Active (Paid)", active)
+        k2.metric("Active", active)
         k3.metric("Trial", trial)
         k4.metric("Blocked", blocked)
 
@@ -3574,9 +3570,20 @@ def show_admin_page():
             u_id = p.get('user_id')
             owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            # 🔥 FIX: Пріоритет brand_name
-            p_name = p.get('brand_name') or p.get('project_name') or p.get('domain', 'Без назви')
+            # 🔥 ЛОГІКА НАЗВИ (ВИПРАВЛЕНО)
+            # 1. Беремо brand_name (пріоритет)
+            # 2. Якщо немає -> project_name
+            # 3. Якщо немає -> домен
+            raw_name = p.get('brand_name') or p.get('project_name')
             domain = p.get('domain', '')
+
+            if raw_name and str(raw_name).strip():
+                # Очищаємо від markdown символів, якщо вони там є
+                clean_name = str(raw_name).replace('*', '').strip()
+            else:
+                # Фолбек на домен (очищений)
+                clean_name = domain.replace('https://', '').replace('http://', '').replace('www.', '').split('/')[0]
+                if not clean_name: clean_name = "Без назви"
 
             with st.container():
                 c0, c1, c_dash, c2, c3, c4, c5 = st.columns([0.3, 2, 0.5, 1.5, 1.5, 1, 0.5])
@@ -3584,9 +3591,16 @@ def show_admin_page():
                 with c0: st.caption(f"{idx}")
 
                 with c1:
-                    st.markdown(f"**{p_name}**")
+                    # Жирним робимо ТУТ, використовуючи чисте ім'я
+                    st.markdown(f"**{clean_name}**")
                     st.caption(f"ID: `{p_id}`")
-                    st.caption(f"🌐 {domain}")
+                    
+                    # Посилання на сайт
+                    if domain.startswith("http"):
+                        st.markdown(f"[🌐 {domain}]({domain})", unsafe_allow_html=True)
+                    else:
+                        st.caption(f"🌐 {domain}")
+                        
                     st.caption(f"👤 {owner_info['full_name']} ({owner_info['role']})")
 
                 with c_dash:
@@ -3603,18 +3617,15 @@ def show_admin_page():
                     try: idx_s = opts.index(curr_status)
                     except: idx_s = 0
                     
-                    # Зміна статусу з колбеком
                     new_status = st.selectbox("St", opts, index=idx_s, key=f"st_{p_id}", label_visibility="collapsed")
                     if new_status != curr_status:
                         update_project_field(p_id, "status", new_status)
-                        st.rerun()
 
                 with c3:
                     allow_cron = p.get('allow_cron', False)
                     new_cron = st.checkbox("Дозволити", value=allow_cron, key=f"cr_{p_id}")
                     if new_cron != allow_cron:
                         update_project_field(p_id, "allow_cron", new_cron)
-                        st.rerun()
 
                 with c4:
                     raw_date = p.get('created_at', '')
@@ -3704,9 +3715,9 @@ def show_admin_page():
             
             if new_domain_val:
                 try:
-                    # 🔥 FIX: Записуємо в brand_name
+                    # 🔥 FIX: Запис у brand_name
                     new_proj_data = {
-                        "brand_name": final_name,  # Правильне поле
+                        "brand_name": final_name, # <-- ВАЖЛИВО
                         "domain": new_domain_val,
                         "status": new_status,
                         "allow_cron": new_cron
@@ -3716,6 +3727,16 @@ def show_admin_page():
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
                         
+                        # Також записуємо whitelist
+                        try:
+                            clean_d = new_domain_val.replace("https://", "").replace("http://", "").strip().rstrip("/")
+                            supabase.table("official_assets").insert({
+                                "project_id": new_proj_id, 
+                                "domain_or_url": clean_d, 
+                                "type": "website"
+                            }).execute()
+                        except: pass
+
                         final_kws_list = edited_df["keyword"].dropna().tolist()
                         final_kws_list = [str(k).strip() for k in final_kws_list if str(k).strip()]
                         
@@ -3731,7 +3752,6 @@ def show_admin_page():
                         
                         st.success(f"Проект '{final_name}' створено!")
                         st.session_state["new_proj_keywords"] = [] 
-                        # Очистка кешу
                         if "my_projects" in st.session_state: del st.session_state["my_projects"]
                         st.rerun()
                 except Exception as e:
