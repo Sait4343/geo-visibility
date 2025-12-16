@@ -3420,14 +3420,16 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    Версія 5.1 (Auth Added):
-    - Webhook trigger_keyword_generation тепер має авторизацію.
+    ВЕРСІЯ: FIX PROJECT NAME & STATUS UPDATE.
+    1. Назва проекту береться з 'brand_name' (як у базі).
+    2. Оновлення статусу тепер коректно перезавантажує інтерфейс.
     """
     import pandas as pd
     import streamlit as st
     import numpy as np
     import requests
     import json
+    import time
 
     # --- КОНСТАНТИ ---
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
@@ -3455,38 +3457,35 @@ def show_admin_page():
     def update_project_field(proj_id, field, value):
         try:
             val = clean_data_for_json(value)
+            # Оновлюємо в базі
             supabase.table("projects").update({field: val}).eq("id", proj_id).execute()
+            
+            # 🔥 FIX: Очищаємо кеш проектів у сесії, щоб сайдбар оновився
+            if "my_projects" in st.session_state:
+                del st.session_state["my_projects"]
+            if "all_projects_admin" in st.session_state:
+                del st.session_state["all_projects_admin"]
+                
+            st.success(f"Оновлено {field} -> {value}")
+            time.sleep(0.5)
         except Exception as e:
             st.error(f"Помилка оновлення: {e}")
 
-    # --- ЛОГІКА ВЕБХУКА З АВТОРИЗАЦІЄЮ ---
+    # --- ЛОГІКА ВЕБХУКА ---
     def trigger_keyword_generation(brand, domain, industry, products):
-        """Відправляє повний набір даних на n8n з Auth"""
         payload = {
             "brand": brand,
             "domain": domain,
             "industry": industry,
             "products": products
         }
-        
-        # 🔥 HEADER AUTH
-        headers = {
-            "virshi-auth": "hi@virshi.ai2025"
-        }
+        headers = {"virshi-auth": "hi@virshi.ai2025"}
         
         try:
-            # Додано headers=headers
-            response = requests.post(
-                N8N_GEN_URL, 
-                json=payload, 
-                headers=headers, 
-                timeout=25
-            )
-            
+            response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=25)
             if response.status_code == 200:
                 try:
                     data = response.json()
-                    # Обробка різних варіантів відповіді n8n
                     if isinstance(data, dict):
                         if "prompts" in data: return data["prompts"]
                         if "keywords" in data: return data["keywords"]
@@ -3494,19 +3493,16 @@ def show_admin_page():
                     elif isinstance(data, list):
                         return data
                     else:
-                        st.warning(f"Нестандартна відповідь: {data}")
                         return []
                 except ValueError:
-                    st.error("N8N повернув не JSON.")
                     return []
             else:
-                st.error(f"Помилка вебхука: {response.status_code}")
+                st.error(f"Error: {response.status_code}")
                 return []
         except Exception as e:
-            st.error(f"Помилка з'єднання: {e}")
+            st.error(f"Connection error: {e}")
             return []
 
-    # Ініціалізація стану для нових запитів
     if "new_proj_keywords" not in st.session_state:
         st.session_state["new_proj_keywords"] = []
 
@@ -3578,12 +3574,9 @@ def show_admin_page():
             u_id = p.get('user_id')
             owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            raw_name = p.get('project_name')
+            # 🔥 FIX: Пріоритет brand_name
+            p_name = p.get('brand_name') or p.get('project_name') or p.get('domain', 'Без назви')
             domain = p.get('domain', '')
-            if not raw_name or raw_name.strip() == "" or raw_name == "No Name":
-                p_name = domain.split('.')[0].capitalize() if domain else "Без назви"
-            else:
-                p_name = raw_name
 
             with st.container():
                 c0, c1, c_dash, c2, c3, c4, c5 = st.columns([0.3, 2, 0.5, 1.5, 1.5, 1, 0.5])
@@ -3597,7 +3590,7 @@ def show_admin_page():
                     st.caption(f"👤 {owner_info['full_name']} ({owner_info['role']})")
 
                 with c_dash:
-                    if st.button("↗️", key=f"goto_{p_id}", help=f"Перейти до дашборду '{p_name}'"):
+                    if st.button("↗️", key=f"goto_{p_id}", help=f"Перейти до дашборду"):
                         st.session_state["current_project"] = p
                         st.session_state["focus_keyword_id"] = None
                         if "selected_page" in st.session_state:
@@ -3610,6 +3603,7 @@ def show_admin_page():
                     try: idx_s = opts.index(curr_status)
                     except: idx_s = 0
                     
+                    # Зміна статусу з колбеком
                     new_status = st.selectbox("St", opts, index=idx_s, key=f"st_{p_id}", label_visibility="collapsed")
                     if new_status != curr_status:
                         update_project_field(p_id, "status", new_status)
@@ -3640,7 +3634,6 @@ def show_admin_page():
                             else:
                                 try:
                                     supabase.table("projects").delete().eq("id", p_id).execute()
-                                    if u_id: supabase.table("profiles").delete().eq("id", u_id).execute()
                                     st.success("Видалено!")
                                     st.rerun()
                                 except Exception as e:
@@ -3651,7 +3644,7 @@ def show_admin_page():
                 st.divider()
 
     # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ (REAL WEBHOOK)
+    # TAB 2: СТВОРИТИ ПРОЕКТ
     # ========================================================
     with tab_create:
         st.markdown("##### Створення нового проекту")
@@ -3686,7 +3679,6 @@ def show_admin_page():
 
         st.divider()
         st.markdown("###### 📝 Редагування запитів перед створенням")
-        st.caption("Ви можете редагувати текст, видаляти рядки (Del) та додавати нові (кнопка + знизу).")
 
         df_initial = pd.DataFrame(st.session_state["new_proj_keywords"])
         if df_initial.empty:
@@ -3696,16 +3688,10 @@ def show_admin_page():
             df_initial,
             num_rows="dynamic",
             column_config={
-                "keyword": st.column_config.TextColumn(
-                    "Список запитів",
-                    width="large",
-                    required=True,
-                    help="Введіть запит тут"
-                )
+                "keyword": st.column_config.TextColumn("Список запитів", width="large", required=True)
             },
             use_container_width=True,
-            key="editor_new_kws",
-            hide_index=False
+            key="editor_new_kws"
         )
 
         st.write("")
@@ -3718,8 +3704,9 @@ def show_admin_page():
             
             if new_domain_val:
                 try:
+                    # 🔥 FIX: Записуємо в brand_name
                     new_proj_data = {
-                        "project_name": final_name,
+                        "brand_name": final_name,  # Правильне поле
                         "domain": new_domain_val,
                         "status": new_status,
                         "allow_cron": new_cron
@@ -3742,8 +3729,10 @@ def show_admin_page():
                             ]
                             supabase.table("keywords").insert(kws_data).execute()
                         
-                        st.success(f"Проект '{final_name}' створено! Додано {len(final_kws_list)} запитів.")
+                        st.success(f"Проект '{final_name}' створено!")
                         st.session_state["new_proj_keywords"] = [] 
+                        # Очистка кешу
+                        if "my_projects" in st.session_state: del st.session_state["my_projects"]
                         st.rerun()
                 except Exception as e:
                     st.error(f"Помилка створення: {e}")
