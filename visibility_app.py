@@ -1149,7 +1149,8 @@ def show_competitors_page():
 def show_recommendations_page():
     """
     Сторінка рекомендацій.
-    ВЕРСІЯ: 4 CATEGORIES (DIGITAL, CONTENT, PR, SMM) + HISTORY REDIRECT.
+    ВЕРСІЯ: TABLE FIX -> 'strategy_reports'.
+    Використовує нову таблицю strategy_reports замість ai_reports.
     """
     import streamlit as st
     import pandas as pd
@@ -1169,35 +1170,35 @@ def show_recommendations_page():
     user = st.session_state.get("user")
     
     if not proj:
-        st.info("Спочатку оберіть проект у меню зліва.")
+        st.info("Спочатку оберіть проект.")
         return
 
     st.title(f"💡 Центр рекомендацій: {proj.get('brand_name')}")
 
-    # --- 2. НОВІ КАТЕГОРІЇ ТА ЦІННІСТЬ ---
+    # --- 2. КАТЕГОРІЇ ---
     CATEGORIES = {
         "Digital": {
             "title": "💻 Digital & Technical GEO",
             "desc": "Технічна оптимізація екосистеми бренду для алгоритмів AI.",
-            "value": "LLM (ChatGPT, Gemini) — це комп'ютерні програми. Якщо ваш сайт повільний, має складну структуру або закритий від сканування, AI його просто проігнорує. Ми проаналізуємо технічний стан, Schema.org розмітку та доступність даних.",
+            "value": "LLM (ChatGPT, Gemini) — це програми. Якщо сайт технічно складний для них, вони його ігнорують. Ми аналізуємо код, розмітку Schema.org та доступність для ботів.",
             "prompt_context": "Analyze technical SEO, Schema markup, site structure, and data accessibility for LLM crawling. Focus on Technical GEO factors."
         },
         "Content": {
             "title": "📝 Content Strategy",
             "desc": "Створення контенту, який AI захоче цитувати.",
-            "value": "AI надає перевагу фактам, чітким відповідям та структурованим даним. Ми надамо стратегію: про що писати, які питання закривати та як форматувати тексти, щоб стати 'джерелом істини' (Source of Truth) для нейромереж.",
+            "value": "AI любить факти і структуру. Ми дамо план: які статті писати і як їх оформлювати, щоб стати 'джерелом істини' для нейромереж.",
             "prompt_context": "Generate content strategy optimized for Generative Search. Focus on answer structure, NLP-friendly formats, and topical authority."
         },
         "PR": {
             "title": "📢 PR & Brand Authority",
             "desc": "Побудова авторитету через зовнішні джерела.",
-            "value": "AI довіряє брендам, про які пишуть авторитетні медіа (Wikipedia, новинні портали, профільні видання). Ми визначимо, де саме вам потрібно з'явитися, щоб алгоритми почали вважати вас лідером ніші.",
+            "value": "AI довіряє тому, про що пишуть авторитетні медіа. Ми визначимо, де вам треба з'явитися (Wiki, ЗМІ), щоб алгоритми вважали вас лідером.",
             "prompt_context": "Analyze brand authority signals, mentions in tier-1 media, and external trust factors influencing LLM perception."
         },
         "Social": {
             "title": "📱 Social Media & UGC",
-            "desc": "Вплив соціальних сигналів та відгуків на видачу.",
-            "value": "Сучасні моделі (особливо Google Gemini та Perplexity) індексують Reddit, LinkedIn, YouTube та X (Twitter) у реальному часі. Ми покажемо, як керувати дискусією в соцмережах, щоб AI підхоплював позитивний контекст.",
+            "desc": "Вплив соціальних сигналів на видачу.",
+            "value": "Gemini та Perplexity читають Reddit, LinkedIn та X у реальному часі. Ми покажемо, як керувати дискусією там, щоб AI бачив позитив.",
             "prompt_context": "Analyze social signals, User Generated Content (Reddit, LinkedIn, Reviews), and their impact on real-time AI answers."
         }
     }
@@ -1220,8 +1221,6 @@ def show_recommendations_page():
                 with st.container(border=True):
                     st.subheader(info["title"])
                     st.markdown(f"**Що це:** {info['desc']}")
-                    
-                    # Гарний блок цінності
                     st.info(f"💎 **Навіщо це вам:**\n\n{info['value']}")
                     
                     st.write("") 
@@ -1230,43 +1229,40 @@ def show_recommendations_page():
                     if st.button(f"✨ Згенерувати стратегію ({cat_key})", key=f"btn_rec_{cat_key}", type="primary", use_container_width=True):
                         
                         if proj.get('status') == 'blocked':
-                            st.error("Проект заблоковано. Зверніться до адміністратора.")
+                            st.error("Проект заблоковано.")
                         else:
                             with st.spinner("Аналізуємо дані та формуємо звіт... Це займе близько хвилини."):
                                 if 'trigger_ai_recommendation' in globals():
-                                    # 1. Відправка на вебхук
+                                    # 1. Вебхук
                                     html_res = trigger_ai_recommendation(
                                         user=user,
                                         project=proj,
-                                        category=info["title"], # Передаємо повну назву
+                                        category=info["title"],
                                         context_text=info["prompt_context"]
                                     )
                                     
-                                    # 2. Збереження в базу
+                                    # 2. Збереження (НОВА ТАБЛИЦЯ)
                                     try:
-                                        supabase.table("ai_reports").insert({
+                                        # Використовуємо strategy_reports замість ai_reports
+                                        supabase.table("strategy_reports").insert({
                                             "project_id": proj["id"],
-                                            "category": cat_key, # Короткий ключ для фільтрів
+                                            "category": cat_key,
                                             "html_content": html_res,
                                             "created_at": datetime.now().isoformat()
                                         }).execute()
                                         
-                                        # 3. Успіх і перенаправлення (візуальне)
                                         st.success("✅ Рекомендації успішно сформовано!")
                                         st.markdown(f"""
                                             <div style="padding:15px; border:1px solid #00C896; border-radius:5px; background-color:#f0fff4;">
-                                                <p>Ваш звіт збережено. Перейдіть у вкладку <b>"Історія рекомендацій"</b>, щоб переглянути або завантажити його.</p>
+                                                <p>Ваш звіт збережено. Перейдіть у вкладку <b>"Історія рекомендацій"</b>, щоб переглянути його.</p>
                                             </div>
                                         """, unsafe_allow_html=True)
                                         
                                     except Exception as e:
-                                        if "ai_reports" in str(e):
-                                            st.error("⚠️ Критична помилка: Таблиця бази даних не знайдена. Адміністратор має оновити структуру БД.")
-                                        else:
-                                            st.error(f"Помилка збереження: {e}")
-                                            # Якщо не збереглося, показуємо тут як резервний варіант
-                                            with st.expander("Резервний перегляд (не збережено)", expanded=True):
-                                                components.html(html_res, height=600, scrolling=True)
+                                        st.error(f"Помилка збереження в БД: {e}")
+                                        # Резервний показ, якщо база знову підведе
+                                        with st.expander("Резервний перегляд", expanded=True):
+                                            components.html(html_res, height=600, scrolling=True)
                                 else:
                                     st.error("Функція trigger_ai_recommendation не знайдена.")
 
@@ -1276,14 +1272,13 @@ def show_recommendations_page():
     with history_tab:
         c_h1, c_h2 = st.columns(2)
         with c_h1:
-            # Фільтр по наших ключах
             sel_cat_hist = st.multiselect("Фільтр по категорії", list(CATEGORIES.keys()), default=[])
         with c_h2:
             sel_date_hist = st.date_input("Фільтр по даті", value=None)
 
         try:
-            # Завантаження історії
-            query = supabase.table("ai_reports").select("*").eq("project_id", proj["id"]).order("created_at", desc=True)
+            # Читаємо з нової таблиці strategy_reports
+            query = supabase.table("strategy_reports").select("*").eq("project_id", proj["id"]).order("created_at", desc=True)
             hist_resp = query.execute()
             reports = hist_resp.data if hist_resp.data else []
             
@@ -1301,15 +1296,11 @@ def show_recommendations_page():
                     st.info("За обраними критеріями звітів не знайдено.")
                 else:
                     for _, row in df_rep.iterrows():
-                        # Визначаємо красиву назву
                         cat_nice = CATEGORIES.get(row['category'], {}).get('title', row['category'])
-                        try:
-                            date_str = row['created_at'][:16].replace('T', ' ')
-                        except:
-                            date_str = "-"
+                        try: date_str = row['created_at'][:16].replace('T', ' ')
+                        except: date_str = "-"
 
                         with st.expander(f"📑 {cat_nice} | {date_str}"):
-                            # Кнопки дій
                             c_dl, c_del = st.columns([4, 1])
                             with c_dl:
                                 st.download_button(
@@ -1321,17 +1312,19 @@ def show_recommendations_page():
                                 )
                             with c_del:
                                 if st.button("🗑️", key=f"del_rep_{row['id']}"):
-                                    supabase.table("ai_reports").delete().eq("id", row['id']).execute()
+                                    # Видаляємо з нової таблиці
+                                    supabase.table("strategy_reports").delete().eq("id", row['id']).execute()
                                     st.rerun()
                             
                             st.divider()
-                            # Попередній перегляд
                             components.html(row['html_content'], height=500, scrolling=True)
             else:
-                st.info("Історія рекомендацій порожня. Згенеруйте першу стратегію у сусідній вкладці.")
+                st.info("Історія рекомендацій порожня. Згенеруйте першу стратегію.")
                 
         except Exception as e:
-            st.warning("Неможливо завантажити історію. Перевірте з'єднання з базою даних.")
+            st.warning(f"Неможливо завантажити історію: {e}")
+
+
 
 def show_faq_page():
     """
