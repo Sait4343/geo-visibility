@@ -3331,12 +3331,13 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: FIX PANDAS MERGE ERROR.
-    Виправлено конфлікт імен колонок при злитті таблиць.
+    ВЕРСІЯ: FIX TIMEZONE ERROR & MERGE ERROR.
+    1. Виправлено порівняння дат (UTC vs Naive).
+    2. Виправлено конфлікт імен колонок при злитті.
     """
     import pandas as pd
     import streamlit as st
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone # <--- Додано timezone
 
     # --- 1. ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
@@ -3395,56 +3396,47 @@ def show_history_page():
             st.error(f"Помилка завантаження даних: {e}")
             return
 
-    # --- 3. ОБРОБКА ДАНИХ (БЕЗПЕЧНЕ ЗЛИТТЯ) ---
+    # --- 3. ОБРОБКА ДАНИХ ---
     df_scans = pd.DataFrame(scans_data)
     
-    # 3.1. Базова підготовка
+    # Підготовка
     df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Видалений запит")
+    # Перетворення в datetime (автоматично стає UTC-aware, якщо рядок містить +00:00)
     df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
     
-    # 3.2. Агрегація Mentions
+    # Агрегація Mentions
     if not mentions_df.empty:
-        # Групуємо
         brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
         my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
         
-        # Злиття 1 (Brands Count)
         df_scans = pd.merge(df_scans, brands_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
-        # Видаляємо дубльовану колонку ID злиття, щоб не заважала далі
-        if 'scan_result_id' in df_scans.columns:
-            df_scans = df_scans.drop(columns=['scan_result_id'])
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
             
-        # Злиття 2 (My Mentions)
         df_scans = pd.merge(df_scans, my_mentions, left_on='id', right_on='scan_result_id', how='left').fillna(0)
-        if 'scan_result_id' in df_scans.columns:
-            df_scans = df_scans.drop(columns=['scan_result_id'])
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
         df_scans['total_brands'] = 0
         df_scans['my_mentions_count'] = 0
 
-    # 3.3. Агрегація Sources
+    # Агрегація Sources
     if not sources_df.empty:
         links_count = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
         official_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
         
-        # Злиття 3 (Total Links)
         df_scans = pd.merge(df_scans, links_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
-        if 'scan_result_id' in df_scans.columns:
-            df_scans = df_scans.drop(columns=['scan_result_id'])
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
             
-        # Злиття 4 (Official Links)
-        # 🔥 FIX: Тут виникала помилка. Додаємо suffixes на всяк випадок.
+        # Використовуємо suffixes, щоб уникнути MergeError
         df_scans = pd.merge(
             df_scans, 
             official_count, 
             left_on='id', 
             right_on='scan_result_id', 
             how='left',
-            suffixes=('', '_dup') 
+            suffixes=('', '_dup')
         ).fillna(0)
         
-        if 'scan_result_id' in df_scans.columns:
-            df_scans = df_scans.drop(columns=['scan_result_id'])
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
         df_scans['total_links'] = 0
         df_scans['official_links'] = 0
@@ -3476,7 +3468,9 @@ def show_history_page():
     # Фільтрація
     mask = df_scans['provider'].isin(sel_providers)
     
-    now = datetime.now()
+    # 🔥 FIX: Використовуємо timezone-aware datetime для порівняння
+    now = datetime.now(timezone.utc)
+    
     if sel_date == "Сьогодні":
         mask &= (df_scans['created_at_dt'].dt.date == now.date())
     elif sel_date == "Останні 7 днів":
@@ -3504,16 +3498,18 @@ def show_history_page():
     st.divider()
     st.markdown(f"**Знайдено записів:** {len(df_final)}")
     
-    # Вибираємо тільки потрібні колонки
+    # Вибір колонок, які існують (захист від помилок, якщо даних мало)
     cols_to_show = [
         'created_at_dt', 'keyword', 'provider', 
         'total_brands', 'total_links', 'my_mentions_count', 'official_links'
     ]
-    # Перевірка наявності колонок (щоб не впало, якщо даних мало)
     cols_to_show = [c for c in cols_to_show if c in df_final.columns]
     
     df_display = df_final[cols_to_show].copy()
-    df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
+    
+    # Форматування дати
+    if 'created_at_dt' in df_display.columns:
+        df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
 
     st.dataframe(
         df_display,
