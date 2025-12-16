@@ -3331,20 +3331,20 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: FIX DB CONNECTION.
-    Виправлено помилку підключення до бази даних (перевірка globals і session_state).
+    ВЕРСІЯ: FIX PANDAS MERGE ERROR.
+    Виправлено конфлікт імен колонок при злитті таблиць.
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime, timedelta
 
-    # --- 1. ПІДКЛЮЧЕННЯ (FIXED) ---
+    # --- 1. ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
     elif 'supabase' in globals():
         supabase = globals()['supabase']
     else:
-        st.error("🚨 Помилка: Змінна 'supabase' не знайдена. Перевірте підключення до бази.")
+        st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
         return
 
     proj = st.session_state.get("current_project")
@@ -3357,12 +3357,11 @@ def show_history_page():
     # --- 2. ОТРИМАННЯ ДАНИХ ---
     with st.spinner("Завантаження історії..."):
         try:
-            # 1. Keywords Mapping (ID -> Text)
+            # 1. Keywords
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-            # 2. Scan Results (Base)
-            # Беремо останні 500 сканувань
+            # 2. Scans
             scans_resp = supabase.table("scan_results")\
                 .select("id, created_at, provider, keyword_id")\
                 .eq("project_id", proj["id"])\
@@ -3378,15 +3377,14 @@ def show_history_page():
 
             scan_ids = [s['id'] for s in scans_data]
 
-            # 3. Aggregations (Mentions & Sources)
-            # Mentions
+            # 3. Mentions
             m_resp = supabase.table("brand_mentions")\
                 .select("scan_result_id, is_my_brand, mention_count")\
                 .in_("scan_result_id", scan_ids)\
                 .execute()
             mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
 
-            # Sources
+            # 4. Sources
             s_resp = supabase.table("extracted_sources")\
                 .select("scan_result_id, is_official")\
                 .in_("scan_result_id", scan_ids)\
@@ -3397,33 +3395,56 @@ def show_history_page():
             st.error(f"Помилка завантаження даних: {e}")
             return
 
-    # --- 3. ОБРОБКА ДАНИХ ---
+    # --- 3. ОБРОБКА ДАНИХ (БЕЗПЕЧНЕ ЗЛИТТЯ) ---
     df_scans = pd.DataFrame(scans_data)
     
-    # Додаємо текст запиту
+    # 3.1. Базова підготовка
     df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Видалений запит")
-    
-    # Форматуємо дату
     df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
     
-    # Агрегація Mentions
+    # 3.2. Агрегація Mentions
     if not mentions_df.empty:
+        # Групуємо
         brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
         my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
         
+        # Злиття 1 (Brands Count)
         df_scans = pd.merge(df_scans, brands_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        # Видаляємо дубльовану колонку ID злиття, щоб не заважала далі
+        if 'scan_result_id' in df_scans.columns:
+            df_scans = df_scans.drop(columns=['scan_result_id'])
+            
+        # Злиття 2 (My Mentions)
         df_scans = pd.merge(df_scans, my_mentions, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        if 'scan_result_id' in df_scans.columns:
+            df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
         df_scans['total_brands'] = 0
         df_scans['my_mentions_count'] = 0
 
-    # Агрегація Sources
+    # 3.3. Агрегація Sources
     if not sources_df.empty:
         links_count = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
         official_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
         
+        # Злиття 3 (Total Links)
         df_scans = pd.merge(df_scans, links_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
-        df_scans = pd.merge(df_scans, official_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        if 'scan_result_id' in df_scans.columns:
+            df_scans = df_scans.drop(columns=['scan_result_id'])
+            
+        # Злиття 4 (Official Links)
+        # 🔥 FIX: Тут виникала помилка. Додаємо suffixes на всяк випадок.
+        df_scans = pd.merge(
+            df_scans, 
+            official_count, 
+            left_on='id', 
+            right_on='scan_result_id', 
+            how='left',
+            suffixes=('', '_dup') 
+        ).fillna(0)
+        
+        if 'scan_result_id' in df_scans.columns:
+            df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
         df_scans['total_links'] = 0
         df_scans['official_links'] = 0
@@ -3483,11 +3504,15 @@ def show_history_page():
     st.divider()
     st.markdown(f"**Знайдено записів:** {len(df_final)}")
     
-    df_display = df_final[[
+    # Вибираємо тільки потрібні колонки
+    cols_to_show = [
         'created_at_dt', 'keyword', 'provider', 
         'total_brands', 'total_links', 'my_mentions_count', 'official_links'
-    ]].copy()
+    ]
+    # Перевірка наявності колонок (щоб не впало, якщо даних мало)
+    cols_to_show = [c for c in cols_to_show if c in df_final.columns]
     
+    df_display = df_final[cols_to_show].copy()
     df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
 
     st.dataframe(
@@ -3498,10 +3523,10 @@ def show_history_page():
             "created_at_dt": "Дата та Час",
             "keyword": st.column_config.TextColumn("Запит", width="medium"),
             "provider": "LLM",
-            "total_brands": st.column_config.NumberColumn("Всього брендів", help="Скільки унікальних брендів знайшов AI"),
-            "total_links": st.column_config.NumberColumn("Всього посилань", help="Загальна кількість посилань у відповіді"),
-            "my_mentions_count": st.column_config.NumberColumn("Згадок нас", help="Кількість згадок вашого цільового бренду"),
-            "official_links": st.column_config.NumberColumn("Офіц. джерела", help="Кількість знайдених посилань з вашого Whitelist")
+            "total_brands": st.column_config.NumberColumn("Всього брендів", help="Унікальних брендів"),
+            "total_links": st.column_config.NumberColumn("Всього посилань", help="Всього знайдено"),
+            "my_mentions_count": st.column_config.NumberColumn("Згадок нас", help="Наш бренд"),
+            "official_links": st.column_config.NumberColumn("Офіц. джерела", help="Whitelist")
         }
     )
 
