@@ -1149,7 +1149,9 @@ def show_competitors_page():
 def show_recommendations_page():
     """
     Сторінка рекомендацій.
-    ВЕРСІЯ: SAFE DELETE + FILE NAMES + WAIT MESSAGE.
+    ВЕРСІЯ: RENAMED FILES & BUTTONS.
+    File prefix: "Recommendations_"
+    Button label: "Завантажити Рекомендації"
     """
     import streamlit as st
     import pandas as pd
@@ -1214,7 +1216,6 @@ def show_recommendations_page():
         st.markdown("Оберіть напрямок, щоб отримати стратегію **Generative Engine Optimization**.")
         
         cat_names = list(CATEGORIES.keys())
-        # Відображаємо красиві заголовки у табах
         cat_tabs = st.tabs([CATEGORIES[c]["title"] for c in cat_names])
 
         for idx, cat_key in enumerate(cat_names):
@@ -1226,7 +1227,7 @@ def show_recommendations_page():
                     st.info(f"💎 **Навіщо це вам:**\n\n{info['value']}")
                     st.write("") 
                     
-                    # Кнопка генерації (Перейменована)
+                    # Кнопка генерації
                     btn_label = f"✨ Отримати рекомендації ({info['title']})"
                     
                     if st.button(btn_label, key=f"btn_rec_{cat_key}", type="primary", use_container_width=True):
@@ -1234,8 +1235,7 @@ def show_recommendations_page():
                         if proj.get('status') == 'blocked':
                             st.error("Проект заблоковано.")
                         else:
-                            # Повідомлення про очікування
-                            st.warning("⏳ Розпочато формування стратегії. Будь ласка, не закривайте сторінку і дочекайтеся завершення (це може зайняти до 60 секунд).")
+                            st.warning("⏳ Розпочато формування рекомендацій. Будь ласка, не закривайте сторінку і дочекайтеся завершення (це може зайняти до 60 секунд).")
                             
                             with st.spinner("Аналіз даних та генерація звіту..."):
                                 if 'trigger_ai_recommendation' in globals():
@@ -1259,21 +1259,20 @@ def show_recommendations_page():
                                         
                                     except Exception as e:
                                         st.error(f"Помилка збереження в БД: {e}")
-                                        # Резервний показ
                                         with st.expander("Резервний перегляд", expanded=True):
                                             components.html(html_res, height=600, scrolling=True)
-                                            # Кнопка скачування з назвою проекту
+                                            # Кнопка скачування (Резервна)
                                             st.download_button(
-                                                "📥 Завантажити HTML", 
+                                                "📥 Завантажити Рекомендації", 
                                                 html_res, 
-                                                file_name=f"Strategy_{cat_key}_{safe_brand_name}.html", 
+                                                file_name=f"Recommendations_{cat_key}_{safe_brand_name}.html", 
                                                 mime="text/html"
                                             )
                                 else:
                                     st.error("Функція trigger_ai_recommendation не знайдена.")
 
     # ========================================================
-    # TAB 2: ІСТОРІЯ (З БЕЗПЕЧНИМ ВИДАЛЕННЯМ)
+    # TAB 2: ІСТОРІЯ
     # ========================================================
     with history_tab:
         c_h1, c_h2 = st.columns(2)
@@ -1312,36 +1311,36 @@ def show_recommendations_page():
                         cat_nice = CATEGORIES.get(row['category'], {}).get('title', row['category'])
                         try: date_str = row['created_at'][:16].replace('T', ' ')
                         except: date_str = "-"
-                        # Чиста дата для назви файлу (без пробілів)
+                        
+                        # Формуємо красиву дату для файлу (наприклад: 2023-10-25_14-30)
                         date_file = date_str.replace(" ", "_").replace(":", "-")
 
                         with st.expander(f"📑 {cat_nice} | {date_str}"):
                             c_dl, c_del = st.columns([4, 1])
                             
                             with c_dl:
-                                # Формуємо назву файлу з Брендом
-                                file_n = f"Strategy_{row['category']}_{safe_brand_name}_{date_file}.html"
+                                # 🔥 Нова назва файлу: Recommendations_Category_Brand_Date.html
+                                file_n = f"Recommendations_{row['category']}_{safe_brand_name}_{date_file}.html"
+                                
+                                # 🔥 Нова назва кнопки (без .html)
                                 st.download_button(
-                                    "📥 Завантажити звіт (.html)", 
-                                    row['html_content'], 
+                                    label="📥 Завантажити Рекомендації", 
+                                    data=row['html_content'], 
                                     file_name=file_n, 
                                     mime="text/html",
                                     key=f"dl_hist_{row['id']}"
                                 )
                             
                             with c_del:
-                                # --- ЛОГІКА БЕЗПЕЧНОГО ВИДАЛЕННЯ ---
                                 del_key = f"confirm_del_{row['id']}"
                                 if del_key not in st.session_state:
                                     st.session_state[del_key] = False
 
                                 if not st.session_state[del_key]:
-                                    # Перший клік - активує режим підтвердження
                                     if st.button("🗑️", key=f"pre_del_{row['id']}", help="Видалити звіт"):
                                         st.session_state[del_key] = True
                                         st.rerun()
                                 else:
-                                    # Другий крок - Так/Ні
                                     col_yes, col_no = st.columns(2)
                                     if col_yes.button("✅", key=f"yes_{row['id']}"):
                                         supabase.table("strategy_reports").delete().eq("id", row['id']).execute()
@@ -1358,7 +1357,6 @@ def show_recommendations_page():
                 
         except Exception as e:
             st.warning(f"Неможливо завантажити історію: {e}")
-
 
 def show_faq_page():
     """
