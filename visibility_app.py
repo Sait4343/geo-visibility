@@ -235,20 +235,18 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    ВЕРСІЯ: STRICT TRIAL LIMIT + DATA FIX.
-    1. Перевіряє, чи було вже сканування в БД. Якщо так і статус Trial -> БЛОК.
-    2. Передає покращений payload для n8n.
+    ВЕРСІЯ: FIXED DB CONNECTION + STRICT TRIAL.
     """
     import requests
     import streamlit as st
     
-    # 1. ПІДКЛЮЧЕННЯ ДО БД
+    # --- 1. ВИПРАВЛЕНЕ ПІДКЛЮЧЕННЯ ДО БД ---
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
-    elif 'globals' in globals() and 'supabase' in globals():
+    elif 'supabase' in globals():
         supabase = globals()['supabase']
     else:
-        st.error("🚨 Помилка підключення до БД.")
+        st.error("🚨 Помилка підключення до БД (змінна supabase не знайдена).")
         return False
 
     MODEL_MAPPING = {
@@ -260,12 +258,11 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     # 2. ОТРИМАННЯ СТАТУСУ
     current_proj = st.session_state.get("current_project")
     
-    # Якщо проект тільки створюється, об'єкта може не бути, вважаємо trial
     status = "trial"
     if current_proj and current_proj.get("id") == project_id:
         status = current_proj.get("status", "trial")
     
-    # Якщо заблоковано
+    # Якщо статус заблокований
     if status == "blocked":
         st.error("⛔ Проект заблоковано. Зверніться до адміністратора.")
         return False
@@ -305,7 +302,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 
         except Exception as e:
             print(f"Check error: {e}")
-            # Якщо помилка перевірки, краще пропустити (або заблокувати, залежить від ризику)
 
     try:
         # User Email
@@ -317,15 +313,16 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         success_count = 0
 
-        # 3. ОТРИМАННЯ WHITELIST (Для підрахунку в n8n)
+        # 3. ОТРИМАННЯ WHITELIST
         official_assets = []
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
                 .eq("project_id", project_id)\
                 .execute()
-            # Перетворюємо в чистий список рядків
+            
             if assets_resp.data:
+                # Чистимо дані (lower, strip)
                 official_assets = [item["domain_or_url"].strip().lower() for item in assets_resp.data]
         except Exception as e:
             print(f"Assets error: {e}")
@@ -344,15 +341,19 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
-                "official_assets": official_assets # Список доменів
+                "official_assets": official_assets 
             }
             
             try:
+                # Переконайтеся, що N8N_ANALYZE_URL визначено глобально у вашому файлі
+                # Якщо ні - розкоментуйте рядок нижче і вставте URL:
+                # N8N_ANALYZE_URL = "https://..." 
+                
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
                     headers=headers, 
-                    timeout=20 # Трохи збільшив таймаут
+                    timeout=20
                 )
                 
                 if response.status_code == 200:
