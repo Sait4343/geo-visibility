@@ -3331,18 +3331,20 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: ADVANCED METRICS & FILTERS.
-    Відображає детальну таблицю з агрегованими даними по кожному скануванню.
+    ВЕРСІЯ: FIX DB CONNECTION.
+    Виправлено помилку підключення до бази даних (перевірка globals і session_state).
     """
     import pandas as pd
     import streamlit as st
     from datetime import datetime, timedelta
 
-    # --- ПІДКЛЮЧЕННЯ ---
+    # --- 1. ПІДКЛЮЧЕННЯ (FIXED) ---
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
     else:
-        st.error("🚨 DB Connection Error")
+        st.error("🚨 Помилка: Змінна 'supabase' не знайдена. Перевірте підключення до бази.")
         return
 
     proj = st.session_state.get("current_project")
@@ -3352,15 +3354,15 @@ def show_history_page():
 
     st.title("📜 Історія сканувань")
 
-    # --- 1. ОТРИМАННЯ ДАНИХ (ОПТИМІЗОВАНО) ---
+    # --- 2. ОТРИМАННЯ ДАНИХ ---
     with st.spinner("Завантаження історії..."):
         try:
-            # 1.1. Keywords Mapping (ID -> Text)
+            # 1. Keywords Mapping (ID -> Text)
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-            # 1.2. Scan Results (Base)
-            # Беремо останні 500 сканувань, щоб не перевантажити
+            # 2. Scan Results (Base)
+            # Беремо останні 500 сканувань
             scans_resp = supabase.table("scan_results")\
                 .select("id, created_at, provider, keyword_id")\
                 .eq("project_id", proj["id"])\
@@ -3376,17 +3378,15 @@ def show_history_page():
 
             scan_ids = [s['id'] for s in scans_data]
 
-            # 1.3. Aggregations (Mentions & Sources)
-            # Замість N запитів, робимо 2 великих запити і агрегуємо в Pandas
-            
-            # Mentions: Count Brands & My Mentions
+            # 3. Aggregations (Mentions & Sources)
+            # Mentions
             m_resp = supabase.table("brand_mentions")\
                 .select("scan_result_id, is_my_brand, mention_count")\
                 .in_("scan_result_id", scan_ids)\
                 .execute()
             mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
 
-            # Sources: Count Total Links & Official Links
+            # Sources
             s_resp = supabase.table("extracted_sources")\
                 .select("scan_result_id, is_official")\
                 .in_("scan_result_id", scan_ids)\
@@ -3394,10 +3394,10 @@ def show_history_page():
             sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
 
         except Exception as e:
-            st.error(f"Помилка завантаження: {e}")
+            st.error(f"Помилка завантаження даних: {e}")
             return
 
-    # --- 2. ОБРОБКА ДАНИХ (PANDAS) ---
+    # --- 3. ОБРОБКА ДАНИХ ---
     df_scans = pd.DataFrame(scans_data)
     
     # Додаємо текст запиту
@@ -3406,12 +3406,9 @@ def show_history_page():
     # Форматуємо дату
     df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
     
-    # --- Агрегація Mentions ---
+    # Агрегація Mentions
     if not mentions_df.empty:
-        # Всього брендів (кількість рядків на скан)
         brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
-        
-        # Згадки нашого бренду (сума mention_count для is_my_brand=True)
         my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
         
         df_scans = pd.merge(df_scans, brands_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
@@ -3420,12 +3417,9 @@ def show_history_page():
         df_scans['total_brands'] = 0
         df_scans['my_mentions_count'] = 0
 
-    # --- Агрегація Sources ---
+    # Агрегація Sources
     if not sources_df.empty:
-        # Всього посилань
         links_count = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
-        
-        # Офіційні джерела
         official_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
         
         df_scans = pd.merge(df_scans, links_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
@@ -3434,23 +3428,20 @@ def show_history_page():
         df_scans['total_links'] = 0
         df_scans['official_links'] = 0
 
-    # --- 3. ФІЛЬТРИ ТА СОРТУВАННЯ ---
+    # --- 4. ФІЛЬТРИ ТА СОРТУВАННЯ ---
     st.markdown("### 🔍 Фільтрація")
     
     c1, c2, c3 = st.columns([1, 1, 1.5])
     
     with c1:
-        # Filter: LLM
         all_providers = df_scans['provider'].unique().tolist()
         sel_providers = st.multiselect("Модель (LLM)", all_providers, default=all_providers)
     
     with c2:
-        # Filter: Date
         date_options = ["Весь час", "Сьогодні", "Останні 7 днів", "Останні 30 днів"]
         sel_date = st.selectbox("Період", date_options)
         
     with c3:
-        # Sort: 6 Options
         sort_opts = [
             "Найновіші спочатку", 
             "Найстаріші спочатку", 
@@ -3461,7 +3452,7 @@ def show_history_page():
         ]
         sel_sort = st.selectbox("Сортування", sort_opts)
 
-    # Застосування фільтрів
+    # Фільтрація
     mask = df_scans['provider'].isin(sel_providers)
     
     now = datetime.now()
@@ -3474,7 +3465,7 @@ def show_history_page():
         
     df_final = df_scans[mask].copy()
 
-    # Застосування сортування
+    # Сортування
     if sel_sort == "Найновіші спочатку":
         df_final = df_final.sort_values('created_at_dt', ascending=False)
     elif sel_sort == "Найстаріші спочатку":
@@ -3488,17 +3479,15 @@ def show_history_page():
     elif sel_sort == "Найбільше знайдених брендів":
         df_final = df_final.sort_values('total_brands', ascending=False)
 
-    # --- 4. ВІДОБРАЖЕННЯ ТАБЛИЦІ ---
+    # --- 5. ВІДОБРАЖЕННЯ ---
     st.divider()
     st.markdown(f"**Знайдено записів:** {len(df_final)}")
     
-    # Підготовка фінальної таблиці для відображення
     df_display = df_final[[
         'created_at_dt', 'keyword', 'provider', 
         'total_brands', 'total_links', 'my_mentions_count', 'official_links'
     ]].copy()
     
-    # Форматування дати для краси
     df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
 
     st.dataframe(
