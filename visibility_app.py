@@ -3542,40 +3542,56 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: ADDED NEW PAGES (HISTORY, REPORTS, FAQ).
+    ВЕРСІЯ: FIXED & FULL (Menu, User Profile, Support, Navigation).
     """
     from streamlit_option_menu import option_menu
+    import streamlit as st
     
-    # Отримуємо поточний проект для відображення вгорі
+    # Отримуємо дані з сесії
     proj = st.session_state.get("current_project")
+    user = st.session_state.get("user")
+    
+    # Дані для відображення
+    user_email = user.email if user else "Користувач"
     proj_name = proj.get("brand_name", "No Project") if proj else "Оберіть проект"
     proj_id = proj.get("id", "") if proj else ""
 
     with st.sidebar:
-        # Логотип (замініть посилання на ваше, якщо треба)
-        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=180)
+        # 1. Логотип
+        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=160)
         
-        # Вибір проекту (якщо реалізовано список) або просто відображення
-        # Тут можна додати selectbox для перемикання проектів, якщо у юзера їх кілька
-        # Для спрощення поки просто показуємо поточний:
+        st.divider()
+
+        # 2. Профіль користувача (Відновлено)
+        with st.container():
+            c1, c2 = st.columns([0.2, 0.8])
+            with c1:
+                st.markdown("👤") # Або іконка аватара
+            with c2:
+                st.caption("Ви увійшли як:")
+                st.markdown(f"**{user_email}**")
+        
+        st.write("") # Відступ
+
+        # 3. Вибір проекту
         with st.expander(f"📁 {proj_name}", expanded=False):
             st.caption(f"ID: {proj_id}")
-            if st.button("Змінити проект / Вийти"):
+            if st.button("🔄 Змінити проект"):
                 st.session_state["current_project"] = None
                 st.rerun()
 
-        st.write("") # Відступ
+        st.write("") 
 
-        # Список сторінок
+        # 4. Навігаційне меню
         options = [
             "Дашборд", 
             "Перелік запитів", 
             "Джерела", 
             "Конкуренти", 
             "Рекомендації", 
-            "Історія сканувань", # NEW
-            "Звіти",             # NEW
-            "FAQ",               # NEW
+            "Історія сканувань", 
+            "Звіти",             
+            "FAQ",               
             "GPT-Visibility"
         ]
         
@@ -3585,13 +3601,13 @@ def sidebar_menu():
             "router", 
             "people", 
             "lightbulb", 
-            "clock-history", # Icon for History
-            "file-earmark-text", # Icon for Reports
-            "question-circle",   # Icon for FAQ
+            "clock-history", 
+            "file-earmark-text", 
+            "question-circle",   
             "robot"
         ]
 
-        # Якщо адмін - додаємо адмінку
+        # Додаємо Адмінку тільки для адмінів
         if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
@@ -3610,24 +3626,35 @@ def sidebar_menu():
             }
         )
         
-        # Статус проекту знизу
+        st.divider()
+
+        # 5. Сапорт (Відновлено)
+        st.caption("Потрібна допомога?")
+        st.markdown("📧 **hi@virshi.ai**")
+
+        # 6. Статус та Вихід
         if proj:
-            st.write("")
             st.write("")
             status = proj.get("status", "trial").upper()
             color = "orange" if status == "TRIAL" else "green" if status == "ACTIVE" else "red"
             st.markdown(f"Статус: **:{color}[{status}]**")
             
-            # Якщо адмін зайшов під юзером
             if st.session_state.get("is_impersonating"):
                 st.info("🕵️ Admin Mode")
 
-        # Кнопка виходу в самому низу
         st.write("")
-        if st.button("Вийти з акаунту", use_container_width=True):
-            logout()
+        if st.button("🚪 Вийти з акаунту", use_container_width=True):
+            # Тут викликаємо вашу функцію logout
+            if 'logout' in globals():
+                logout()
+            else:
+                # Fallback, якщо функція logout не знайдена
+                st.session_state.clear()
+                st.rerun()
 
     return selected
+
+
 
 def show_auth_page():
     """
