@@ -2470,7 +2470,14 @@ def show_keyword_details(kw_id):
                             )
                             fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
-                            st.plotly_chart(fig_src, use_container_width=True, config={'displayModeBar': False})
+                            
+                            # 🔥 ВИПРАВЛЕННЯ ТУТ: Додано параметр key
+                            st.plotly_chart(
+                                fig_src, 
+                                use_container_width=True, 
+                                config={'displayModeBar': False},
+                                key=f"sources_chart_{selected_scan_id}"  # <--- Унікальний ключ
+                            )
 
 # --- ПРАВА КОЛОНКА: ТАБЛИЦЯ ---
                         with c_src_table:
