@@ -2496,9 +2496,9 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FIX DUPLICATE KEY ERROR.
-    1. Виправлено DuplicateElementKey (додано idx до ключів чекбоксів).
-    2. Синхронізація дозволів автосканування.
+    ВЕРСІЯ: ADDED BULK AUTO-SCAN TAB.
+    1. Додано вкладку "Автозапуск" для масового налаштування.
+    2. Збережено всю попередню логіку.
     """
     import pandas as pd
     import streamlit as st
@@ -2616,7 +2616,8 @@ def show_keywords_page():
     # ========================================================
     with st.expander("✏️ Редагування запитів", expanded=False): 
         
-        tab_manual, tab_import, tab_export = st.tabs(["✍️ Ввести вручну", "📥 Імпорт (Excel / URL)", "📤 Експорт (Excel)"])
+        # 🔥 UPDATE: Додано вкладку "Автозапуск"
+        tab_manual, tab_import, tab_export, tab_auto = st.tabs(["✍️ Ввести вручну", "📥 Імпорт (Excel / URL)", "📤 Експорт (Excel)", "⚙️ Автозапуск"])
 
         # --- TAB 1: ВРУЧНУ ---
         with tab_manual:
@@ -2636,44 +2637,44 @@ def show_keywords_page():
                             st.session_state["kw_input_count"] -= 1
                             st.rerun()
 
-                st.divider()
-                c_models, c_submit = st.columns([3, 1])
-                with c_models:
-                    selected_models_manual = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="manual_multiselect")
-                
-                with c_submit:
-                    st.write("")
-                    st.write("")
-                    if st.button("🚀 Додати", use_container_width=True, type="primary", key="btn_add_manual"):
-                        new_keywords_list = []
-                        for i in range(st.session_state["kw_input_count"]):
-                            val = st.session_state.get(f"new_kw_input_{i}", "").strip()
-                            if val: new_keywords_list.append(val)
-                        
-                        if new_keywords_list:
-                            try:
-                                insert_data = [{
-                                    "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
-                                    "is_auto_scan": False, "frequency": "daily"
-                                } for kw in new_keywords_list]
-                                
-                                res = supabase.table("keywords").insert(insert_data).execute()
-                                if res.data:
-                                    with st.spinner(f"Зберігаємо та запускаємо аналіз..."):
-                                        if 'n8n_trigger_analysis' in globals():
-                                            for new_kw in new_keywords_list:
-                                                n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models_manual)
-                                                time.sleep(0.5) 
+            st.divider()
+            c_models, c_submit = st.columns([3, 1])
+            with c_models:
+                selected_models_manual = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="manual_multiselect")
+            
+            with c_submit:
+                st.write("")
+                st.write("")
+                if st.button("🚀 Додати", use_container_width=True, type="primary", key="btn_add_manual"):
+                    new_keywords_list = []
+                    for i in range(st.session_state["kw_input_count"]):
+                        val = st.session_state.get(f"new_kw_input_{i}", "").strip()
+                        if val: new_keywords_list.append(val)
+                    
+                    if new_keywords_list:
+                        try:
+                            insert_data = [{
+                                "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                "is_auto_scan": False, "frequency": "daily"
+                            } for kw in new_keywords_list]
+                            
+                            res = supabase.table("keywords").insert(insert_data).execute()
+                            if res.data:
+                                with st.spinner(f"Зберігаємо та запускаємо аналіз..."):
+                                    if 'n8n_trigger_analysis' in globals():
+                                        for new_kw in new_keywords_list:
+                                            n8n_trigger_analysis(proj["id"], [new_kw], proj.get("brand_name"), models=selected_models_manual)
+                                            time.sleep(0.5) 
                                     st.success(f"Додано {len(new_keywords_list)} запитів!")
                                     st.session_state["kw_input_count"] = 1
                                     for key in list(st.session_state.keys()):
                                         if key.startswith("new_kw_input_"): del st.session_state[key]
                                     time.sleep(1)
                                     st.rerun()
-                            except Exception as e:
-                                st.error(f"Помилка: {e}")
-                        else:
-                            st.warning("Введіть хоча б один запит.")
+                        except Exception as e:
+                            st.error(f"Помилка: {e}")
+                    else:
+                        st.warning("Введіть хоча б один запит.")
 
         # --- TAB 2: ІМПОРТ EXCEL / URL ---
         with tab_import:
@@ -2777,9 +2778,9 @@ def show_keywords_page():
                                                 n8n_trigger_analysis(proj["id"], [kw], proj.get("brand_name"), models=selected_models_import)
                                                 my_bar.progress((i + 1) / total)
                                                 time.sleep(0.3)
-                                    st.success("Успішно збережено та запущено!")
-                                    time.sleep(2)
-                                    st.rerun()
+                                        st.success("Успішно збережено та запущено!")
+                                        time.sleep(2)
+                                        st.rerun()
                             except Exception as e:
                                 st.error(f"Помилка процесу: {e}")
 
@@ -2822,6 +2823,48 @@ def show_keywords_page():
                     st.warning("У проекті ще немає запитів для експорту.")
             except Exception as e:
                 st.error(f"Помилка підготовки експорту: {e}")
+
+        # --- TAB 4: АВТОЗАПУСК (МАСОВЕ НАЛАШТУВАННЯ) ---
+        with tab_auto:
+            st.markdown("##### ⚙️ Масове налаштування автозапуску")
+            
+            allow_cron_global = proj.get('allow_cron', False)
+            if not allow_cron_global:
+                st.error("🔒 Автозапуск недоступний для цього проекту. Зверніться до адміністратора.")
+            else:
+                st.info("Тут ви можете увімкнути автосканування та встановити частоту для **всіх** ваших запитів одночасно.")
+
+                c_freq, c_btn = st.columns([2, 1.5])
+                
+                with c_freq:
+                    freq_map = {"Щодня": "daily", "Щотижня": "weekly", "Щомісяця": "monthly"}
+                    selected_freq_ui = st.selectbox("Оберіть частоту для всіх запитів:", list(freq_map.keys()))
+                    selected_freq_db = freq_map[selected_freq_ui]
+
+                with c_btn:
+                    st.write("") # spacer
+                    st.write("")
+                    if st.button("✅ Застосувати для всіх", type="primary", use_container_width=True):
+                        try:
+                            # Масове оновлення в Supabase
+                            supabase.table("keywords").update({
+                                "is_auto_scan": True,
+                                "frequency": selected_freq_db
+                            }).eq("project_id", proj["id"]).execute()
+                            
+                            st.success(f"Налаштування оновлено! Всі запити будуть скануватися: {selected_freq_ui}")
+                            time.sleep(1.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Помилка оновлення: {e}")
+                
+                st.markdown("---")
+                st.markdown("""
+                **ℹ️ Як це працює:**
+                1. **Синхронізація:** Натискання кнопки вище автоматично увімкне автозапуск (`ON`) і встановить обрану частоту для кожного запиту в таблиці нижче.
+                2. **Індивідуальність:** Після масового налаштування ви все ще можете вручну змінити частоту або вимкнути автозапуск для окремих запитів у списку нижче.
+                3. **Пріоритет:** Якщо ви знову скористаєтеся цією вкладкою, всі індивідуальні зміни будуть перезаписані новими загальними налаштуваннями.
+                """)
 
     st.divider()
     
@@ -2991,7 +3034,6 @@ def show_keywords_page():
                     if dc2.button("❌", key=f"no_del_{k['id']}_{idx}"):
                         st.session_state[del_key] = False
                         st.rerun()
-
 
 
 
