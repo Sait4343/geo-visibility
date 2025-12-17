@@ -2417,7 +2417,7 @@ def show_keyword_details(kw_id):
                         )
                         fig_brands.update_traces(textposition='inside', textinfo='percent+label', hovertemplate='<b>%{label}</b><br>Згадок: %{value}')
                         fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
-                       st.plotly_chart(
+                        st.plotly_chart(
                             fig_brands, 
                             use_container_width=True, 
                             config={'displayModeBar': False},
