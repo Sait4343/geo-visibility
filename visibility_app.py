@@ -2006,7 +2006,7 @@ def show_keyword_details(kw_id):
                     st.session_state[edit_key] = False
                     st.rerun()
 
-        # ПРАВА: ЗАПУСК
+       # ПРАВА: ЗАПУСК (Вставляти всередину with st.expander)
         with c2:
             selected_models_to_run = st.multiselect(
                 "Оберіть моделі для сканування:", 
@@ -2036,15 +2036,16 @@ def show_keyword_details(kw_id):
                             )
                             st.success("Задачу відправлено! Оновлення даних...")
                             time.sleep(2)
+                            # 🔥 ТУТ БУЛА ПОМИЛКА: Тепер відступи правильні
                             st.session_state[confirm_run_key] = False
                             st.rerun()
                         else:
                             st.error("Функція запуску не знайдена.")
+                
                 with c_conf2:
                     if st.button("❌ Скасувати", key="cancel_run_btn"):
                         st.session_state[confirm_run_key] = False
                         st.rerun()
-
     # 2. ОТРИМАННЯ ДАНИХ
     try:
         scans_resp = supabase.table("scan_results")\
@@ -2053,63 +2054,7 @@ def show_keyword_details(kw_id):
             .order("created_at", desc=False)\
             .execute()
         
-        scans_data = scans_resp.data if scans_resp.data else []
-        df_scans = pd.DataFrame(scans_data)
-        
-        if not df_scans.empty:
-            df_scans.rename(columns={'id': 'scan_id'}, inplace=True)
-            
-            # --- TIMEZONE FIX (Kyiv) ---
-            df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
-            if df_scans['created_at'].dt.tz is None:
-                df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
-            try:
-                df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
-                df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
-            except:
-                df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
-            
-            # 🔥 Нормалізація назви провайдера (GPT-4o -> OpenAI GPT)
-            df_scans['provider_ui'] = df_scans['provider'].apply(get_ui_model_name)
-        else:
-            df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
-
-        # B. Mentions
-        if not df_scans.empty:
-            scan_ids = df_scans['scan_id'].tolist()
-            if scan_ids:
-                mentions_resp = supabase.table("brand_mentions")\
-                    .select("*")\
-                    .in_("scan_result_id", scan_ids)\
-                    .execute()
-                mentions_data = mentions_resp.data if mentions_resp.data else []
-                df_mentions = pd.DataFrame(mentions_data)
-            else:
-                df_mentions = pd.DataFrame()
-        else:
-            df_mentions = pd.DataFrame()
-
-        # SMART MERGE (Дублікати)
-        if not df_mentions.empty and target_brand_name:
-            df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
-            target_norm = target_brand_name.lower().split(' ')[0]
-            mask_match = df_mentions['brand_clean'].str.contains(target_norm, na=False)
-            df_mentions['is_real_target'] = mask_match | (df_mentions['is_my_brand'] == True)
-        elif not df_mentions.empty:
-            df_mentions['is_real_target'] = df_mentions['is_my_brand']
-
-        # C. Merge
-        if not df_mentions.empty:
-            df_full = pd.merge(df_scans, df_mentions, left_on='scan_id', right_on='scan_result_id', how='left')
-        else:
-            df_full = df_scans.copy()
-            df_full['mention_count'] = 0
-            df_full['is_real_target'] = False
-            df_full['scan_result_id'] = df_full['scan_id'] if not df_full.empty else None
-            df_full['sentiment_score'] = None
-            df_full['rank_position'] = None
-            df_full['brand_name'] = None
-
+       
     except Exception as e:
         st.error(f"Помилка обробки даних: {e}")
         return
