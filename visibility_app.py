@@ -1893,10 +1893,9 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL FIXED (OPENAI TAB FIX).
-    1. Fix OpenAI Tab: Фільтрація тепер йде по 'provider_ui', а не по точному 'provider'.
-       Це вирішує проблему, якщо в базі записано 'gpt-4o', а скрипт шукав щось інше.
-    2. Всі попередні фікси (метрики, видалення, таймзона) збережені.
+    ВЕРСІЯ: FINAL FIXED (INDENTATION FIX).
+    1. Виправлено відступи (IndentationError) у блоці 'Джерела'.
+    2. Збережено всі попередні фікси (метрики, ключі графіків, таймзони).
     """
     import pandas as pd
     import plotly.express as px
@@ -1918,7 +1917,6 @@ def show_keyword_details(kw_id):
         supabase = globals()['supabase']
 
     # --- MAPPING ---
-    # Ключі тут — це назви вкладок (UI)
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
@@ -1938,14 +1936,14 @@ def show_keyword_details(kw_id):
         if "gpt" in lower or "openai" in lower: return "OpenAI GPT"
         if "gemini" in lower or "google" in lower: return "Google Gemini"
         
-        return db_name # Якщо не знайшли, повертаємо як є
+        return db_name 
 
     def tooltip(text):
         return f'<span title="{text}" style="cursor:help; font-size:14px; color:#333; margin-left:4px;">ℹ️</span>'
 
     def normalize_url(u):
         u = str(u).strip()
-        u = re.split(r'[)\]]', u)[0] # Очистка від Markdown
+        u = re.split(r'[)\]]', u)[0] 
         if not u.startswith(('http://', 'https://')): return f"https://{u}"
         return u
 
@@ -2037,6 +2035,23 @@ def show_keyword_details(kw_id):
                             )
                             st.success("Задачу відправлено! Оновлення даних...")
                             time.sleep(2)
+                            st.session_state[confirm_run_key] = False
+                            st.rerun()
+                        else:
+                            st.error("Функція запуску не знайдена.")
+                with c_conf2:
+                    if st.button("❌ Скасувати", key="cancel_run_btn"):
+                        st.session_state[confirm_run_key] = False
+                        st.rerun()
+
+    # 2. ОТРИМАННЯ ДАНИХ (SCANS)
+    try:
+        scans_resp = supabase.table("scan_results")\
+            .select("id, created_at, provider, raw_response")\
+            .eq("keyword_id", kw_id)\
+            .order("created_at", desc=False)\
+            .execute()
+        
         scans_data = scans_resp.data if scans_resp.data else []
         df_scans = pd.DataFrame(scans_data)
         
@@ -2047,10 +2062,13 @@ def show_keyword_details(kw_id):
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
             if df_scans['created_at'].dt.tz is None:
                 df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
-            df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
-            df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
+            try:
+                df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
+                df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
+            except:
+                df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
             
-            # 🔥 Нормалізація назви провайдера (GPT-4o -> OpenAI GPT)
+            # 🔥 Нормалізація назви провайдера
             df_scans['provider_ui'] = df_scans['provider'].apply(get_ui_model_name)
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
@@ -2070,7 +2088,7 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # SMART MERGE (Дублікати)
+        # SMART MERGE
         if not df_mentions.empty and target_brand_name:
             df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
             target_norm = target_brand_name.lower().split(' ')[0]
@@ -2279,7 +2297,6 @@ def show_keyword_details(kw_id):
     
     for tab, ui_model_name in zip(tabs, ALL_MODELS_UI):
         with tab:
-            # 🔥 FIX: Фільтрація по 'provider_ui' (нормалізоване ім'я)
             if not df_scans.empty:
                 model_scans = df_scans[df_scans['provider_ui'] == ui_model_name].sort_values('created_at', ascending=False)
             else:
@@ -2343,7 +2360,6 @@ def show_keyword_details(kw_id):
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
                 
-                # 🔥 FIX: Фільтруємо ВСІ рядки, що підходять під "Мій Бренд"
                 my_brand_rows = current_scan_mentions[current_scan_mentions['is_real_target'] == True]
 
                 if not my_brand_rows.empty:
@@ -2418,7 +2434,10 @@ def show_keyword_details(kw_id):
                         )
                         fig_brands.update_traces(textposition='inside', textinfo='percent+label', hovertemplate='<b>%{label}</b><br>Згадок: %{value}')
                         fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
+                        
+                        # ✅ FIX: Унікальний KEY для графіка брендів
                         st.plotly_chart(fig_brands, use_container_width=True, config={'displayModeBar': False}, key=f"brand_pie_{ui_model_name}_{selected_scan_id}")
+                    
                     with c_table:
                         st.dataframe(
                             scan_mentions_plot[['brand_name', 'mention_count', 'rank_position', 'sentiment_score']],
@@ -2437,7 +2456,7 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-         # --- ДЖЕРЕЛА (ВИПРАВЛЕНО ВІДСТУПИ ТА KEY) ---
+            # --- ДЖЕРЕЛА (ВИПРАВЛЕНО ВІДСТУПИ ТА KEY) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
