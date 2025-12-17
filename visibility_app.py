@@ -2472,14 +2472,15 @@ def show_keyword_details(kw_id):
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
                             st.plotly_chart(fig_src, use_container_width=True, config={'displayModeBar': False})
 
+# --- ПРАВА КОЛОНКА: ТАБЛИЦЯ ---
                         with c_src_table:
                             st.dataframe(
-                                df_grouped_src[['url', 'status_text', 'count']], 
-                                use_container_width=True, 
-                                hide_index=True,
+                                # 🔥 ЗМІНА: Прибрано 'status_text' зі списку колонок
+                                df_grouped_src[['url', 'count']],
+                                use_container_width=True, hide_index=True,
                                 column_config={
                                     "url": st.column_config.LinkColumn("Посилання", width="large", validate="^https?://"),
-                                    "status_text": st.column_config.TextColumn("Тип", width="small"),
+                                    # 🔥 ЗМІНА: Видалено конфігурацію для "status_text" (Тип)
                                     "count": st.column_config.NumberColumn("К-сть", width="small")
                                 }
                             )
