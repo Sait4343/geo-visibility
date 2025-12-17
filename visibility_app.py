@@ -2439,63 +2439,62 @@ def show_keyword_details(kw_id):
             # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
-                sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
-                sources_data = sources_resp.data
-                if sources_data:
-                    df_src = pd.DataFrame(sources_data)
-                    
-                    if 'url' in df_src.columns:
-                        if 'domain' not in df_src.columns:
-                            df_src['domain'] = df_src['url'].apply(lambda x: str(x).split('/')[2] if x and '//' in str(x) else 'unknown')
-                        
-                        df_src['url'] = df_src['url'].apply(normalize_url)
-                        
-                        if 'is_official' in df_src.columns:
-                            df_src['status_text'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
-                        else:
-                            df_src['status_text'] = "🔗 Зовнішнє"
+        sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
+        sources_data = sources_resp.data
+        if sources_data:
+            df_src = pd.DataFrame(sources_data)
+            
+            # Нормалізація URL
+            df_src['url'] = df_src['url'].apply(normalize_url)
+            
+            # Визначення статусу (Офіційне/Зовнішнє)
+            if 'is_official' in df_src.columns:
+                df_src['status_text'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
+            else:
+                df_src['status_text'] = "🔗 Зовнішнє"
 
-                        # ГРУПУВАННЯ
-                        df_grouped_src = df_src.groupby(['url', 'domain', 'status_text'], as_index=False).size()
-                        df_grouped_src = df_grouped_src.rename(columns={'size': 'count'})
-                        df_grouped_src = df_grouped_src.sort_values(by='count', ascending=False)
+            # ГРУПУВАННЯ (URL + Domain + Status)
+            df_grouped_src = df_src.groupby(['url', 'domain', 'status_text'], as_index=False).size()
+            df_grouped_src = df_grouped_src.rename(columns={'size': 'count'})
+            df_grouped_src = df_grouped_src.sort_values(by='count', ascending=False)
 
-                        c_src_chart, c_src_table = st.columns([1.3, 2], vertical_alignment="center")
-                        
-with c_src_chart:
-                            domain_counts = df_grouped_src.groupby('domain')['count'].sum().reset_index()
-                            fig_src = px.pie(
-                                domain_counts.head(10), values='count', names='domain', hole=0.5,
-                                labels={'domain': 'Домен', 'count': 'Кількість'}
-                            )
-                            fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
-                            fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
-                            
-                            # 👇 ВИПРАВЛЕНО: Додано унікальний ключ
-                            st.plotly_chart(
-                                fig_src, 
-                                use_container_width=True, 
-                                config={'displayModeBar': False}, 
-                                key=f"src_pie_{ui_model_name}_{selected_scan_id}"
-                            )
+            # Розмітка колонок
+            c_src_chart, c_src_table = st.columns([1.3, 2], vertical_alignment="center")
+            
+            # --- ЛІВА КОЛОНКА: ГРАФІК ---
+            with c_src_chart:
+                domain_counts = df_grouped_src.groupby('domain')['count'].sum().reset_index()
+                fig_src = px.pie(
+                    domain_counts.head(10), values='count', names='domain', hole=0.5,
+                    labels={'domain': 'Домен', 'count': 'Кількість'}
+                )
+                fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
+                fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
+                
+                # 🔥 ТУТ БУЛА ПОМИЛКА: Додано унікальний ключ (key)
+                st.plotly_chart(
+                    fig_src, 
+                    use_container_width=True, 
+                    config={'displayModeBar': False}, 
+                    key=f"pie_sources_{ui_model_name}_{selected_scan_id}"
+                )
 
-                        with c_src_table:
-                            st.dataframe(
-                                df_grouped_src[['url', 'status_text', 'count']], 
-                                use_container_width=True, 
-                                hide_index=True,
-                                column_config={
-                                    "url": st.column_config.LinkColumn("Посилання", width="large", validate="^https?://"),
-                                    "status_text": st.column_config.TextColumn("Тип", width="small"),
-                                    "count": st.column_config.NumberColumn("К-сть", width="small")
-                                }
-                            )
-                    else:
-                        st.info("URL не знайдено.")
-                else:
-                    st.info("ℹ️ Джерел не знайдено.")
-            except Exception as e:
-                st.error(f"Помилка завантаження джерел: {e}")
+            # --- ПРАВА КОЛОНКА: ТАБЛИЦЯ ---
+            with c_src_table:
+                st.dataframe(
+                    df_grouped_src[['url', 'status_text', 'count']],
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "url": st.column_config.LinkColumn("Посилання", width="large", validate="^https?://"),
+                        "status_text": st.column_config.TextColumn("Тип", width="small"),
+                        "count": st.column_config.NumberColumn("К-сть", width="small")
+                    }
+                )
+        else:
+            st.info("ℹ️ Джерел не знайдено.")
+            
+    except Exception as e:
+        st.error(f"Помилка завантаження джерел: {e}")
 
 
 
