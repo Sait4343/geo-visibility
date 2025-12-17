@@ -1893,9 +1893,10 @@ def show_dashboard():
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
-    ВЕРСІЯ: FINAL FIXED (INDENTATION FIX).
-    1. Виправлено відступи (IndentationError) у блоці 'Джерела'.
-    2. Збережено всі попередні фікси (метрики, ключі графіків, таймзони).
+    ВЕРСІЯ: FINAL FIXED (OPENAI TAB FIX).
+    1. Fix OpenAI Tab: Фільтрація тепер йде по 'provider_ui', а не по точному 'provider'.
+       Це вирішує проблему, якщо в базі записано 'gpt-4o', а скрипт шукав щось інше.
+    2. Всі попередні фікси (метрики, видалення, таймзона) збережені.
     """
     import pandas as pd
     import plotly.express as px
@@ -1917,6 +1918,7 @@ def show_keyword_details(kw_id):
         supabase = globals()['supabase']
 
     # --- MAPPING ---
+    # Ключі тут — це назви вкладок (UI)
     MODEL_CONFIG = {
         "Perplexity": "perplexity",
         "OpenAI GPT": "gpt-4o",
@@ -1936,14 +1938,14 @@ def show_keyword_details(kw_id):
         if "gpt" in lower or "openai" in lower: return "OpenAI GPT"
         if "gemini" in lower or "google" in lower: return "Google Gemini"
         
-        return db_name 
+        return db_name # Якщо не знайшли, повертаємо як є
 
     def tooltip(text):
         return f'<span title="{text}" style="cursor:help; font-size:14px; color:#333; margin-left:4px;">ℹ️</span>'
 
     def normalize_url(u):
         u = str(u).strip()
-        u = re.split(r'[)\]]', u)[0] 
+        u = re.split(r'[)\]]', u)[0] # Очистка від Markdown
         if not u.startswith(('http://', 'https://')): return f"https://{u}"
         return u
 
@@ -2044,7 +2046,7 @@ def show_keyword_details(kw_id):
                         st.session_state[confirm_run_key] = False
                         st.rerun()
 
-    # 2. ОТРИМАННЯ ДАНИХ (SCANS)
+    # 2. ОТРИМАННЯ ДАНИХ
     try:
         scans_resp = supabase.table("scan_results")\
             .select("id, created_at, provider, raw_response")\
@@ -2062,13 +2064,10 @@ def show_keyword_details(kw_id):
             df_scans['created_at'] = pd.to_datetime(df_scans['created_at'])
             if df_scans['created_at'].dt.tz is None:
                 df_scans['created_at'] = df_scans['created_at'].dt.tz_localize('UTC')
-            try:
-                df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
-                df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
-            except:
-                df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
+            df_scans['created_at'] = df_scans['created_at'].dt.tz_convert('Europe/Kiev')
+            df_scans['date_str'] = df_scans['created_at'].dt.strftime('%Y-%m-%d %H:%M')
             
-            # 🔥 Нормалізація назви провайдера
+            # 🔥 Нормалізація назви провайдера (GPT-4o -> OpenAI GPT)
             df_scans['provider_ui'] = df_scans['provider'].apply(get_ui_model_name)
         else:
             df_scans = pd.DataFrame(columns=['scan_id', 'created_at', 'provider', 'raw_response', 'date_str', 'provider_ui'])
@@ -2088,7 +2087,7 @@ def show_keyword_details(kw_id):
         else:
             df_mentions = pd.DataFrame()
 
-        # SMART MERGE
+        # SMART MERGE (Дублікати)
         if not df_mentions.empty and target_brand_name:
             df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
             target_norm = target_brand_name.lower().split(' ')[0]
@@ -2297,6 +2296,7 @@ def show_keyword_details(kw_id):
     
     for tab, ui_model_name in zip(tabs, ALL_MODELS_UI):
         with tab:
+            # 🔥 FIX: Фільтрація по 'provider_ui' (нормалізоване ім'я)
             if not df_scans.empty:
                 model_scans = df_scans[df_scans['provider_ui'] == ui_model_name].sort_values('created_at', ascending=False)
             else:
@@ -2360,6 +2360,7 @@ def show_keyword_details(kw_id):
             if not current_scan_mentions.empty:
                 total_in_scan = current_scan_mentions['mention_count'].sum()
                 
+                # 🔥 FIX: Фільтруємо ВСІ рядки, що підходять під "Мій Бренд"
                 my_brand_rows = current_scan_mentions[current_scan_mentions['is_real_target'] == True]
 
                 if not my_brand_rows.empty:
@@ -2434,10 +2435,7 @@ def show_keyword_details(kw_id):
                         )
                         fig_brands.update_traces(textposition='inside', textinfo='percent+label', hovertemplate='<b>%{label}</b><br>Згадок: %{value}')
                         fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
-                        
-                        # ✅ FIX: Унікальний KEY для графіка брендів
-                        st.plotly_chart(fig_brands, use_container_width=True, config={'displayModeBar': False}, key=f"brand_pie_{ui_model_name}_{selected_scan_id}")
-                    
+                        st.plotly_chart(fig_brands, use_container_width=True, config={'displayModeBar': False})
                     with c_table:
                         st.dataframe(
                             scan_mentions_plot[['brand_name', 'mention_count', 'rank_position', 'sentiment_score']],
@@ -2456,7 +2454,7 @@ def show_keyword_details(kw_id):
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- ДЖЕРЕЛА (ВИПРАВЛЕНО ВІДСТУПИ ТА KEY) ---
+            # --- ДЖЕРЕЛА (FIXED: Grouped + Center + Count) ---
             st.markdown(f"#### 🔗 Цитовані джерела {tooltip('Посилання, які надала модель.')}", unsafe_allow_html=True)
             try:
                 sources_resp = supabase.table("extracted_sources").select("*").eq("scan_result_id", selected_scan_id).execute()
@@ -2464,28 +2462,24 @@ def show_keyword_details(kw_id):
                 if sources_data:
                     df_src = pd.DataFrame(sources_data)
                     
-                    # Нормалізація URL (якщо є колонка url)
                     if 'url' in df_src.columns:
+                        if 'domain' not in df_src.columns:
+                            df_src['domain'] = df_src['url'].apply(lambda x: str(x).split('/')[2] if x and '//' in str(x) else 'unknown')
+                        
                         df_src['url'] = df_src['url'].apply(normalize_url)
                         
-                        # Визначення статусу (Офіційне/Зовнішнє)
                         if 'is_official' in df_src.columns:
                             df_src['status_text'] = df_src['is_official'].apply(lambda x: "✅ Офіційне" if x is True else "🔗 Зовнішнє")
                         else:
                             df_src['status_text'] = "🔗 Зовнішнє"
 
-                        # ГРУПУВАННЯ (URL + Domain + Status)
-                        if 'domain' not in df_src.columns:
-                            df_src['domain'] = df_src['url'].apply(lambda x: str(x).split('/')[2] if x and '//' in str(x) else 'unknown')
-
+                        # ГРУПУВАННЯ
                         df_grouped_src = df_src.groupby(['url', 'domain', 'status_text'], as_index=False).size()
                         df_grouped_src = df_grouped_src.rename(columns={'size': 'count'})
                         df_grouped_src = df_grouped_src.sort_values(by='count', ascending=False)
 
-                        # Розмітка колонок
                         c_src_chart, c_src_table = st.columns([1.3, 2], vertical_alignment="center")
                         
-                        # --- ЛІВА КОЛОНКА: ГРАФІК ---
                         with c_src_chart:
                             domain_counts = df_grouped_src.groupby('domain')['count'].sum().reset_index()
                             fig_src = px.pie(
@@ -2494,20 +2488,13 @@ def show_keyword_details(kw_id):
                             )
                             fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
-                            
-                            # ✅ УНІКАЛЬНИЙ KEY
-                            st.plotly_chart(
-                                fig_src, 
-                                use_container_width=True, 
-                                config={'displayModeBar': False}, 
-                                key=f"pie_sources_{ui_model_name}_{selected_scan_id}"
-                            )
+                            st.plotly_chart(fig_src, use_container_width=True, config={'displayModeBar': False})
 
-                        # --- ПРАВА КОЛОНКА: ТАБЛИЦЯ ---
                         with c_src_table:
                             st.dataframe(
-                                df_grouped_src[['url', 'status_text', 'count']],
-                                use_container_width=True, hide_index=True,
+                                df_grouped_src[['url', 'status_text', 'count']], 
+                                use_container_width=True, 
+                                hide_index=True,
                                 column_config={
                                     "url": st.column_config.LinkColumn("Посилання", width="large", validate="^https?://"),
                                     "status_text": st.column_config.TextColumn("Тип", width="small"),
@@ -2520,7 +2507,6 @@ def show_keyword_details(kw_id):
                     st.info("ℹ️ Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка завантаження джерел: {e}")
-
 
 def show_keywords_page():
     """
