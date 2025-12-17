@@ -235,14 +235,14 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    ВЕРСІЯ: ORIGINAL PAYLOAD + TRIAL PROTECTION.
-    1. Формат даних (payload) ідентичний до "старої робочої версії".
-    2. Додано перевірку на повторний запуск для Trial.
+    ВЕРСІЯ: FIX METRICS (CLEAN DATA).
+    1. Очищує official_assets (видаляє https://, www) для коректного підрахунку.
+    2. Зберігає логіку Trial (блокування повторів).
     """
     import requests
     import streamlit as st
     
-    # --- 1. ПІДКЛЮЧЕННЯ ДО БД (Виправлено для стабільності) ---
+    # --- 1. ПІДКЛЮЧЕННЯ ДО БД ---
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
     elif 'supabase' in globals():
@@ -260,12 +260,10 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     # 2. ОТРИМАННЯ СТАТУСУ
     current_proj = st.session_state.get("current_project")
     
-    # Якщо проект тільки створюється
     status = "trial"
     if current_proj and current_proj.get("id") == project_id:
         status = current_proj.get("status", "trial")
     
-    # Якщо заблоковано
     if status == "blocked":
         st.error("⛔ Проект заблоковано. Зверніться до адміністратора.")
         return False
@@ -277,7 +275,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     # 🔥 ЛОГІКА ТРІАЛУ (ЗАХИСТ)
     # ==========================================
     if status == "trial":
-        # 1. Тільки Gemini
         is_only_gemini = True
         for m in models:
             if "Gemini" not in m and "gemini" not in m:
@@ -288,25 +285,21 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             st.warning("🔒 У статусі TRIAL доступний аналіз лише через Google Gemini.")
             return False
 
-        # 2. Перевірка: чи вже були сканування?
         try:
+            # Перевірка на повторний запуск
             existing = supabase.table("scan_results")\
                 .select("id", count="exact")\
                 .eq("project_id", project_id)\
                 .limit(1)\
                 .execute()
             
-            # Якщо вже є записи -> Блокуємо
             if existing.data or (existing.count and existing.count > 0):
                 st.error("⛔ Аналіз неможливий у статусі TRIAL (ліміт вичерпано). Будь ласка, зверніться в техпідтримку на пошту hi@virshi.ai, щоб отримати статус ACTIVE.")
                 return False
-                
         except Exception as e:
-            # Якщо помилка перевірки - не блокуємо, щоб не поламати процес, але пишемо в консоль
             print(f"Trial check error: {e}")
 
     try:
-        # User Email
         user = st.session_state.get("user")
         user_email = user.email if user else "no-reply@virshi.ai"
         
@@ -315,22 +308,28 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         success_count = 0
 
-        # 3. ОТРИМАННЯ WHITELIST (ПОВЕРНУТО СТАРУ ЛОГІКУ)
-        # Ми НЕ робимо .lower() тут, щоб не ламати логіку n8n, якщо вона чекає оригінал
+        # --- 3. ОТРИМАННЯ ТА ЧИСТКА WHITELIST (ВАЖЛИВО!) ---
+        clean_assets = []
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
                 .eq("project_id", project_id)\
                 .execute()
             
-            official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
+            if assets_resp.data:
+                for item in assets_resp.data:
+                    raw_url = item.get("domain_or_url", "").lower().strip()
+                    # Видаляємо сміття, щоб n8n міг знайти цей домен у тексті
+                    clean = raw_url.replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
+                    if clean:
+                        clean_assets.append(clean)
         except Exception as e:
             print(f"Error fetching assets: {e}")
-            official_assets = []
+            clean_assets = []
 
         headers = {"virshi-auth": "hi@virshi.ai2025"}
 
-        # 4. ВІДПРАВКА (PAYLOAD ЯК У СТАРОМУ КОДІ)
+        # 4. ВІДПРАВКА
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
@@ -338,14 +337,16 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "project_id": project_id,
                 "keywords": keywords, 
                 "brand_name": brand_name,
-                # Прибрали brand_name_lower, щоб не плутати n8n
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
-                "official_assets": official_assets 
+                
+                # 🔥 ВІДПРАВЛЯЄМО ЧИСТІ ДОМЕНИ
+                "official_assets": clean_assets 
             }
             
             try:
+                # Переконайтеся, що змінна N8N_ANALYZE_URL доступна
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
@@ -366,6 +367,7 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     except Exception as e:
         st.error(f"Критична помилка запуску: {e}")
         return False
+
 
 def trigger_ai_recommendation(user, project, category, context_text):
     """
