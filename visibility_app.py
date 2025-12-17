@@ -1872,24 +1872,6 @@ def show_dashboard():
 # 7. КЕРУВАННЯ ЗАПИТАМИ
 # =========================
 
-
-                            st.session_state[confirm_run_key] = False
-                            st.rerun()
-                        else:
-                            st.error("Функція запуску не знайдена.")
-                with c_conf2:
-                    if st.button("❌ Скасувати", key="cancel_run_btn"):
-                        st.session_state[confirm_run_key] = False
-                        st.rerun()
-
-    # 2. ОТРИМАННЯ ДАНИХ
-    try:
-        scans_resp = supabase.table("scan_results")\
-            .select("id, created_at, provider, raw_response")\
-            .eq("keyword_id", kw_id)\
-            .order("created_at", desc=False)\
-            .execute()
-        
 def show_keyword_details(kw_id):
     """
     Сторінка детальної аналітики одного запиту.
@@ -2507,7 +2489,8 @@ def show_keyword_details(kw_id):
                     st.info("ℹ️ Джерел не знайдено.")
             except Exception as e:
                 st.error(f"Помилка завантаження джерел: {e}")
-                
+
+
 
 def show_keywords_page():
     """
