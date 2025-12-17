@@ -2418,10 +2418,10 @@ def show_keyword_details(kw_id):
                         fig_brands.update_traces(textposition='inside', textinfo='percent+label', hovertemplate='<b>%{label}</b><br>Згадок: %{value}')
                         fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
                         st.plotly_chart(
-                            fig_brands, 
-                            use_container_width=True, 
+                            fig_brands,
+                            use_container_width=True,
                             config={'displayModeBar': False},
-                            key=f"brands_chart_{keyword_id}"  # <--- Додаємо унікальний ключ
+                            key=f"brands_chart_{keyword_id}"  # Унікальний ключ
                         )
                     with c_table:
                         st.dataframe(
