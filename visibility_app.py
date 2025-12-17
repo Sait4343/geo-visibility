@@ -2496,10 +2496,9 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: BULK ACTIONS FIX & DISABLE ALL.
-    1. Додано кнопку 'Вимкнути все'.
-    2. Виправлено оновлення UI при повторному масовому налаштуванні (очищення session_state).
-    3. Оновлено пояснення.
+    ВЕРСІЯ: BULK ACTIONS FIX (DISABLE ALL + STATE RESET).
+    1. Додано вкладку "Автозапуск" з кнопками "Увімкнути все" та "Вимкнути все".
+    2. Виправлено проблему, коли чекбокси не оновлювалися візуально (додано очистку session_state).
     """
     import pandas as pd
     import streamlit as st
@@ -2617,6 +2616,7 @@ def show_keywords_page():
     # ========================================================
     with st.expander("✏️ Редагування запитів", expanded=False): 
         
+        # 🔥 ДОДАНО ВКЛАДКУ "АВТОЗАПУСК"
         tab_manual, tab_import, tab_export, tab_auto = st.tabs(["✍️ Ввести вручну", "📥 Імпорт (Excel / URL)", "📤 Експорт (Excel)", "⚙️ Автозапуск"])
 
         # --- TAB 1: ВРУЧНУ ---
@@ -2846,15 +2846,16 @@ def show_keywords_page():
                     st.write("")
                     
                     # КНОПКА: УВІМКНУТИ ВСЕ
-                    if st.button("✅ Увімкнути для всіх", type="primary", use_container_width=True):
+                    if st.button("✅ Застосувати частоту для всіх", type="primary", use_container_width=True):
                         try:
-                            # 1. Масове оновлення в Supabase
+                            # 1. Масове оновлення в Supabase (Вмикаємо + Частота)
                             supabase.table("keywords").update({
                                 "is_auto_scan": True,
                                 "frequency": selected_freq_db
                             }).eq("project_id", proj["id"]).execute()
                             
                             # 2. 🔥 ВАЖЛИВО: Очищення стану віджетів, щоб UI оновився
+                            # Видаляємо старі значення перемикачів з кешу Streamlit
                             for key in list(st.session_state.keys()):
                                 if key.startswith("auto_") or key.startswith("freq_"):
                                     del st.session_state[key]
@@ -2873,7 +2874,7 @@ def show_keywords_page():
                             "is_auto_scan": False
                         }).eq("project_id", proj["id"]).execute()
 
-                        # 2. Очищення стану (щоб перемикачі стали сірими)
+                        # 2. Очищення стану
                         for key in list(st.session_state.keys()):
                             if key.startswith("auto_") or key.startswith("freq_"):
                                 del st.session_state[key]
@@ -2887,11 +2888,11 @@ def show_keywords_page():
                 st.markdown("---")
                 st.markdown("""
                 **ℹ️ Як це працює:**
-                1. **✅ Увімкнути для всіх:** Активує автозапуск (`ON`) і встановлює обрану частоту (щодня/тиждень/місяць) для **всіх** запитів у цьому проекті.
+                1. **✅ Застосувати для всіх:** Активує автозапуск (`ON`) і встановлює обрану частоту (щодня/тиждень/місяць) для **всіх** запитів у цьому проекті.
                    - *Це перезапише будь-які індивідуальні налаштування, зроблені раніше.*
                 2. **⛔ Вимкнути для всіх:** Деактивує автозапуск (`OFF`) для всіх запитів.
                 3. **Індивідуальність:** Після масового налаштування ви все ще можете змінити частоту або вимкнути автозапуск для окремих запитів у таблиці нижче.
-                4. **Оновлення:** Якщо ви оберете нову частоту тут і натиснете "Увімкнути", вона застосується до всіх запитів, скасовуючи індивідуальні зміни.
+                4. **Пріоритет:** Якщо ви знову натиснете кнопку "Застосувати" тут, налаштування знову скинуться до загальних для всіх запитів.
                 """)
 
     st.divider()
@@ -2945,7 +2946,6 @@ def show_keywords_page():
                 if select_all:
                     selected_kws_text = [k['keyword_text'] for k in keywords]
                 else:
-                    # 🔥 FIX: Збір обраних з унікальним ключем
                     for idx, k in enumerate(keywords, start=1):
                         if st.session_state.get(f"chk_{k['id']}_{idx}", False):
                             selected_kws_text.append(k['keyword_text'])
@@ -2980,7 +2980,6 @@ def show_keywords_page():
     h_date.markdown("**Останній аналіз**")
     h_act.markdown("**Видалити**")
 
-    # 🔥 ОТРИМУЄМО ДОЗВІЛ ВІД АДМІНА
     allow_cron_global = proj.get('allow_cron', False)
 
     for idx, k in enumerate(keywords, start=1):
@@ -2990,7 +2989,6 @@ def show_keywords_page():
             with c1:
                 st.write("") 
                 is_checked = select_all
-                # 🔥 FIX: Унікальний ключ з idx
                 st.checkbox("", key=f"chk_{k['id']}_{idx}", value=is_checked)
             
             with c2:
@@ -3003,15 +3001,18 @@ def show_keywords_page():
             
             with c4:
                 cron_c1, cron_c2 = st.columns([0.8, 1.2])
+                
+                # Читаємо актуальний стан з БД
                 is_auto = k.get('is_auto_scan', False) 
                 
-                # Ініціалізація перед перевіркою
-                new_auto = is_auto 
-
                 with cron_c1:
-                    # Відображаємо тогл тільки якщо дозволено глобально
                     if allow_cron_global:
-                        new_auto = st.toggle("Авто", value=is_auto, key=f"auto_{k['id']}_{idx}", label_visibility="collapsed")
+                        # Важливо: ключ має бути унікальним і стабільним
+                        toggle_key = f"auto_{k['id']}_{idx}"
+                        
+                        # Якщо в session_state немає ключа (після очищення), він візьме value=is_auto
+                        new_auto = st.toggle("Авто", value=is_auto, key=toggle_key, label_visibility="collapsed")
+                        
                         if new_auto != is_auto:
                             update_kw_field(k['id'], "is_auto_scan", new_auto)
                             st.rerun()
@@ -3020,12 +3021,16 @@ def show_keywords_page():
                         st.caption("🔒 Admin")
 
                 with cron_c2:
-                    if new_auto and allow_cron_global:
+                    # Показуємо селектбокс тільки якщо авто увімкнено (або щойно увімкнули)
+                    if (is_auto or new_auto) and allow_cron_global:
                         current_freq = k.get('frequency', 'daily')
                         freq_options = ["daily", "weekly", "monthly"]
                         try: idx_f = freq_options.index(current_freq)
                         except: idx_f = 0
-                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=f"freq_{k['id']}_{idx}", label_visibility="collapsed")
+                        
+                        freq_key = f"freq_{k['id']}_{idx}"
+                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=freq_key, label_visibility="collapsed")
+                        
                         if new_freq != current_freq:
                             update_kw_field(k['id'], "frequency", new_freq)
                     else:
@@ -3062,7 +3067,6 @@ def show_keywords_page():
                     if dc2.button("❌", key=f"no_del_{k['id']}_{idx}"):
                         st.session_state[del_key] = False
                         st.rerun()
-
 
 
 # =========================
