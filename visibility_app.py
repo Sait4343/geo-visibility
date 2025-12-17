@@ -2417,7 +2417,7 @@ def show_keyword_details(kw_id):
                         )
                         fig_brands.update_traces(textposition='inside', textinfo='percent+label', hovertemplate='<b>%{label}</b><br>Згадок: %{value}')
                         fig_brands.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=250)
-                        st.plotly_chart(fig_brands, use_container_width=True, config={'displayModeBar': False})
+                        st.plotly_chart(fig_brands, use_container_width=True, config={'displayModeBar': False}, key=f"brand_pie_{ui_model_name}_{selected_scan_id}")
                     with c_table:
                         st.dataframe(
                             scan_mentions_plot[['brand_name', 'mention_count', 'rank_position', 'sentiment_score']],
@@ -2462,7 +2462,7 @@ def show_keyword_details(kw_id):
 
                         c_src_chart, c_src_table = st.columns([1.3, 2], vertical_alignment="center")
                         
-                        with c_src_chart:
+with c_src_chart:
                             domain_counts = df_grouped_src.groupby('domain')['count'].sum().reset_index()
                             fig_src = px.pie(
                                 domain_counts.head(10), values='count', names='domain', hole=0.5,
@@ -2470,7 +2470,14 @@ def show_keyword_details(kw_id):
                             )
                             fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
-                            st.plotly_chart(fig_src, use_container_width=True, config={'displayModeBar': False})
+                            
+                            # 👇 ВИПРАВЛЕНО: Додано унікальний ключ
+                            st.plotly_chart(
+                                fig_src, 
+                                use_container_width=True, 
+                                config={'displayModeBar': False}, 
+                                key=f"src_pie_{ui_model_name}_{selected_scan_id}"
+                            )
 
                         with c_src_table:
                             st.dataframe(
