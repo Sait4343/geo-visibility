@@ -235,18 +235,20 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    ВЕРСІЯ: FIXED DB CONNECTION + STRICT TRIAL.
+    ВЕРСІЯ: ORIGINAL PAYLOAD + TRIAL PROTECTION.
+    1. Формат даних (payload) ідентичний до "старої робочої версії".
+    2. Додано перевірку на повторний запуск для Trial.
     """
     import requests
     import streamlit as st
     
-    # --- 1. ВИПРАВЛЕНЕ ПІДКЛЮЧЕННЯ ДО БД ---
+    # --- 1. ПІДКЛЮЧЕННЯ ДО БД (Виправлено для стабільності) ---
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
     elif 'supabase' in globals():
         supabase = globals()['supabase']
     else:
-        st.error("🚨 Помилка підключення до БД (змінна supabase не знайдена).")
+        st.error("🚨 Помилка: Немає підключення до БД.")
         return False
 
     MODEL_MAPPING = {
@@ -258,24 +260,24 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     # 2. ОТРИМАННЯ СТАТУСУ
     current_proj = st.session_state.get("current_project")
     
+    # Якщо проект тільки створюється
     status = "trial"
     if current_proj and current_proj.get("id") == project_id:
         status = current_proj.get("status", "trial")
     
-    # Якщо статус заблокований
+    # Якщо заблоковано
     if status == "blocked":
         st.error("⛔ Проект заблоковано. Зверніться до адміністратора.")
         return False
 
-    # Дефолтна модель
     if not models:
         models = ["Perplexity"]
 
     # ==========================================
-    # 🔥 ЖОРСТКА ЛОГІКА ТРІАЛУ
+    # 🔥 ЛОГІКА ТРІАЛУ (ЗАХИСТ)
     # ==========================================
     if status == "trial":
-        # 1. Перевірка: чи це Gemini?
+        # 1. Тільки Gemini
         is_only_gemini = True
         for m in models:
             if "Gemini" not in m and "gemini" not in m:
@@ -288,20 +290,20 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         # 2. Перевірка: чи вже були сканування?
         try:
-            # Шукаємо хоча б 1 запис у scan_results для цього проекту
             existing = supabase.table("scan_results")\
                 .select("id", count="exact")\
                 .eq("project_id", project_id)\
                 .limit(1)\
                 .execute()
             
-            # Якщо count > 0 або є дані -> це вже не перший раз
+            # Якщо вже є записи -> Блокуємо
             if existing.data or (existing.count and existing.count > 0):
                 st.error("⛔ Аналіз неможливий у статусі TRIAL (ліміт вичерпано). Будь ласка, зверніться в техпідтримку на пошту hi@virshi.ai, щоб отримати статус ACTIVE.")
                 return False
                 
         except Exception as e:
-            print(f"Check error: {e}")
+            # Якщо помилка перевірки - не блокуємо, щоб не поламати процес, але пишемо в консоль
+            print(f"Trial check error: {e}")
 
     try:
         # User Email
@@ -313,23 +315,22 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
 
         success_count = 0
 
-        # 3. ОТРИМАННЯ WHITELIST
-        official_assets = []
+        # 3. ОТРИМАННЯ WHITELIST (ПОВЕРНУТО СТАРУ ЛОГІКУ)
+        # Ми НЕ робимо .lower() тут, щоб не ламати логіку n8n, якщо вона чекає оригінал
         try:
             assets_resp = supabase.table("official_assets")\
                 .select("domain_or_url")\
                 .eq("project_id", project_id)\
                 .execute()
             
-            if assets_resp.data:
-                # Чистимо дані (lower, strip)
-                official_assets = [item["domain_or_url"].strip().lower() for item in assets_resp.data]
+            official_assets = [item["domain_or_url"] for item in assets_resp.data] if assets_resp.data else []
         except Exception as e:
-            print(f"Assets error: {e}")
+            print(f"Error fetching assets: {e}")
+            official_assets = []
 
         headers = {"virshi-auth": "hi@virshi.ai2025"}
 
-        # 4. ВІДПРАВКА
+        # 4. ВІДПРАВКА (PAYLOAD ЯК У СТАРОМУ КОДІ)
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
@@ -337,7 +338,7 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                 "project_id": project_id,
                 "keywords": keywords, 
                 "brand_name": brand_name,
-                "brand_name_lower": brand_name.lower(), # Допомога для n8n
+                # Прибрали brand_name_lower, щоб не плутати n8n
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
@@ -345,10 +346,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             }
             
             try:
-                # Переконайтеся, що N8N_ANALYZE_URL визначено глобально у вашому файлі
-                # Якщо ні - розкоментуйте рядок нижче і вставте URL:
-                # N8N_ANALYZE_URL = "https://..." 
-                
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
