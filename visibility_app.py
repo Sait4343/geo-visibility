@@ -3001,10 +3001,10 @@ def show_keywords_page():
 def show_sources_page():
     """
     Сторінка джерел.
-    ВЕРСІЯ: FIXED & REDESIGNED.
-    1. Читає з таблиці official_assets (тепер домен з реєстрації буде видно).
-    2. Дизайн таблиці Whitelist приведено до стилю інших таблиць.
-    3. Виправлено логіку збереження при редагуванні.
+    ВЕРСІЯ: FIXED ENUM & DESIGN UPDATE.
+    1. Виправлено помилку 'invalid input value for enum'.
+    2. Дизайн редагування змінено на стиль 'список карток' (як у запитах).
+    3. Додано мапінг типів (Ukr -> Eng).
     """
     import pandas as pd
     import plotly.express as px
@@ -3027,7 +3027,36 @@ def show_sources_page():
         st.info("Спочатку оберіть проект.")
         return
 
+    # --- CSS для зелених номерів (дублюємо тут про всяк випадок) ---
+    st.markdown("""
+    <style>
+        .green-number { 
+            background-color: #00C896; 
+            color: white; 
+            width: 28px; 
+            height: 28px; 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-weight: bold; 
+            font-size: 14px; 
+            margin-top: 5px; 
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.title("🔗 Джерела")
+
+    # --- MAPPING ТИПІВ (UI -> DB) ---
+    TYPE_UI_TO_DB = {
+        "Веб-сайт": "website",
+        "Соціальні мережі": "social",
+        "Стаття": "article",
+        "Інше": "other"
+    }
+    # Зворотній мапінг (DB -> UI)
+    TYPE_DB_TO_UI = {v: k for k, v in TYPE_UI_TO_DB.items()}
 
     # ==============================================================================
     # 1. ОТРИМАННЯ ДАНИХ (Скан результати)
@@ -3095,12 +3124,16 @@ def show_sources_page():
     except Exception as e:
         raw_assets = []
 
-    # Формуємо список для логіки
+    # Формуємо список для логіки (для підрахунку)
     assets_list_dicts = []
     for item in raw_assets:
+        # Конвертуємо тип з БД в UI (english -> ukrainian)
+        db_type = item.get("type", "website")
+        ui_type = TYPE_DB_TO_UI.get(db_type, "Веб-сайт")
+        
         assets_list_dicts.append({
             "Домен": item.get("domain_or_url", ""), 
-            "Мітка": item.get("type", "Веб-сайт")
+            "Мітка": ui_type
         })
     
     OFFICIAL_DOMAINS = [d["Домен"].lower().strip() for d in assets_list_dicts if d["Домен"]]
@@ -3187,30 +3220,33 @@ def show_sources_page():
 
         st.divider()
 
-        # --- РЕДАКТОР WHITELIST (З ОНОВЛЕНИМ ДИЗАЙНОМ) ---
+        # --- РЕДАКТОР WHITELIST (НОВИЙ ДИЗАЙН) ---
         st.subheader("⚙️ Керування списком (Whitelist)")
         
         if "edit_whitelist_mode" not in st.session_state:
             st.session_state["edit_whitelist_mode"] = False
-
-        # Готуємо DataFrame
-        if assets_list_dicts:
-            df_assets = pd.DataFrame(assets_list_dicts)
-        else:
-            df_assets = pd.DataFrame(columns=["Домен", "Мітка"])
-
-        # Рахуємо статистику (скільки разів цей домен зустрічався в скануванні)
-        if not df_master.empty:
-            def get_stat_whitelist(dom):
-                matches = df_master[df_master['url'].astype(str).str.contains(dom.lower(), case=False, na=False)]
-                return len(matches)
-            
-            df_assets['Згадок'] = df_assets['Домен'].apply(get_stat_whitelist)
-        else:
-            df_assets['Згадок'] = 0
+        
+        # Ініціалізація змінної для редагування
+        if "temp_assets" not in st.session_state:
+            st.session_state["temp_assets"] = []
 
         # --- ВІДОБРАЖЕННЯ ТАБЛИЦІ (View Mode) ---
         if not st.session_state["edit_whitelist_mode"]:
+            # Готуємо DataFrame для перегляду
+            if assets_list_dicts:
+                df_assets = pd.DataFrame(assets_list_dicts)
+            else:
+                df_assets = pd.DataFrame(columns=["Домен", "Мітка"])
+
+            # Рахуємо статистику
+            if not df_master.empty:
+                def get_stat_whitelist(dom):
+                    matches = df_master[df_master['url'].astype(str).str.contains(dom.lower(), case=False, na=False)]
+                    return len(matches)
+                df_assets['Згадок'] = df_assets['Домен'].apply(get_stat_whitelist)
+            else:
+                df_assets['Згадок'] = 0
+
             st.dataframe(
                 df_assets,
                 use_container_width=True,
@@ -3224,49 +3260,78 @@ def show_sources_page():
             
             if st.button("✏️ Редагувати список"):
                 st.session_state["edit_whitelist_mode"] = True
+                # Завантажуємо поточні дані в temp_assets для редагування
+                st.session_state["temp_assets"] = assets_list_dicts.copy()
                 st.rerun()
         
-        # --- РЕЖИМ РЕДАГУВАННЯ (Edit Mode) ---
+        # --- РЕЖИМ РЕДАГУВАННЯ (Custom Design) ---
         else:
             st.info("Додайте або видаліть домени. Натисніть 'Зберегти' для застосування змін.")
             
-            # Якщо таблиця пуста, додаємо рядок
-            if df_assets.empty: 
-                edit_df_input = pd.DataFrame([{"Домен": "", "Мітка": "Веб-сайт"}])
-            else:
-                edit_df_input = df_assets[["Домен", "Мітка"]]
-            
-            edited_df = st.data_editor(
-                edit_df_input,
-                num_rows="dynamic",
-                use_container_width=True,
-                hide_index=True, # Чисто, як просили
-                column_config={
-                    "Домен": st.column_config.TextColumn("Домен / URL", required=True),
-                    "Мітка": st.column_config.SelectboxColumn(
-                        "Тип ресурсу",
-                        options=["Веб-сайт", "Соціальні мережі", "Стаття", "Інше"],
-                        required=True
-                    )
-                }
-            )
-            
+            # Якщо список пустий, додаємо один порожній рядок
+            if not st.session_state["temp_assets"]:
+                st.session_state["temp_assets"].append({"Домен": "", "Мітка": "Веб-сайт"})
+
+            # Відображаємо список карток
+            for i, asset in enumerate(st.session_state["temp_assets"]):
+                with st.container(border=True):
+                    c_num, c_dom, c_type, c_del = st.columns([0.5, 5, 3, 1])
+                    
+                    with c_num:
+                        st.markdown(f"<div class='green-number'>{i+1}</div>", unsafe_allow_html=True)
+                    
+                    with c_dom:
+                        new_domain = st.text_input(
+                            "Домен", 
+                            value=asset["Домен"], 
+                            key=f"asset_dom_{i}", 
+                            label_visibility="collapsed",
+                            placeholder="example.com"
+                        )
+                        st.session_state["temp_assets"][i]["Домен"] = new_domain
+                    
+                    with c_type:
+                        new_type = st.selectbox(
+                            "Тип", 
+                            options=list(TYPE_UI_TO_DB.keys()), 
+                            index=list(TYPE_UI_TO_DB.keys()).index(asset["Мітка"]) if asset["Мітка"] in TYPE_UI_TO_DB else 0,
+                            key=f"asset_type_{i}", 
+                            label_visibility="collapsed"
+                        )
+                        st.session_state["temp_assets"][i]["Мітка"] = new_type
+
+                    with c_del:
+                        if st.button("🗑️", key=f"del_asset_{i}"):
+                            st.session_state["temp_assets"].pop(i)
+                            st.rerun()
+
+            # Кнопка додавання
+            if st.button("➕ Додати джерело"):
+                st.session_state["temp_assets"].append({"Домен": "", "Мітка": "Веб-сайт"})
+                st.rerun()
+
+            st.divider()
+
+            # Кнопки дії
             c1, c2 = st.columns([1, 4])
             with c1:
                 if st.button("💾 Зберегти", type="primary"):
                     try:
-                        # 1. Видаляємо старі записи для цього проекту
+                        # 1. Видаляємо старі записи
                         supabase.table("official_assets").delete().eq("project_id", proj["id"]).execute()
                         
-                        # 2. Формуємо нові
+                        # 2. Формуємо нові дані (конвертуємо UI -> DB)
                         insert_data = []
-                        for _, row in edited_df.iterrows():
-                            d_val = str(row["Домен"]).strip()
+                        for item in st.session_state["temp_assets"]:
+                            d_val = str(item["Домен"]).strip()
                             if d_val:
+                                # Конвертація "Веб-сайт" -> "website"
+                                db_type_val = TYPE_UI_TO_DB.get(item["Мітка"], "website")
+                                
                                 insert_data.append({
                                     "project_id": proj["id"],
                                     "domain_or_url": d_val,
-                                    "type": row["Мітка"]
+                                    "type": db_type_val
                                 })
                         
                         # 3. Вставляємо
