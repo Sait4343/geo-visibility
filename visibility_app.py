@@ -3830,7 +3830,8 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FIXED & FULL + BRANDFETCH SAFE LOGO + DASHBOARD REDIRECT FIX.
+    ВЕРСІЯ: FIXED & FULL.
+    Виправлено зникнення меню.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3862,7 +3863,7 @@ def sidebar_menu():
         
         st.write("") 
 
-        # --- 🔥 БЛОК BRANDFETCH (ЛОГОТИП) ---
+        # --- БЛОК BRANDFETCH (ЛОГОТИП ПРОЕКТУ) ---
         logo_url = None
         backup_logo_url = None
 
@@ -3877,7 +3878,6 @@ def sidebar_menu():
             if logo_url:
                 col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
                 with col_brand_img:
-                    # Безпечний HTML для лого
                     img_html = f'<img src="{logo_url}" style="width: 45px; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
                     st.markdown(img_html, unsafe_allow_html=True)
                 
@@ -3885,9 +3885,9 @@ def sidebar_menu():
                     st.markdown(f"<div style='padding-top: 10px; font-weight: bold;'>{proj_name}</div>", unsafe_allow_html=True)
             else:
                 st.markdown(f"### 📁 {proj_name}")
-        # --- КІНЕЦЬ БЛОКУ ---
+        # ----------------------------------------
 
-        # 3. Вибір проекту
+        # 3. Вибір проекту / Налаштування
         expander_label = "⚙️ Налаштування проекту" if (proj and logo_url) else f"📁 {proj_name}"
         
         with st.expander(expander_label, expanded=False):
@@ -3901,7 +3901,7 @@ def sidebar_menu():
 
         st.write("") 
 
-        # 4. Навігаційне меню
+        # 4. Навігаційне меню (ОПЦІЇ)
         options = [
             "Дашборд", 
             "Перелік запитів", 
@@ -3926,22 +3926,23 @@ def sidebar_menu():
             "robot"
         ]
 
-        # Додаємо адмінку (ТУТ БУЛА ПОМИЛКА ВІДСТУПУ - ТЕПЕР ВИПРАВЛЕНО)
+        # Додаємо пункт "Адмін", якщо є права
         if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
 
-        # --- 🔥 ЛОГІКА АВТО-ПЕРЕХОДУ (REDIRECT) ---
+        # --- ЛОГІКА ПЕРЕХОДУ З АДМІНКИ ---
         default_idx = 0
         redirect_target = st.session_state.get("force_redirect_to")
         
         if redirect_target and redirect_target in options:
             default_idx = options.index(redirect_target)
-            del st.session_state["force_redirect_to"] # Очищаємо після використання
+            del st.session_state["force_redirect_to"]
         
-        # Динамічний ключ для оновлення меню
         menu_refresh_id = st.session_state.get("menu_id_counter", 0)
 
+        # 5. ВІДОБРАЖЕННЯ МЕНЮ (НАЙВАЖЛИВІШЕ)
+        # Цей код має бути на рівні з `with st.sidebar:`, але всередині нього (з відступом)
         selected = option_menu(
             "Меню",
             options,
@@ -3959,11 +3960,11 @@ def sidebar_menu():
         
         st.divider()
 
-        # 5. Сапорт
+        # 6. Сапорт
         st.caption("Потрібна допомога?")
         st.markdown("📧 **hi@virshi.ai**")
 
-        # 6. Статус та Вихід
+        # 7. Статус та Вихід
         if proj:
             st.write("")
             status = proj.get("status", "trial").upper()
