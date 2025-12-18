@@ -3628,15 +3628,27 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: FINAL WITH INITIATOR.
-    1. Визначає ініціатора:
-       - Якщо є user_id -> виводить ПІБ (Human).
-       - Якщо немає -> "🤖 Автосканування".
-    2. Розумний фільтр дат та ліміт 100.
+    ВЕРСІЯ: PAGINATION + TIMEZONE FIX.
+    1. Пагінація: 10/20/50/100/200 рядків.
+    2. Timezone: Примусова конвертація в Kyiv Time.
+    3. Фільтр дат: Розширений діапазон (buffer +1 день).
     """
     import pandas as pd
     import streamlit as st
-    from datetime import datetime, timedelta, timezone 
+    from datetime import datetime, timedelta
+    import pytz
+    import math
+
+    # Налаштування часового поясу
+    KYIV_TZ = pytz.timezone('Europe/Kiev')
+
+    # Функція для скидання сторінки (викликається при зміні фільтрів)
+    def reset_page():
+        st.session_state.history_page_number = 1
+
+    # Ініціалізація номера сторінки в сесії
+    if 'history_page_number' not in st.session_state:
+        st.session_state.history_page_number = 1
 
     # --- 1. ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
@@ -3654,20 +3666,19 @@ def show_history_page():
 
     st.title("📜 Історія сканувань")
 
-    # --- 2. ОТРИМАННЯ ДАНИХ ---
+    # --- 2. ОТРИМАННЯ ДАНИХ (Більший ліміт для пагінації) ---
     with st.spinner("Завантаження історії..."):
         try:
             # 1. Keywords
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-            # 2. Scans (Ліміт 100)
-            # 🔥 Тепер ми запитуємо 'user_id', бо ви додали колонку в базу
+            # 2. Scans (Беремо останні 1000, щоб пагінація мала сенс)
             scans_resp = supabase.table("scan_results")\
                 .select("id, created_at, provider, keyword_id, user_id")\
                 .eq("project_id", proj["id"])\
                 .order("created_at", desc=True)\
-                .limit(100)\
+                .limit(1000)\
                 .execute()
             
             scans_data = scans_resp.data if scans_resp.data else []
@@ -3678,43 +3689,31 @@ def show_history_page():
 
             scan_ids = [s['id'] for s in scans_data]
 
-            # 3. User Profiles (Отримання ПІБ)
-            # Збираємо унікальні ID користувачів, які є в історії
+            # 3. User Profiles (Для імен)
             user_ids = list(set([s['user_id'] for s in scans_data if s.get('user_id')]))
             user_map = {}
-            
             if user_ids:
                 try:
-                    # Якщо ваша таблиця профілів називається 'user_profiles' або 'profiles'
-                    # Перевірте назву таблиці в Supabase! Тут приклад для 'user_profiles'
                     u_resp = supabase.table("user_profiles")\
                         .select("user_id, first_name, last_name")\
                         .in_("user_id", user_ids)\
                         .execute()
-                    
                     if u_resp.data:
                         for u in u_resp.data:
-                            # Формуємо ПІБ
                             f_name = u.get('first_name', '') or ''
                             l_name = u.get('last_name', '') or ''
-                            full_name = f"{f_name} {l_name}".strip()
-                            
-                            # Якщо імені немає, але ID є — пишемо заглушку
-                            if not full_name: full_name = "Користувач"
-                            
+                            full_name = f"{f_name} {l_name}".strip() or "Користувач"
                             user_map[u['user_id']] = full_name
-                except Exception:
-                    # Якщо таблиці немає або помилка доступу, ігноруємо
+                except:
                     pass
 
-            # 4. Mentions
+            # 4. Mentions & Sources (Batch fetch)
             m_resp = supabase.table("brand_mentions")\
                 .select("scan_result_id, is_my_brand, mention_count")\
                 .in_("scan_result_id", scan_ids)\
                 .execute()
             mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
 
-            # 5. Sources
             s_resp = supabase.table("extracted_sources")\
                 .select("scan_result_id, is_official")\
                 .in_("scan_result_id", scan_ids)\
@@ -3722,110 +3721,93 @@ def show_history_page():
             sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
 
         except Exception as e:
-            # Якщо колонка user_id все ще не створена, покажемо підказку
             if "column scan_results.user_id does not exist" in str(e):
-                st.error("⚠️ У таблиці `scan_results` немає колонки `user_id`. Виконайте SQL запит в Supabase, щоб додати її.")
+                st.error("⚠️ Відсутня колонка `user_id`. Виконайте SQL Migration.")
             else:
                 st.error(f"Помилка завантаження даних: {e}")
             return
 
-    # --- 3. ОБРОБКА ДАНИХ ---
+    # --- 3. ОБРОБКА ДАНИХ (Pandas) ---
     df_scans = pd.DataFrame(scans_data)
 
-    # 🔥 ЛОГІКА ІНІЦІАТОРА
+    # Ініціатор
     def get_initiator(uid):
-        # Якщо user_id немає (None/Null) -> це Автоскан
-        if pd.isna(uid) or not uid:
-            return "🤖 Автосканування"
-        
-        # Якщо user_id є -> шукаємо ім'я в мапі
-        return user_map.get(uid, "👤 Адмін/Користувач") 
+        if pd.isna(uid) or not uid: return "🤖 Автосканування"
+        return user_map.get(uid, "👤 Адмін/Користувач")
     
     df_scans['initiator'] = df_scans['user_id'].apply(get_initiator)
 
-    # Мапінг провайдерів
-    PROVIDER_MAP = {
-        "gpt-4o": "OpenAI",
-        "gpt-4-turbo": "OpenAI",
-        "gemini-1.5-pro": "Gemini",
-        "perplexity": "Perplexity"
-    }
+    # Провайдери
+    PROVIDER_MAP = {"gpt-4o": "OpenAI", "gpt-4-turbo": "OpenAI", "gemini-1.5-pro": "Gemini", "perplexity": "Perplexity"}
     df_scans['provider'] = df_scans['provider'].replace(PROVIDER_MAP)
     
-    # Підготовка
+    # Ключові слова
     df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Видалений запит")
-    df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
     
-    # Агрегація Mentions
+    # 🔥 TIMEZONE FIX: Конвертуємо UTC з бази в Kyiv Time
+    df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(KYIV_TZ)
+    
+    # Агрегації (Merge)
     if not mentions_df.empty:
         brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
         my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
-        
-        df_scans = pd.merge(df_scans, brands_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
-        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
-            
-        df_scans = pd.merge(df_scans, my_mentions, left_on='id', right_on='scan_result_id', how='left').fillna(0)
-        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
+        df_scans = df_scans.merge(brands_count, left_on='id', right_on='scan_result_id', how='left')\
+                           .merge(my_mentions, left_on='id', right_on='scan_result_id', how='left')
     else:
         df_scans['total_brands'] = 0
         df_scans['my_mentions_count'] = 0
 
-    # Агрегація Sources
     if not sources_df.empty:
         links_count = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
-        official_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
-        
-        df_scans = pd.merge(df_scans, links_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
-        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
-            
-        df_scans = pd.merge(
-            df_scans, 
-            official_count, 
-            left_on='id', 
-            right_on='scan_result_id', 
-            how='left',
-            suffixes=('', '_dup')
-        ).fillna(0)
-        
-        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
+        off_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
+        df_scans = df_scans.merge(links_count, left_on='id', right_on='scan_result_id', how='left')\
+                           .merge(off_count, left_on='id', right_on='scan_result_id', how='left')
     else:
         df_scans['total_links'] = 0
         df_scans['official_links'] = 0
 
-    # --- 4. ФІЛЬТРИ ТА СОРТУВАННЯ ---
+    df_scans = df_scans.fillna(0)
+
+    # --- 4. ФІЛЬТРИ ---
     st.markdown("### 🔍 Фільтрація")
+    
+    # Визначаємо межі для календаря (по Київському часу)
+    now_kyiv = datetime.now(KYIV_TZ).date()
     
     if not df_scans.empty:
         min_date_avail = df_scans['created_at_dt'].min().date()
-        max_date_avail = df_scans['created_at_dt'].max().date()
+        # 🔥 FIX: Додаємо +1 день до макс дати, щоб "сьогоднішні" записи точно влазили, навіть якщо час близький до півночі
+        max_date_avail = max(df_scans['created_at_dt'].max().date(), now_kyiv) + timedelta(days=1)
     else:
-        min_date_avail = datetime.now().date()
-        max_date_avail = datetime.now().date()
+        min_date_avail = now_kyiv
+        max_date_avail = now_kyiv + timedelta(days=1)
 
-    c1, c2, c3 = st.columns([1, 1.2, 1.5])
+    c1, c2, c3, c4 = st.columns([1, 1.2, 1, 0.8])
     
     with c1:
         all_providers = df_scans['provider'].unique().tolist()
-        sel_providers = st.multiselect("Модель (LLM)", all_providers, default=all_providers)
+        # on_change=reset_page скидає на 1 сторінку при зміні фільтру
+        sel_providers = st.multiselect("Модель", all_providers, default=all_providers, on_change=reset_page)
     
     with c2:
+        # Default value: Останні 30 днів
+        default_start = now_kyiv - timedelta(days=30)
         sel_dates = st.date_input(
-            "Період сканування",
-            value=(min_date_avail, max_date_avail),
-            min_value=min_date_avail,
-            max_value=max_date_avail
+            "Період",
+            value=(default_start, now_kyiv),
+            min_value=min_date_avail - timedelta(days=365), # Дозволяємо гортати назад
+            max_value=max_date_avail # Дозволяємо вибрати "завтра" (технічно) щоб покрити часові пояси
         )
+        # При зміні дат теж треба скидати сторінку, але date_input не має on_change в старіших версіях, 
+        # тому просто перевіримо це нижче або залишимо як є (користувач сам перемкне).
         
     with c3:
-        sort_opts = [
-            "Найновіші спочатку", 
-            "Найстаріші спочатку", 
-            "Найбільше згадок бренду", 
-            "Найменше згадок бренду",
-            "Найбільше офіційних джерел",
-            "Найбільше знайдених брендів"
-        ]
-        sel_sort = st.selectbox("Сортування", sort_opts)
+        sort_opts = ["Найновіші", "Найстаріші", "Більше згадок", "Офіц. джерела"]
+        sel_sort = st.selectbox("Сортування", sort_opts, on_change=reset_page)
+
+    with c4:
+        # 🔥 ВИБІР КІЛЬКОСТІ РЯДКІВ
+        rows_per_page = st.selectbox("Рядків на стор.", [10, 20, 50, 100, 200], index=0, on_change=reset_page)
 
     # --- ЗАСТОСУВАННЯ ФІЛЬТРІВ ---
     mask = df_scans['provider'].isin(sel_providers)
@@ -3838,54 +3820,89 @@ def show_history_page():
         elif len(sel_dates) == 1:
             mask &= (df_scans['created_at_dt'].dt.date == sel_dates[0])
         
-    df_final = df_scans[mask].copy()
+    df_filtered = df_scans[mask].copy()
 
     # Сортування
-    if sel_sort == "Найновіші спочатку":
-        df_final = df_final.sort_values('created_at_dt', ascending=False)
-    elif sel_sort == "Найстаріші спочатку":
-        df_final = df_final.sort_values('created_at_dt', ascending=True)
-    elif sel_sort == "Найбільше згадок бренду":
-        df_final = df_final.sort_values('my_mentions_count', ascending=False)
-    elif sel_sort == "Найменше згадок бренду":
-        df_final = df_final.sort_values('my_mentions_count', ascending=True)
-    elif sel_sort == "Найбільше офіційних джерел":
-        df_final = df_final.sort_values('official_links', ascending=False)
-    elif sel_sort == "Найбільше знайдених брендів":
-        df_final = df_final.sort_values('total_brands', ascending=False)
+    if sel_sort == "Найновіші": df_filtered = df_filtered.sort_values('created_at_dt', ascending=False)
+    elif sel_sort == "Найстаріші": df_filtered = df_filtered.sort_values('created_at_dt', ascending=True)
+    elif sel_sort == "Більше згадок": df_filtered = df_filtered.sort_values('my_mentions_count', ascending=False)
+    elif sel_sort == "Офіц. джерела": df_filtered = df_filtered.sort_values('official_links', ascending=False)
 
-    # --- 5. ВІДОБРАЖЕННЯ ---
+    # --- 5. ПАГІНАЦІЯ (LOGIC) ---
+    total_rows = len(df_filtered)
+    total_pages = math.ceil(total_rows / rows_per_page)
+    
+    # Перевірка, щоб номер сторінки не вилетів за межі (наприклад, після фільтрації)
+    if st.session_state.history_page_number > total_pages:
+        st.session_state.history_page_number = max(1, total_pages)
+    
+    current_page = st.session_state.history_page_number
+    
+    start_idx = (current_page - 1) * rows_per_page
+    end_idx = start_idx + rows_per_page
+    
+    # Слайс даних для поточної сторінки
+    df_display_page = df_filtered.iloc[start_idx:end_idx].copy()
+
+    # --- 6. ВІДОБРАЖЕННЯ ТАБЛИЦІ ---
     st.divider()
     
-    st.markdown(f"**Знайдено записів:** {len(df_final)}")
+    # Кнопки навігації (Зверху таблиці)
+    p_col1, p_col2, p_col3 = st.columns([1, 2, 1])
     
-    cols_to_show = [
-        'created_at_dt', 'keyword', 'provider', 
-        'total_brands', 'total_links', 'my_mentions_count', 'official_links', 'initiator'
-    ]
-    
-    cols_to_show = [c for c in cols_to_show if c in df_final.columns]
-    
-    df_display = df_final[cols_to_show].copy()
-    
-    if 'created_at_dt' in df_display.columns:
-        df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
+    with p_col1:
+        if current_page > 1:
+            if st.button("⬅️ Попередня", key="hist_prev_top"):
+                st.session_state.history_page_number -= 1
+                st.rerun()
+
+    with p_col2:
+        st.markdown(f"<div style='text-align: center; padding-top: 5px;'>Сторінка <b>{current_page}</b> з <b>{total_pages}</b> (Всього: {total_rows})</div>", unsafe_allow_html=True)
+
+    with p_col3:
+        if current_page < total_pages:
+            if st.button("Наступна ➡️", key="hist_next_top"):
+                st.session_state.history_page_number += 1
+                st.rerun()
+
+    # Підготовка до виводу
+    if 'created_at_dt' in df_display_page.columns:
+        df_display_page['created_at_dt'] = df_display_page['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
+
+    cols_to_show = ['created_at_dt', 'keyword', 'provider', 'total_brands', 'total_links', 'my_mentions_count', 'official_links', 'initiator']
+    df_show = df_display_page[[c for c in cols_to_show if c in df_display_page.columns]]
 
     st.dataframe(
-        df_display,
+        df_show,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "created_at_dt": "Дата та Час",
+            "created_at_dt": "Дата (Kyiv)",
             "keyword": st.column_config.TextColumn("Запит", width="medium"),
             "provider": "LLM",
-            "total_brands": st.column_config.NumberColumn("Всього брендів", help="Унікальних брендів"),
-            "total_links": st.column_config.NumberColumn("Всього посилань", help="Всього знайдено"),
-            "my_mentions_count": st.column_config.NumberColumn("Згадок нас", help="Наш бренд"),
-            "official_links": st.column_config.NumberColumn("Офіц. джерела", help="Whitelist"),
-            "initiator": st.column_config.TextColumn("Ініціатор", help="Хто запустив аналіз")
+            "total_brands": st.column_config.NumberColumn("Бренди", help="Кількість знайдених конкурентів"),
+            "total_links": st.column_config.NumberColumn("Посилання", help="Всього джерел"),
+            "my_mentions_count": st.column_config.NumberColumn("Згадки", help="Згадки нашого бренду"),
+            "official_links": st.column_config.NumberColumn("Офіц.", help="Офіційні джерела"),
+            "initiator": "Ініціатор"
         }
     )
+
+    # Кнопки навігації (Знизу таблиці - дублюємо для зручності)
+    if total_rows > 10:
+        st.write("")
+        b_col1, b_col2, b_col3 = st.columns([1, 2, 1])
+        with b_col1:
+            if current_page > 1:
+                if st.button("⬅️ Попередня", key="hist_prev_btm"):
+                    st.session_state.history_page_number -= 1
+                    st.rerun()
+        with b_col3:
+            if current_page < total_pages:
+                if st.button("Наступна ➡️", key="hist_next_btm"):
+                    st.session_state.history_page_number += 1
+                    st.rerun()
+
 
 def sidebar_menu():
     """
