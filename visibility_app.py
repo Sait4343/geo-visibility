@@ -3789,7 +3789,7 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FIXED & FULL (Menu, User Profile, Support, Navigation) + BRANDFETCH LOGO.
+    ВЕРСІЯ: FIXED & FULL + BRANDFETCH SAFE LOGO + DASHBOARD REDIRECT FIX.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3802,7 +3802,6 @@ def sidebar_menu():
     user_email = user.email if user else "Користувач"
     proj_name = proj.get("brand_name", "No Project") if proj else "Оберіть проект"
     proj_id = proj.get("id", "") if proj else ""
-    # 🔥 НОВЕ: Отримуємо домен для логотипу
     proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
@@ -3822,44 +3821,38 @@ def sidebar_menu():
         
         st.write("") 
 
-# --- 🔥 ПОЧАТОК БЛОКУ BRANDFETCH (ОНОВЛЕНО) ---
+        # --- 🔥 БЛОК BRANDFETCH (ЛОГОТИП) ---
         logo_url = None
         backup_logo_url = None
 
         if proj and proj_domain:
-            # Чистимо домен
             clean_d = proj_domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
             if '/' in clean_d: clean_d = clean_d.split('/')[0]
             
-            # Формуємо посилання
             logo_url = f"https://cdn.brandfetch.io/{clean_d}"
             backup_logo_url = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128"
 
-        # Відображення Лого + Назва Проекту
         if proj and proj_name != "Оберіть проект":
             if logo_url:
                 col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
                 with col_brand_img:
-                    # 1. Формуємо HTML в окрему змінну (щоб код не був "синім")
-                    # 2. Додаємо onerror для завантаження Google Favicon, якщо Brandfetch впаде
+                    # Безпечний HTML для лого
                     img_html = f'<img src="{logo_url}" style="width: 45px; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
-                    
                     st.markdown(img_html, unsafe_allow_html=True)
                 
                 with col_brand_txt:
                     st.markdown(f"<div style='padding-top: 10px; font-weight: bold;'>{proj_name}</div>", unsafe_allow_html=True)
             else:
                 st.markdown(f"### 📁 {proj_name}")
-        # --- 🔥 КІНЕЦЬ БЛОКУ ---
+        # --- КІНЕЦЬ БЛОКУ ---
 
-        # 3. Вибір проекту / Налаштування (Трохи змінено логіку відображення)
-        # Оскільки назву ми вивели вище з логотипом, тут робимо кнопку "Налаштування" або лишаємо як було
+        # 3. Вибір проекту
         expander_label = "⚙️ Налаштування проекту" if (proj and logo_url) else f"📁 {proj_name}"
         
         with st.expander(expander_label, expanded=False):
             if proj:
                 st.caption(f"ID: {proj_id}")
-                st.caption(f"Domain: {proj_domain}") # Корисно бачити домен
+                st.caption(f"Domain: {proj_domain}")
             
             if st.button("🔄 Змінити проект", use_container_width=True):
                 st.session_state["current_project"] = None
@@ -3892,32 +3885,29 @@ def sidebar_menu():
             "robot"
         ]
 
-         if st.session_state.get("role") in ["admin", "super_admin"]:
+        # Додаємо адмінку (ТУТ БУЛА ПОМИЛКА ВІДСТУПУ - ТЕПЕР ВИПРАВЛЕНО)
+        if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
 
-        # --- 🔥 ЛОГІКА АВТОМАТИЧНОГО ПЕРЕКЛЮЧЕННЯ (НОВЕ) ---
-        # 1. Перевіряємо, чи є команда на перехід (force_redirect_to)
+        # --- 🔥 ЛОГІКА АВТО-ПЕРЕХОДУ (REDIRECT) ---
         default_idx = 0
         redirect_target = st.session_state.get("force_redirect_to")
         
-        # Якщо ціль є в списку опцій, знаходимо її індекс
         if redirect_target and redirect_target in options:
             default_idx = options.index(redirect_target)
-            # Очищаємо змінну, щоб перехід спрацював лише один раз
-            del st.session_state["force_redirect_to"]
+            del st.session_state["force_redirect_to"] # Очищаємо після використання
         
-        # 2. Отримуємо лічильник оновлень для генерації унікального ключа
+        # Динамічний ключ для оновлення меню
         menu_refresh_id = st.session_state.get("menu_id_counter", 0)
-        # -------------------------------------------------------
 
         selected = option_menu(
             "Меню",
             options,
             icons=icons,
             menu_icon="cast",
-            default_index=default_idx, # 🔥 Використовуємо розрахований індекс
-            key=f"main_menu_nav_{menu_refresh_id}", # 🔥 ДИНАМІЧНИЙ КЛЮЧ (щоб меню перемалювалось)
+            default_index=default_idx,
+            key=f"main_menu_nav_{menu_refresh_id}", 
             styles={
                 "container": {"padding": "0!important", "background-color": "transparent"},
                 "icon": {"color": "grey", "font-size": "16px"}, 
@@ -3951,8 +3941,6 @@ def sidebar_menu():
                 st.rerun()
 
     return selected
-
-
 
 def show_auth_page():
     """
