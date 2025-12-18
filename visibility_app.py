@@ -10,7 +10,7 @@ from streamlit_option_menu import option_menu
 from supabase import create_client, Client
 import numpy as np # Потрібно для адмінки
 import json
-
+import uuid
 
 # =========================
 # 1. CONFIGURATION
@@ -2421,8 +2421,8 @@ def show_keyword_details(kw_id):
                             fig_brands,
                             use_container_width=True,
                             config={'displayModeBar': False},
-                            # Беремо ID з сесії, бо змінної keyword_id тут немає
-                            key=f"brands_chart_{st.session_state.get('focus_keyword_id', 'unique_default')}"
+                # uuid.uuid4() генерує унікальний набір символів, тому дублікатів не буде ніколи
+                            key=f"brands_chart_{st.session_state.get('focus_keyword_id', 'def')}_{str(uuid.uuid4())[:8]}"
                         )
                     with c_table:
                         st.dataframe(
@@ -2480,8 +2480,7 @@ def show_keyword_details(kw_id):
                                 fig_src, 
                                 use_container_width=True, 
                                 config={'displayModeBar': False},
-                                # Використовуємо глобальний ID + суфікс "src", щоб ключі не співпадали з брендами
-                                key=f"sources_chart_{st.session_state.get('focus_keyword_id', 'unique_src')}"
+                                key=f"src_chart_{st.session_state.get('focus_keyword_id', 'def')}_{str(uuid.uuid4())[:8]}"
                             )
 
 # --- ПРАВА КОЛОНКА: ТАБЛИЦЯ ---
