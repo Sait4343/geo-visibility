@@ -3830,7 +3830,7 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FIXED & FULL + DOMAIN SUBTITLE + 20PX GAP.
+    ВЕРСІЯ: FIXED & FULL + USER PROFILE UPDATE (Name + Email, No Icon).
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3838,9 +3838,21 @@ def sidebar_menu():
     # Отримуємо дані з сесії
     proj = st.session_state.get("current_project")
     user = st.session_state.get("user")
+    user_details = st.session_state.get("user_details", {}) # Отримуємо деталі профілю
     
-    # Дані для відображення
-    user_email = user.email if user else "Користувач"
+    # Дані користувача
+    user_email = user.email if user else "guest@virshi.ai"
+    
+    # Формуємо повне ім'я
+    first_name = user_details.get("first_name", "")
+    last_name = user_details.get("last_name", "")
+    full_name = f"{first_name} {last_name}".strip()
+    
+    # Якщо імені немає, пишемо заглушку або частину мейлу
+    if not full_name:
+        full_name = "Користувач"
+
+    # Дані проекту
     proj_name = proj.get("brand_name", "No Project") if proj else "Оберіть проект"
     proj_id = proj.get("id", "") if proj else ""
     proj_domain = proj.get("domain", "") if proj else ""
@@ -3851,14 +3863,13 @@ def sidebar_menu():
         
         st.divider()
 
-        # 2. Профіль користувача
+        # 2. Профіль користувача (ОНОВЛЕНО)
         with st.container():
-            c1, c2 = st.columns([0.2, 0.8])
-            with c1:
-                st.markdown("👤") 
-            with c2:
-                st.caption("Ви увійшли як:")
-                st.markdown(f"**{user_email}**")
+            st.caption("Ви увійшли як:")
+            # Ім'я та Прізвище
+            st.markdown(f"**{full_name}**")
+            # Email нижче
+            st.caption(user_email)
         
         st.write("") 
 
@@ -3868,7 +3879,6 @@ def sidebar_menu():
         clean_d = None
 
         if proj and proj_domain:
-            # Нормалізація домену (використовуємо і для Brandfetch, і для відображення)
             clean_d = proj_domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
             if '/' in clean_d: clean_d = clean_d.split('/')[0]
             
@@ -3879,12 +3889,10 @@ def sidebar_menu():
             if logo_url:
                 col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
                 with col_brand_img:
-                    # Логотип
                     img_html = f'<img src="{logo_url}" style="width: 45px; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
                     st.markdown(img_html, unsafe_allow_html=True)
                 
                 with col_brand_txt:
-                    # 🔥 Назва + Домен знизу
                     html_content = f"""
                     <div style='line-height: 1.2;'>
                         <div style='font-weight: bold; font-size: 16px;'>{proj_name}</div>
@@ -3897,10 +3905,10 @@ def sidebar_menu():
                 if clean_d:
                     st.caption(clean_d)
 
-        # 🔥 ВІДСТУП 20PX перед меню
+        # Відступ перед меню
         st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
-        # 4. Навігаційне меню (ОПЦІЇ)
+        # 4. Навігаційне меню
         options = [
             "Дашборд", 
             "Перелік запитів", 
@@ -3925,12 +3933,11 @@ def sidebar_menu():
             "robot"
         ]
 
-        # Додаємо пункт "Адмін", якщо є права
         if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
 
-        # --- ЛОГІКА ПЕРЕХОДУ З АДМІНКИ ---
+        # Логіка авто-переходу
         default_idx = 0
         redirect_target = st.session_state.get("force_redirect_to")
         
@@ -3967,9 +3974,7 @@ def sidebar_menu():
             status = proj.get("status", "trial").upper()
             color = "orange" if status == "TRIAL" else "green" if status == "ACTIVE" else "red"
             
-            # Статус
             st.markdown(f"Статус: **:{color}[{status}]**")
-            # ID Проекту
             st.caption(f"ID: `{proj_id}`")
             
             if st.session_state.get("is_impersonating"):
