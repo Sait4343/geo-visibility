@@ -3830,7 +3830,9 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FINAL (20px gap in user profile).
+    ВЕРСІЯ: HTML LAYOUT UPDATE.
+    1. Профіль: HTML-верстка для однакових відступів.
+    2. Проект: Додано лейбл "ПРОЕКТ" + компактне відображення 3-х рядків.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3847,9 +3849,7 @@ def sidebar_menu():
     first_name = user_details.get("first_name", "")
     last_name = user_details.get("last_name", "")
     full_name = f"{first_name} {last_name}".strip()
-    
-    if not full_name:
-        full_name = "Користувач"
+    if not full_name: full_name = "Користувач"
 
     # Дані проекту
     proj_name = proj.get("brand_name", "No Project") if proj else "Оберіть проект"
@@ -3862,21 +3862,19 @@ def sidebar_menu():
         
         st.divider()
 
-        # 2. Профіль користувача
-        with st.container():
-            st.caption("Ви увійшли як:")
-            
-            # 🔥 ВІДСТУП 20PX
-            st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
-            
-            # Ім'я та Прізвище
-            st.markdown(f"**{full_name}**")
-            # Email нижче
-            st.caption(user_email)
+        # 2. Профіль користувача (HTML VERSTKA для ідеальних відступів)
+        # Використовуємо колір #31333F (стандартний чорний Streamlit) і rgba для сірого
+        st.markdown(f"""
+        <div style='line-height: 1.2; margin-bottom: 10px;'>
+            <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви увійшли як:</div>
+            <div style='font-weight: 600; font-size: 14px; color: #31333F;'>{full_name}</div>
+            <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6);'>{user_email}</div>
+        </div>
+        """, unsafe_allow_html=True)
         
         st.write("") 
 
-        # --- БЛОК BRANDFETCH ---
+        # --- БЛОК BRANDFETCH (ЛОГОТИП ПРОЕКТУ) ---
         logo_url = None
         backup_logo_url = None
         clean_d = None
@@ -3892,21 +3890,24 @@ def sidebar_menu():
             if logo_url:
                 col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
                 with col_brand_img:
-                    img_html = f'<img src="{logo_url}" style="width: 45px; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
+                    # Логотип (висота 45px)
+                    img_html = f'<img src="{logo_url}" style="width: 45px; height: 45px; object-fit: contain; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
                     st.markdown(img_html, unsafe_allow_html=True)
                 
                 with col_brand_txt:
+                    # 🔥 3 РЯДКИ: ПРОЕКТ / НАЗВА / ДОМЕН
+                    # line-height 1.1 дозволяє вмістити це компактно
                     html_content = f"""
-                    <div style='line-height: 1.2;'>
-                        <div style='font-weight: bold; font-size: 16px;'>{proj_name}</div>
-                        <div style='font-size: 12px; color: #888;'>{clean_d if clean_d else ''}</div>
+                    <div style='line-height: 1.15; display: flex; flex-direction: column; justify-content: center; height: 48px;'>
+                        <div style='font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;'>Проект</div>
+                        <div style='font-weight: bold; font-size: 14px; color: #31333F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{proj_name}</div>
+                        <div style='font-size: 11px; color: #888;'>{clean_d if clean_d else ''}</div>
                     </div>
                     """
                     st.markdown(html_content, unsafe_allow_html=True)
             else:
                 st.markdown(f"### 📁 {proj_name}")
-                if clean_d:
-                    st.caption(clean_d)
+                if clean_d: st.caption(clean_d)
 
         # Відступ перед меню
         st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
@@ -3940,7 +3941,7 @@ def sidebar_menu():
             options.append("Адмін")
             icons.append("shield-lock")
 
-        # Логіка переходу
+        # Логіка авто-переходу
         default_idx = 0
         redirect_target = st.session_state.get("force_redirect_to")
         
