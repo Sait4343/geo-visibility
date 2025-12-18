@@ -3902,6 +3902,7 @@ def sidebar_menu():
             icons=icons,
             menu_icon="cast",
             default_index=0,
+            key="main_menu_nav",  # 🔥 ВАЖЛИВО: Додайте цей рядок!
             styles={
                 "container": {"padding": "0!important", "background-color": "transparent"},
                 "icon": {"color": "grey", "font-size": "16px"}, 
@@ -4343,8 +4344,13 @@ def show_admin_page():
                 
                 with c_dash:
                     if st.button("↗️", key=f"goto_{p_id}", help="Відкрити дашборд"):
+                        # 1. Встановлюємо активний проект
                         st.session_state["current_project"] = p
-                        st.session_state["selected_page"] = "Дашборд"
+                        
+                        # 2. 🔥 ПРИМУСОВО перемикаємо меню на "Дашборд" через ключ
+                        st.session_state["main_menu_nav"] = "Дашборд"
+                        
+                        # 3. Скидаємо фокус (якщо треба) і перезавантажуємо
                         st.session_state["focus_keyword_id"] = None
                         st.rerun()
 
