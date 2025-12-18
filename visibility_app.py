@@ -2421,7 +2421,8 @@ def show_keyword_details(kw_id):
                             fig_brands,
                             use_container_width=True,
                             config={'displayModeBar': False},
-                            key=f"brands_chart_{keyword_id}"  # Унікальний ключ
+                            # Беремо ID з сесії, бо змінної keyword_id тут немає
+                            key=f"brands_chart_{st.session_state.get('focus_keyword_id', 'unique_default')}"
                         )
                     with c_table:
                         st.dataframe(
@@ -2475,13 +2476,12 @@ def show_keyword_details(kw_id):
                             )
                             fig_src.update_traces(textposition='inside', textinfo='percent', hovertemplate='<b>%{label}</b><br>Кількість: %{value}')
                             fig_src.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), height=200)
-                            
-                            # 🔥 ВИПРАВЛЕННЯ ТУТ: Додано параметр key
                             st.plotly_chart(
                                 fig_src, 
                                 use_container_width=True, 
                                 config={'displayModeBar': False},
-                                key=f"sources_chart_{selected_scan_id}"  # <--- Унікальний ключ
+                                # Використовуємо глобальний ID + суфікс "src", щоб ключі не співпадали з брендами
+                                key=f"sources_chart_{st.session_state.get('focus_keyword_id', 'unique_src')}"
                             )
 
 # --- ПРАВА КОЛОНКА: ТАБЛИЦЯ ---
