@@ -3830,8 +3830,7 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FIXED & FULL.
-    Виправлено зникнення меню.
+    ВЕРСІЯ: CLEANUP (No Settings/Change Button, ID added to footer).
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3885,19 +3884,8 @@ def sidebar_menu():
                     st.markdown(f"<div style='padding-top: 10px; font-weight: bold;'>{proj_name}</div>", unsafe_allow_html=True)
             else:
                 st.markdown(f"### 📁 {proj_name}")
-        # ----------------------------------------
-
-        # 3. Вибір проекту / Налаштування
-        expander_label = "⚙️ Налаштування проекту" if (proj and logo_url) else f"📁 {proj_name}"
         
-        with st.expander(expander_label, expanded=False):
-            if proj:
-                st.caption(f"ID: {proj_id}")
-                st.caption(f"Domain: {proj_domain}")
-            
-            if st.button("🔄 Змінити проект", use_container_width=True):
-                st.session_state["current_project"] = None
-                st.rerun()
+        # (Тут раніше були налаштування проекту - видалено)
 
         st.write("") 
 
@@ -3926,7 +3914,6 @@ def sidebar_menu():
             "robot"
         ]
 
-        # Додаємо пункт "Адмін", якщо є права
         if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
@@ -3941,8 +3928,6 @@ def sidebar_menu():
         
         menu_refresh_id = st.session_state.get("menu_id_counter", 0)
 
-        # 5. ВІДОБРАЖЕННЯ МЕНЮ (НАЙВАЖЛИВІШЕ)
-        # Цей код має бути на рівні з `with st.sidebar:`, але всередині нього (з відступом)
         selected = option_menu(
             "Меню",
             options,
@@ -3960,16 +3945,20 @@ def sidebar_menu():
         
         st.divider()
 
-        # 6. Сапорт
+        # 5. Сапорт
         st.caption("Потрібна допомога?")
         st.markdown("📧 **hi@virshi.ai**")
 
-        # 7. Статус та Вихід
+        # 6. Статус та Вихід
         if proj:
             st.write("")
             status = proj.get("status", "trial").upper()
             color = "orange" if status == "TRIAL" else "green" if status == "ACTIVE" else "red"
+            
+            # Статус
             st.markdown(f"Статус: **:{color}[{status}]**")
+            # 🔥 ID Проекту (Додано сюди)
+            st.caption(f"ID: `{proj_id}`")
             
             if st.session_state.get("is_impersonating"):
                 st.info("🕵️ Admin Mode")
