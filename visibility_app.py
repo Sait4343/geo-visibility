@@ -11,7 +11,7 @@ from supabase import create_client, Client
 import numpy as np # Потрібно для адмінки
 import json
 import uuid
-XlsxWriter
+import XlsxWriter
 # =========================
 # 1. CONFIGURATION
 # =========================
