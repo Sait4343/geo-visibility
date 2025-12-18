@@ -4222,8 +4222,8 @@ def show_admin_page():
             reverse_sort = True if sort_order == "Найновіші" else False
             filtered_projects.sort(key=lambda x: x.get('created_at', ''), reverse=reverse_sort)
 
-        # Header
-        h0, h1, h_dash, h2, h3, h_cnt, h4, h5 = st.columns([0.3, 2.2, 0.5, 1.5, 1.2, 0.8, 1, 0.5])
+        # Header (Трохи змінили пропорції колонок, щоб вмістити лого)
+        h0, h1, h_dash, h2, h3, h_cnt, h4, h5 = st.columns([0.3, 2.5, 0.4, 1.3, 1.2, 0.7, 0.9, 0.5])
         h0.markdown("**#**")
         h1.markdown("**Проект / Користувач**")
         h_dash.markdown("") 
@@ -4243,20 +4243,41 @@ def show_admin_page():
             
             raw_name = p.get('brand_name') or p.get('project_name')
             domain = p.get('domain', '')
+            
+            # Логіка очистки імені та домену
             if raw_name:
                 clean_name = str(raw_name).replace('*', '').strip()
             else:
                 clean_name = domain.replace('https://', '').replace('www.', '').split('/')[0] if domain else "Без назви"
 
+            # 🔥 НОВЕ: Логіка для логотипу Brandfetch
+            logo_url = None
+            if domain:
+                clean_d = domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
+                if '/' in clean_d: clean_d = clean_d.split('/')[0]
+                logo_url = f"https://cdn.brandfetch.io/{clean_d}"
+
             k_count = kw_counts.get(p_id, 0)
 
             with st.container():
-                c0, c1, c_dash, c2, c3, c_cnt, c4, c5 = st.columns([0.3, 2.2, 0.5, 1.5, 1.2, 0.8, 1, 0.5])
+                # Ті самі пропорції, що й у Header
+                c0, c1, c_dash, c2, c3, c_cnt, c4, c5 = st.columns([0.3, 2.5, 0.4, 1.3, 1.2, 0.7, 0.9, 0.5])
 
                 with c0: st.caption(f"{idx}")
 
                 with c1:
-                    st.markdown(f"**{clean_name}**")
+                    # 🔥 НОВЕ: Виводимо Лого + Текст у під-колонках
+                    if logo_url:
+                        sub_c1, sub_c2 = st.columns([0.15, 0.85])
+                        with sub_c1:
+                            # st.image ігнорує помилки завантаження, тому безпечно
+                            st.image(logo_url, width=30) 
+                        with sub_c2:
+                            st.markdown(f"**{clean_name}**")
+                    else:
+                        st.markdown(f"**{clean_name}**")
+                    
+                    # Решта інфо про проект
                     st.caption(f"ID: `{p_id}`")
                     if domain: st.caption(f"🌐 {domain}")
                     st.caption(f"👤 {owner_info['full_name']} | {owner_info['email']}")
@@ -4311,7 +4332,7 @@ def show_admin_page():
                             st.rerun()
                 
                 st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
-
+        
     # ========================================================
     # TAB 2: СТВОРИТИ ПРОЕКТ
     # ========================================================
