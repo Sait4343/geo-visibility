@@ -3830,7 +3830,7 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FIXED & FULL + USER PROFILE UPDATE (Name + Email, No Icon).
+    ВЕРСІЯ: FINAL (20px gap in user profile).
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3838,7 +3838,7 @@ def sidebar_menu():
     # Отримуємо дані з сесії
     proj = st.session_state.get("current_project")
     user = st.session_state.get("user")
-    user_details = st.session_state.get("user_details", {}) # Отримуємо деталі профілю
+    user_details = st.session_state.get("user_details", {}) 
     
     # Дані користувача
     user_email = user.email if user else "guest@virshi.ai"
@@ -3848,7 +3848,6 @@ def sidebar_menu():
     last_name = user_details.get("last_name", "")
     full_name = f"{first_name} {last_name}".strip()
     
-    # Якщо імені немає, пишемо заглушку або частину мейлу
     if not full_name:
         full_name = "Користувач"
 
@@ -3863,9 +3862,13 @@ def sidebar_menu():
         
         st.divider()
 
-        # 2. Профіль користувача (ОНОВЛЕНО)
+        # 2. Профіль користувача
         with st.container():
             st.caption("Ви увійшли як:")
+            
+            # 🔥 ВІДСТУП 20PX
+            st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+            
             # Ім'я та Прізвище
             st.markdown(f"**{full_name}**")
             # Email нижче
@@ -3873,7 +3876,7 @@ def sidebar_menu():
         
         st.write("") 
 
-        # --- БЛОК BRANDFETCH (ЛОГОТИП ПРОЕКТУ) ---
+        # --- БЛОК BRANDFETCH ---
         logo_url = None
         backup_logo_url = None
         clean_d = None
@@ -3937,7 +3940,7 @@ def sidebar_menu():
             options.append("Адмін")
             icons.append("shield-lock")
 
-        # Логіка авто-переходу
+        # Логіка переходу
         default_idx = 0
         redirect_target = st.session_state.get("force_redirect_to")
         
@@ -3989,6 +3992,7 @@ def sidebar_menu():
                 st.rerun()
 
     return selected
+
 
 def show_auth_page():
     """
