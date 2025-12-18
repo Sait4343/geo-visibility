@@ -3830,9 +3830,9 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: HTML LAYOUT UPDATE.
-    1. Профіль: HTML-верстка для однакових відступів.
-    2. Проект: Додано лейбл "ПРОЕКТ" + компактне відображення 3-х рядків.
+    ВЕРСІЯ: FINAL ADJUSTMENTS.
+    1. Текст: "Ви авторизовані як".
+    2. Шрифт імені: 16px.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3862,12 +3862,12 @@ def sidebar_menu():
         
         st.divider()
 
-        # 2. Профіль користувача (HTML VERSTKA для ідеальних відступів)
-        # Використовуємо колір #31333F (стандартний чорний Streamlit) і rgba для сірого
+        # 2. Профіль користувача
+        # Змінено текст та розмір шрифту імені (16px)
         st.markdown(f"""
         <div style='line-height: 1.2; margin-bottom: 10px;'>
-            <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви увійшли як:</div>
-            <div style='font-weight: 600; font-size: 14px; color: #31333F;'>{full_name}</div>
+            <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви авторизовані як:</div>
+            <div style='font-weight: 600; font-size: 16px; color: #31333F;'>{full_name}</div>
             <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6);'>{user_email}</div>
         </div>
         """, unsafe_allow_html=True)
@@ -3890,13 +3890,10 @@ def sidebar_menu():
             if logo_url:
                 col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
                 with col_brand_img:
-                    # Логотип (висота 45px)
                     img_html = f'<img src="{logo_url}" style="width: 45px; height: 45px; object-fit: contain; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
                     st.markdown(img_html, unsafe_allow_html=True)
                 
                 with col_brand_txt:
-                    # 🔥 3 РЯДКИ: ПРОЕКТ / НАЗВА / ДОМЕН
-                    # line-height 1.1 дозволяє вмістити це компактно
                     html_content = f"""
                     <div style='line-height: 1.15; display: flex; flex-direction: column; justify-content: center; height: 48px;'>
                         <div style='font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;'>Проект</div>
@@ -3941,7 +3938,6 @@ def sidebar_menu():
             options.append("Адмін")
             icons.append("shield-lock")
 
-        # Логіка авто-переходу
         default_idx = 0
         redirect_target = st.session_state.get("force_redirect_to")
         
