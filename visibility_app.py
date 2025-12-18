@@ -3830,10 +3830,8 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: PIXEL PERFECT v2.
-    1. Відступ зверху: 20px.
-    2. AI Visibility: 18px, Bold, Center.
-    3. Логотип: Центрований разом з текстом.
+    ВЕРСІЯ: NO TOP PADDING.
+    Логотип піднято максимально вгору (видалено стандартні відступи Streamlit).
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3858,19 +3856,30 @@ def sidebar_menu():
     proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
-        # 🔥 CSS FIX: Прибираємо стандартний padding сайдбару
+        # 🔥 CSS FIX: Агресивно прибираємо ВСІ верхні відступи сайдбару
         st.markdown("""
             <style>
-                [data-testid="stSidebarBody"] {
+                /* Прибираємо відступ у головного контейнера сайдбару */
+                section[data-testid="stSidebar"] .block-container {
+                    padding-top: 0rem !important;
+                    margin-top: -2rem !important; /* Тягнемо весь контент вгору */
+                }
+                /* Прибираємо відступ у заголовка сайдбару (якщо є) */
+                div[data-testid="stSidebarHeader"] {
+                    padding-bottom: 0rem !important;
+                    height: 0rem !important;
+                }
+                /* Додаткова страховка для UserContent */
+                div[data-testid="stSidebarUserContent"] {
                     padding-top: 0rem !important;
                 }
             </style>
         """, unsafe_allow_html=True)
 
-        # 🔥 ЛОГОТИП + ЗАГОЛОВОК (Відступи та Центрування)
-        # margin-top: 20px - відступ від верхнього краю
+        # 🔥 ЛОГОТИП + ЗАГОЛОВОК
+        # margin-top: 10px (мінімальний відступ від "стелі")
         st.markdown(f"""
-            <div style="margin-top: 20px; margin-bottom: 20px; text-align: center;">
+            <div style="margin-top: 10px; margin-bottom: 20px; text-align: center;">
                 <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160" style="display: inline-block;">
                 <div style="margin-top: 5px; font-size: 18px; font-weight: bold; color: #333; letter-spacing: 0.5px;">AI Visibility</div>
             </div>
