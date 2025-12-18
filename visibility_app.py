@@ -2928,12 +2928,13 @@ def show_keywords_page():
         return
 
 # ========================================================
-    # 4. ПАНЕЛЬ УПРАВЛІННЯ (СОРТУВАННЯ)
+    # 4. ПАНЕЛЬ УПРАВЛІННЯ (СОРТУВАННЯ ТА МАСОВІ ДІЇ)
     # ========================================================
     c_sort, _ = st.columns([2, 4])
     with c_sort:
         sort_option = st.selectbox("Сортувати за:", ["Найновіші (Додані)", "Найстаріші (Додані)", "Нещодавно проскановані", "Давно не скановані"], label_visibility="collapsed")
 
+    # Логіка сортування
     if sort_option == "Найновіші (Додані)": keywords.sort(key=lambda x: x['created_at'], reverse=True)
     elif sort_option == "Найстаріші (Додані)": keywords.sort(key=lambda x: x['created_at'], reverse=False)
     elif sort_option == "Нещодавно проскановані": keywords.sort(key=lambda x: x['last_scan_date'], reverse=True)
@@ -2944,25 +2945,40 @@ def show_keywords_page():
         
         with c_check:
             st.write("") 
-            # 1. Чекбокс "Всі"
+            # 1. Чекбокс "Всі" з розумною логікою
+            # Ініціалізуємо попередній стан, щоб реагувати тільки на клік
+            if "prev_select_all" not in st.session_state:
+                st.session_state["prev_select_all"] = False
+
             select_all = st.checkbox("Всі", key="select_all_kws")
             
-            # Логіка: Якщо "Всі" натиснуто -> проставляємо True всім індивідуальним чекбоксам у сесії
-            if select_all:
+            # 🔥 FIX: Оновлюємо рядки ТІЛЬКИ якщо змінився стан "Всі"
+            if select_all != st.session_state["prev_select_all"]:
+                # Якщо клікнули "Всі" -> ставимо True/False всім рядкам
                 for idx, k in enumerate(keywords, start=1):
-                    st.session_state[f"chk_{k['id']}_{idx}"] = True
+                    st.session_state[f"chk_{k['id']}_{idx}"] = select_all
+                # Запам'ятовуємо новий стан
+                st.session_state["prev_select_all"] = select_all
         
         with c_models:
             # 2. Всі моделі обрані за замовчуванням
-            bulk_models = st.multiselect("ЛЛМ для запуску:", list(MODEL_MAPPING.keys()), default=list(MODEL_MAPPING.keys()), label_visibility="collapsed", key="bulk_models_main")
+            # 🔥 FIX: Змінив ключ на _v2, щоб скинути старе значення "Perplexity"
+            all_models = list(MODEL_MAPPING.keys())
+            bulk_models = st.multiselect(
+                "ЛЛМ для запуску:", 
+                all_models, 
+                default=all_models, 
+                label_visibility="collapsed", 
+                key="bulk_models_main_v2"
+            )
         
         with c_btn:
             if st.button("🚀 Аналізувати обрані", use_container_width=True, type="primary"):
                 selected_kws_text = []
                 
-                # 3. Збираємо список на основі індивідуальних чекбоксів
+                # 3. Збираємо список, перевіряючи актуальний стан кожного чекбокса
                 for idx, k in enumerate(keywords, start=1):
-                    # Перевіряємо, чи стоїть галочка у конкретного запиту
+                    # Перевіряємо Session State конкретного рядка
                     if st.session_state.get(f"chk_{k['id']}_{idx}", False):
                         selected_kws_text.append(k['keyword_text'])
                 
@@ -2973,6 +2989,7 @@ def show_keywords_page():
                         if 'n8n_trigger_analysis' in globals():
                             for i, single_kw in enumerate(selected_kws_text):
                                 my_bar.progress((i / total_kws), text=f"Відправка: {single_kw}...")
+                                # Використовуємо bulk_models, де тепер обрано все
                                 n8n_trigger_analysis(proj["id"], [single_kw], proj.get("brand_name"), models=bulk_models)
                                 time.sleep(0.3)
                             my_bar.progress(1.0, text="Готово!")
@@ -2990,7 +3007,7 @@ def show_keywords_page():
     # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ)
     # ========================================================
     
-    # ВІДСТУП ТУТ МАЄ БУТИ ТАКИЙ САМИЙ, ЯК У "with st.container..." ВИЩЕ (4 пробіли)
+    # Відступи вирівняні
     h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
     h_txt.markdown("**Запит**")
     h_cron.markdown("**Автозапуск**")
@@ -3006,11 +3023,17 @@ def show_keywords_page():
             
             with c1:
                 st.write("") 
-                # Ключ для збереження стану
+                # Ключ для чекбокса
                 chk_key = f"chk_{k['id']}_{idx}"
-                # Читаємо стан із сесії (який міг бути змінений кнопкою "Всі")
-                is_checked = st.session_state.get(chk_key, False)
-                # Відображаємо чекбокс
+                
+                # 🔥 FIX: Ініціалізуємо False, якщо ключа ще немає
+                if chk_key not in st.session_state:
+                    st.session_state[chk_key] = False
+                
+                # Читаємо значення. Тут немає "value=select_all", тому воно не перезаписується
+                is_checked = st.session_state[chk_key]
+                
+                # Віджет просто відображає і змінює стан у session_state
                 st.checkbox("", key=chk_key, value=is_checked)
             
             with c2:
@@ -3081,6 +3104,7 @@ def show_keywords_page():
                     if dc2.button("❌", key=f"no_del_{k['id']}_{idx}"):
                         st.session_state[del_key] = False
                         st.rerun()
+
 
 # =========================
 # 9. SIDEBAR
