@@ -3830,10 +3830,10 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: PIXEL PERFECT LAYOUT.
-    1. Логотип: 35px від верху.
-    2. Підпис: AI Visibility.
-    3. Відступи: 20px до лінії, 15px після лінії.
+    ВЕРСІЯ: PIXEL PERFECT v2.
+    1. Відступ зверху: 20px.
+    2. AI Visibility: 18px, Bold, Center.
+    3. Логотип: Центрований разом з текстом.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3858,7 +3858,7 @@ def sidebar_menu():
     proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
-        # 🔥 CSS FIX: Прибираємо стандартний padding сайдбару, щоб контролювати його вручну
+        # 🔥 CSS FIX: Прибираємо стандартний padding сайдбару
         st.markdown("""
             <style>
                 [data-testid="stSidebarBody"] {
@@ -3867,11 +3867,12 @@ def sidebar_menu():
             </style>
         """, unsafe_allow_html=True)
 
-        # 🔥 ЛОГОТИП + ПІДПИС + ЛІНІЯ (HTML верстка для точних відступів)
+        # 🔥 ЛОГОТИП + ЗАГОЛОВОК (Відступи та Центрування)
+        # margin-top: 20px - відступ від верхнього краю
         st.markdown(f"""
-            <div style="margin-top: 35px; margin-bottom: 20px;">
-                <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160">
-                <div style="margin-top: 5px; font-size: 13px; font-weight: 600; color: #555; letter-spacing: 0.5px;">AI Visibility</div>
+            <div style="margin-top: 20px; margin-bottom: 20px; text-align: center;">
+                <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160" style="display: inline-block;">
+                <div style="margin-top: 5px; font-size: 18px; font-weight: bold; color: #333; letter-spacing: 0.5px;">AI Visibility</div>
             </div>
             
             <div style="border-top: 1px solid #E0E0E0; margin-bottom: 15px;"></div>
