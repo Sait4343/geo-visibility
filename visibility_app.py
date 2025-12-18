@@ -3009,102 +3009,129 @@ def show_keywords_page():
                 else:
                     st.warning("Оберіть хоча б один запит.")
 
-    # ========================================================
-    # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ)
+  # ========================================================
+    # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ З АВТО-ОНОВЛЕННЯМ)
     # ========================================================
     
-    h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
-    h_txt.markdown("**Запит**")
-    h_cron.markdown("**Автозапуск**")
-    h_date.markdown("**Останній аналіз**")
-    h_act.markdown("**Видалити**")
-
-    allow_cron_global = proj.get('allow_cron', False)
-    update_suffix = st.session_state["bulk_update_counter"]
-
-    for idx, k in enumerate(keywords, start=1):
-        with st.container(border=True):
-            c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
+    # Ми обгортаємо таблицю у функцію з декоратором @st.fragment
+    # run_every=5 змушує ЦЮ частину коду перезапускатись кожні 5 секунд
+    @st.fragment(run_every=5)
+    def render_live_table(base_keywords, proj_data, update_suffix):
+        # 1. ОТРИМУЄМО СВІЖІ ДАТИ (LIVE DATA FETCH)
+        # Ми робимо запит тільки за датами сканування, щоб оновити статус
+        try:
+            # Отримуємо свіжі дані сканування
+            fresh_scans = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj_data["id"]).order("created_at", desc=True).execute()
             
-            with c1:
-                st.write("") 
-                chk_key = f"chk_{k['id']}_{idx}"
+            fresh_map = {}
+            if fresh_scans.data:
+                for s in fresh_scans.data:
+                    if s['keyword_id'] not in fresh_map:
+                        fresh_map[s['keyword_id']] = s['created_at']
+            
+            # Оновлюємо дати у переданому списку keywords
+            for k in base_keywords:
+                k['last_scan_date'] = fresh_map.get(k['id'], "1970-01-01T00:00:00+00:00")
                 
-                # Ініціалізація ключа, якщо його немає
-                if chk_key not in st.session_state:
-                    st.session_state[chk_key] = False
+        except Exception:
+            pass # Якщо помилка мережі, просто показуємо старі дані
+            
+        # 2. ВІДОБРАЖЕННЯ (Рендеринг таблиці)
+        h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
+        h_txt.markdown("**Запит**")
+        h_cron.markdown("**Автозапуск**")
+        h_date.markdown("**Останній аналіз**")
+        h_act.markdown("**Видалити**")
+
+        allow_cron_global = proj_data.get('allow_cron', False)
+
+        for idx, k in enumerate(base_keywords, start=1):
+            with st.container(border=True):
+                c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
                 
-                # Чекбокс із прив'язкою до callback 'update_parent'
-                st.checkbox("", key=chk_key, on_change=update_parent)
-            
-            with c2:
-                st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
-            
-            with c3:
-                if st.button(k['keyword_text'], key=f"link_btn_{k['id']}_{idx}", help="Натисніть для детального аналізу"):
-                    st.session_state["focus_keyword_id"] = k["id"]
-                    st.rerun()
-            
-            with c4:
-                cron_c1, cron_c2 = st.columns([0.8, 1.2])
-                is_auto_db = k.get('is_auto_scan', False) 
-                new_auto = is_auto_db
-
-                with cron_c1:
-                    if allow_cron_global:
-                        toggle_key = f"auto_{k['id']}_{idx}_{update_suffix}"
-                        new_auto = st.toggle("Авто", value=is_auto_db, key=toggle_key, label_visibility="collapsed")
-                        if new_auto != is_auto_db:
-                            update_kw_field(k['id'], "is_auto_scan", new_auto)
-                            st.rerun()
-                    else:
-                        st.toggle("Авто", value=False, key=f"auto_{k['id']}_{idx}_disabled", label_visibility="collapsed", disabled=True)
-                        st.caption("🔒 Admin")
-
-                with cron_c2:
-                    if new_auto and allow_cron_global:
-                        current_freq = k.get('frequency', 'daily')
-                        freq_options = ["daily", "weekly", "monthly"]
-                        try: idx_f = freq_options.index(current_freq)
-                        except: idx_f = 0
-                        freq_key = f"freq_{k['id']}_{idx}_{update_suffix}"
-                        new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=freq_key, label_visibility="collapsed")
-                        if new_freq != current_freq:
-                            update_kw_field(k['id'], "frequency", new_freq)
-                    else:
-                        st.write("")
-            
-            with c5:
-                st.write("")
-                date_iso = k.get('last_scan_date')
-                formatted_date = format_kyiv_time(date_iso)
-                st.caption(f"{formatted_date}")
-            
-            with c6:
-                st.write("")
-                del_key = f"confirm_del_kw_{k['id']}_{idx}"
-                if del_key not in st.session_state: st.session_state[del_key] = False
-
-                if not st.session_state[del_key]:
-                    if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}_{idx}"):
-                        st.session_state[del_key] = True
+                with c1:
+                    st.write("") 
+                    chk_key = f"chk_{k['id']}_{idx}"
+                    if chk_key not in st.session_state: st.session_state[chk_key] = False
+                    # on_change викликає зовнішню функцію update_parent, яка має бути доступна
+                    st.checkbox("", key=chk_key, on_change=update_parent)
+                
+                with c2:
+                    st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
+                
+                with c3:
+                    # Кнопка переходу на деталі
+                    if st.button(k['keyword_text'], key=f"link_btn_{k['id']}_{idx}", help="Натисніть для детального аналізу"):
+                        st.session_state["focus_keyword_id"] = k["id"]
                         st.rerun()
-                else:
-                    dc1, dc2 = st.columns(2)
-                    if dc1.button("✅", key=f"yes_del_{k['id']}_{idx}", type="primary"):
-                        try:
-                            supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
-                            supabase.table("keywords").delete().eq("id", k["id"]).execute()
-                            st.success("!")
+                
+                with c4:
+                    cron_c1, cron_c2 = st.columns([0.8, 1.2])
+                    is_auto_db = k.get('is_auto_scan', False) 
+                    new_auto = is_auto_db
+
+                    with cron_c1:
+                        if allow_cron_global:
+                            toggle_key = f"auto_{k['id']}_{idx}_{update_suffix}"
+                            new_auto = st.toggle("Авто", value=is_auto_db, key=toggle_key, label_visibility="collapsed")
+                            if new_auto != is_auto_db:
+                                update_kw_field(k['id'], "is_auto_scan", new_auto)
+                                # Тут ми не робимо st.rerun(), щоб не перезавантажувати всю сторінку, 
+                                # фрагмент оновиться сам або при наступному тіку
+                        else:
+                            st.toggle("Авто", value=False, key=f"auto_{k['id']}_{idx}_disabled", label_visibility="collapsed", disabled=True)
+                            st.caption("🔒 Admin")
+
+                    with cron_c2:
+                        if new_auto and allow_cron_global:
+                            current_freq = k.get('frequency', 'daily')
+                            freq_options = ["daily", "weekly", "monthly"]
+                            try: idx_f = freq_options.index(current_freq)
+                            except: idx_f = 0
+                            freq_key = f"freq_{k['id']}_{idx}_{update_suffix}"
+                            new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=freq_key, label_visibility="collapsed")
+                            if new_freq != current_freq:
+                                update_kw_field(k['id'], "frequency", new_freq)
+                        else:
+                            st.write("")
+                
+                with c5:
+                    st.write("")
+                    # Тут відображається дата, яка тепер оновлюється автоматично
+                    date_iso = k.get('last_scan_date')
+                    formatted_date = format_kyiv_time(date_iso)
+                    st.caption(f"{formatted_date}")
+                
+                with c6:
+                    st.write("")
+                    del_key = f"confirm_del_kw_{k['id']}_{idx}"
+                    if del_key not in st.session_state: st.session_state[del_key] = False
+
+                    if not st.session_state[del_key]:
+                        if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}_{idx}"):
+                            st.session_state[del_key] = True
+                            st.rerun() # Для видалення потрібен повний реран, щоб оновити список
+                    else:
+                        dc1, dc2 = st.columns(2)
+                        if dc1.button("✅", key=f"yes_del_{k['id']}_{idx}", type="primary"):
+                            try:
+                                supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
+                                supabase.table("keywords").delete().eq("id", k["id"]).execute()
+                                st.success("!")
+                                st.session_state[del_key] = False
+                                time.sleep(0.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Помилка")
+                        
+                        if dc2.button("❌", key=f"no_del_{k['id']}_{idx}"):
                             st.session_state[del_key] = False
-                            time.sleep(0.5)
                             st.rerun()
-                        except Exception as e:
-                            st.error("Помилка")
-                    
-                    if dc2.button("❌", key=f"no_del_{k['id']}_{idx}"):
-                        st.session_state[del_key] = False
-                        st.rerun()
+
+    # ВІКЛИК ФУНКЦІЇ-ФРАГМЕНТА
+    # Ми передаємо їй поточний список (відсортований) і дані проекту
+    render_live_table(keywords, proj, update_suffix)
+
 
 # =========================
 # 9. SIDEBAR
