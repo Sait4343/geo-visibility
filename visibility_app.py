@@ -3009,34 +3009,32 @@ def show_keywords_page():
                 else:
                     st.warning("Оберіть хоча б один запит.")
 
-  # ========================================================
+# ========================================================
     # 5. СПИСОК ЗАПИТІВ (ТАБЛИЦЯ З АВТО-ОНОВЛЕННЯМ)
     # ========================================================
     
-    # Ми обгортаємо таблицю у функцію з декоратором @st.fragment
-    # run_every=5 змушує ЦЮ частину коду перезапускатись кожні 5 секунд
+    # 🔥 ВИПРАВЛЕННЯ ПОМИЛКИ: Оголошуємо змінну перед використанням
+    update_suffix = st.session_state.get("bulk_update_counter", 0)
+
+    # Функція-фрагмент, яка оновлюється кожні 5 секунд
     @st.fragment(run_every=5)
-    def render_live_table(base_keywords, proj_data, update_suffix):
-        # 1. ОТРИМУЄМО СВІЖІ ДАТИ (LIVE DATA FETCH)
-        # Ми робимо запит тільки за датами сканування, щоб оновити статус
+    def render_live_table(base_keywords, proj_data, suffix_val):
+        # 1. LIVE DATA: Отримуємо свіжі дати сканування
         try:
-            # Отримуємо свіжі дані сканування
             fresh_scans = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj_data["id"]).order("created_at", desc=True).execute()
-            
             fresh_map = {}
             if fresh_scans.data:
                 for s in fresh_scans.data:
                     if s['keyword_id'] not in fresh_map:
                         fresh_map[s['keyword_id']] = s['created_at']
             
-            # Оновлюємо дати у переданому списку keywords
+            # Оновлюємо дати у локальному списку
             for k in base_keywords:
                 k['last_scan_date'] = fresh_map.get(k['id'], "1970-01-01T00:00:00+00:00")
-                
         except Exception:
-            pass # Якщо помилка мережі, просто показуємо старі дані
-            
-        # 2. ВІДОБРАЖЕННЯ (Рендеринг таблиці)
+            pass 
+
+        # 2. ВІДОБРАЖЕННЯ ТАБЛИЦІ
         h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
         h_txt.markdown("**Запит**")
         h_cron.markdown("**Автозапуск**")
@@ -3052,15 +3050,15 @@ def show_keywords_page():
                 with c1:
                     st.write("") 
                     chk_key = f"chk_{k['id']}_{idx}"
+                    # Ініціалізація стану чекбокса
                     if chk_key not in st.session_state: st.session_state[chk_key] = False
-                    # on_change викликає зовнішню функцію update_parent, яка має бути доступна
+                    # Прив'язка до функції update_parent (з Розділу 4)
                     st.checkbox("", key=chk_key, on_change=update_parent)
                 
                 with c2:
                     st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
                 
                 with c3:
-                    # Кнопка переходу на деталі
                     if st.button(k['keyword_text'], key=f"link_btn_{k['id']}_{idx}", help="Натисніть для детального аналізу"):
                         st.session_state["focus_keyword_id"] = k["id"]
                         st.rerun()
@@ -3072,12 +3070,13 @@ def show_keywords_page():
 
                     with cron_c1:
                         if allow_cron_global:
-                            toggle_key = f"auto_{k['id']}_{idx}_{update_suffix}"
+                            # Використовуємо suffix_val для унікальності ключів при масових оновленнях
+                            toggle_key = f"auto_{k['id']}_{idx}_{suffix_val}"
                             new_auto = st.toggle("Авто", value=is_auto_db, key=toggle_key, label_visibility="collapsed")
                             if new_auto != is_auto_db:
                                 update_kw_field(k['id'], "is_auto_scan", new_auto)
-                                # Тут ми не робимо st.rerun(), щоб не перезавантажувати всю сторінку, 
-                                # фрагмент оновиться сам або при наступному тіку
+                                # Не робимо st.rerun(), щоб не перезавантажувати всю сторінку. 
+                                # Стан оновиться при наступному циклі фрагмента.
                         else:
                             st.toggle("Авто", value=False, key=f"auto_{k['id']}_{idx}_disabled", label_visibility="collapsed", disabled=True)
                             st.caption("🔒 Admin")
@@ -3088,7 +3087,8 @@ def show_keywords_page():
                             freq_options = ["daily", "weekly", "monthly"]
                             try: idx_f = freq_options.index(current_freq)
                             except: idx_f = 0
-                            freq_key = f"freq_{k['id']}_{idx}_{update_suffix}"
+                            
+                            freq_key = f"freq_{k['id']}_{idx}_{suffix_val}"
                             new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=freq_key, label_visibility="collapsed")
                             if new_freq != current_freq:
                                 update_kw_field(k['id'], "frequency", new_freq)
@@ -3097,7 +3097,7 @@ def show_keywords_page():
                 
                 with c5:
                     st.write("")
-                    # Тут відображається дата, яка тепер оновлюється автоматично
+                    # Дата оновлюється автоматично кожні 5 сек
                     date_iso = k.get('last_scan_date')
                     formatted_date = format_kyiv_time(date_iso)
                     st.caption(f"{formatted_date}")
@@ -3110,7 +3110,7 @@ def show_keywords_page():
                     if not st.session_state[del_key]:
                         if st.button("🗑️ Видалити", key=f"pre_del_{k['id']}_{idx}"):
                             st.session_state[del_key] = True
-                            st.rerun() # Для видалення потрібен повний реран, щоб оновити список
+                            st.rerun()
                     else:
                         dc1, dc2 = st.columns(2)
                         if dc1.button("✅", key=f"yes_del_{k['id']}_{idx}", type="primary"):
@@ -3128,10 +3128,8 @@ def show_keywords_page():
                             st.session_state[del_key] = False
                             st.rerun()
 
-    # ВІКЛИК ФУНКЦІЇ-ФРАГМЕНТА
-    # Ми передаємо їй поточний список (відсортований) і дані проекту
+    # Запуск фрагмента
     render_live_table(keywords, proj, update_suffix)
-
 
 # =========================
 # 9. SIDEBAR
