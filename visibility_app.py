@@ -3892,17 +3892,32 @@ def sidebar_menu():
             "robot"
         ]
 
-        if st.session_state.get("role") in ["admin", "super_admin"]:
+         if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
+
+        # --- 🔥 ЛОГІКА АВТОМАТИЧНОГО ПЕРЕКЛЮЧЕННЯ (НОВЕ) ---
+        # 1. Перевіряємо, чи є команда на перехід (force_redirect_to)
+        default_idx = 0
+        redirect_target = st.session_state.get("force_redirect_to")
+        
+        # Якщо ціль є в списку опцій, знаходимо її індекс
+        if redirect_target and redirect_target in options:
+            default_idx = options.index(redirect_target)
+            # Очищаємо змінну, щоб перехід спрацював лише один раз
+            del st.session_state["force_redirect_to"]
+        
+        # 2. Отримуємо лічильник оновлень для генерації унікального ключа
+        menu_refresh_id = st.session_state.get("menu_id_counter", 0)
+        # -------------------------------------------------------
 
         selected = option_menu(
             "Меню",
             options,
             icons=icons,
             menu_icon="cast",
-            default_index=0,
-            key="main_menu_nav",  # 🔥 ВАЖЛИВО: Додайте цей рядок!
+            default_index=default_idx, # 🔥 Використовуємо розрахований індекс
+            key=f"main_menu_nav_{menu_refresh_id}", # 🔥 ДИНАМІЧНИЙ КЛЮЧ (щоб меню перемалювалось)
             styles={
                 "container": {"padding": "0!important", "background-color": "transparent"},
                 "icon": {"color": "grey", "font-size": "16px"}, 
@@ -4344,16 +4359,19 @@ def show_admin_page():
                 
                 with c_dash:
                     if st.button("↗️", key=f"goto_{p_id}", help="Відкрити дашборд"):
-                        # 1. Встановлюємо активний проект
+                        # 1. Встановлюємо проект
                         st.session_state["current_project"] = p
                         
-                        # 2. 🔥 ПРИМУСОВО перемикаємо меню на "Дашборд" через ключ
-                        st.session_state["main_menu_nav"] = "Дашборд"
+                        # 2. Встановлюємо ціль для меню
+                        st.session_state["force_redirect_to"] = "Дашборд"
                         
-                        # 3. Скидаємо фокус (якщо треба) і перезавантажуємо
+                        # 3. Змінюємо ID меню, щоб воно перемалювалось з новим default_index
+                        st.session_state["menu_id_counter"] = st.session_state.get("menu_id_counter", 0) + 1
+                        
+                        # 4. Скидаємо фокус
                         st.session_state["focus_keyword_id"] = None
                         st.rerun()
-
+                        
                 with c2:
                     curr_status = p.get('status', 'trial')
                     opts = ["trial", "active", "blocked"]
