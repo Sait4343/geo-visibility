@@ -3628,178 +3628,253 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ОНОВЛЕНО:
-    1. Колонка "Хто сканував" (ПІБ або "Автосканування").
-    2. Фільтр по датах (обмежений реальним діапазоном даних).
-    3. Вибір кількості рядків (10-100).
+    ВЕРСІЯ: USER TRACKING & DATE RANGE.
+    1. Ліміт 100 записів.
+    2. Колонка "Ініціатор" (Авто або ПІБ).
+    3. Фільтр дат (Range) на основі даних.
     """
-    import streamlit as st
     import pandas as pd
-    from datetime import datetime, date
-    import pytz
+    import streamlit as st
+    from datetime import datetime, timedelta, timezone 
 
-    # --- 0. ПІДКЛЮЧЕННЯ ---
-    if 'supabase' not in globals():
-        if 'supabase' in st.session_state:
-            supabase = st.session_state['supabase']
-        else:
-            st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
-            return
-    else:
+    # --- 1. ПІДКЛЮЧЕННЯ ---
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
         supabase = globals()['supabase']
+    else:
+        st.error("🚨 Помилка: Змінна 'supabase' не знайдена.")
+        return
 
     proj = st.session_state.get("current_project")
     if not proj:
-        st.info("Спочатку створіть проект.")
+        st.info("Спочатку оберіть проект.")
         return
 
-    st.title("🕒 Історія сканувань")
+    st.title("📜 Історія сканувань")
 
-    # --- 1. ЗАВАНТАЖЕННЯ ДАНИХ ---
-    try:
-        # A. Отримуємо історію сканувань
-        # Намагаємось дістати 'user_email' або 'user_id', якщо вони є в базі. 
-        # Якщо у вас колонка називається інакше (напр. created_by), змініть тут.
-        history_resp = supabase.table("scan_results")\
-            .select("id, created_at, keyword_id, provider, user_email")\
-            .eq("project_id", proj["id"])\
-            .order("created_at", desc=True)\
-            .execute()
+    # --- 2. ОТРИМАННЯ ДАНИХ ---
+    with st.spinner("Завантаження історії..."):
+        try:
+            # 1. Keywords
+            kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+            kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-        if not history_resp.data:
-            st.info("Історія порожня.")
+            # 2. Scans (Ліміт 100) + user_id
+            # 🔥 Додано user_id у select та змінено ліміт на 100
+            scans_resp = supabase.table("scan_results")\
+                .select("id, created_at, provider, keyword_id, user_id")\
+                .eq("project_id", proj["id"])\
+                .order("created_at", desc=True)\
+                .limit(100)\
+                .execute()
+            
+            scans_data = scans_resp.data if scans_resp.data else []
+            
+            if not scans_data:
+                st.info("Історія сканувань порожня.")
+                return
+
+            scan_ids = [s['id'] for s in scans_data]
+
+            # 3. User Profiles (Спроба отримати імена)
+            # Збираємо унікальні ID користувачів, щоб не вантажити зайве
+            user_ids = list(set([s['user_id'] for s in scans_data if s.get('user_id')]))
+            user_map = {}
+            
+            if user_ids:
+                try:
+                    # Спробуємо таблицю user_profiles (або змініть на 'profiles', якщо у вас так називається)
+                    u_resp = supabase.table("user_profiles")\
+                        .select("user_id, first_name, last_name")\
+                        .in_("user_id", user_ids)\
+                        .execute()
+                    
+                    if u_resp.data:
+                        for u in u_resp.data:
+                            name = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
+                            if not name: name = "Користувач"
+                            user_map[u['user_id']] = name
+                except Exception:
+                    # Якщо таблиці немає або помилка, ігноруємо
+                    pass
+
+            # 4. Mentions
+            m_resp = supabase.table("brand_mentions")\
+                .select("scan_result_id, is_my_brand, mention_count")\
+                .in_("scan_result_id", scan_ids)\
+                .execute()
+            mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
+
+            # 5. Sources
+            s_resp = supabase.table("extracted_sources")\
+                .select("scan_result_id, is_official")\
+                .in_("scan_result_id", scan_ids)\
+                .execute()
+            sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
+
+        except Exception as e:
+            st.error(f"Помилка завантаження даних: {e}")
             return
 
-        df = pd.DataFrame(history_resp.data)
+    # --- 3. ОБРОБКА ДАНИХ ---
+    df_scans = pd.DataFrame(scans_data)
 
-        # B. Отримуємо ключові слова для мапінгу
-        kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
-        kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data}
-        df['keyword_text'] = df['keyword_id'].map(kw_map)
-
-        # C. Отримуємо профілі користувачів для мапінгу (Email -> ПІБ)
-        # Спробуємо завантажити таблицю профілів, якщо вона існує
-        user_map = {}
-        try:
-            # Припускаємо, що є таблиця 'user_profiles' або 'profiles'
-            # Якщо таблиці немає, цей блок просто пропуститься
-            profiles_resp = supabase.table("user_profiles").select("email, first_name, last_name").execute()
-            if profiles_resp.data:
-                for p in profiles_resp.data:
-                    full_name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
-                    if full_name:
-                        user_map[p['email']] = full_name
-        except:
-            # Якщо таблиці профілів немає або помилка доступу - не страшно
-            pass
-
-    except Exception as e:
-        st.error(f"Помилка завантаження історії: {e}")
-        return
-
-    # --- 2. ОБРОБКА ДАНИХ ---
+    # 🔥 МАПІНГ ІНІЦІАТОРА (User vs Auto)
+    def get_initiator(uid):
+        if pd.isna(uid) or not uid:
+            return "🤖 Автоматично"
+        return user_map.get(uid, "👤 Вручну") # Якщо ID є, але імені немає в мапі
     
-    # Форматування дати
-    df['created_at'] = pd.to_datetime(df['created_at'])
+    df_scans['initiator'] = df_scans['user_id'].apply(get_initiator)
+
+    # Мапінг провайдерів
+    PROVIDER_MAP = {
+        "gpt-4o": "OpenAI",
+        "gpt-4-turbo": "OpenAI",
+        "gemini-1.5-pro": "Gemini",
+        "perplexity": "Perplexity"
+    }
+    df_scans['provider'] = df_scans['provider'].replace(PROVIDER_MAP)
     
-    # Конвертація в Київський час (якщо сервер в UTC)
-    def to_kyiv(dt):
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=pytz.utc)
-        return dt.astimezone(pytz.timezone('Europe/Kiev'))
-
-    df['dt_kyiv'] = df['created_at'].apply(to_kyiv)
-    df['Дата'] = df['dt_kyiv'].dt.strftime('%d.%m.%Y %H:%M')
-    df['Date_Only'] = df['dt_kyiv'].dt.date  # Для фільтрації
-
-    # --- ЛОГІКА "ХТО СКАНУВАВ" ---
-    def resolve_scanner(row):
-        email = row.get('user_email')
+    # Підготовка
+    df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Видалений запит")
+    df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
+    
+    # Агрегація Mentions
+    if not mentions_df.empty:
+        brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
+        my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
         
-        # Якщо email немає або він None -> Автосканування
-        if pd.isna(email) or not email:
-            return "🤖 Автосканування"
-        
-        # Якщо це системний email (наприклад)
-        if "n8n" in str(email).lower() or "system" in str(email).lower():
-            return "🤖 Автосканування"
-
-        # Спробуємо знайти ПІБ
-        if email in user_map:
-            return f"👤 {user_map[email]}"
-        
-        # Якщо ПІБ немає, показуємо Email
-        return f"👤 {email}"
-
-    # Перевіряємо, чи існує колонка user_email у датафреймі
-    if 'user_email' in df.columns:
-        df['Хто сканував'] = df.apply(resolve_scanner, axis=1)
+        df_scans = pd.merge(df_scans, brands_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
+            
+        df_scans = pd.merge(df_scans, my_mentions, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
-        df['Хто сканував'] = "—" # Якщо в базі немає колонки user_email
+        df_scans['total_brands'] = 0
+        df_scans['my_mentions_count'] = 0
 
-    # --- 3. ФІЛЬТРИ (Вгорі) ---
-    with st.container(border=True):
-        c_date, c_limit, c_info = st.columns([2, 1, 2])
+    # Агрегація Sources
+    if not sources_df.empty:
+        links_count = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
+        official_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
         
-        # A. Фільтр по датах
-        min_date = df['Date_Only'].min()
-        max_date = df['Date_Only'].max()
+        df_scans = pd.merge(df_scans, links_count, left_on='id', right_on='scan_result_id', how='left').fillna(0)
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
+            
+        df_scans = pd.merge(
+            df_scans, 
+            official_count, 
+            left_on='id', 
+            right_on='scan_result_id', 
+            how='left',
+            suffixes=('', '_dup')
+        ).fillna(0)
         
-        with c_date:
-            date_range = st.date_input(
-                "📅 Період:",
-                value=(min_date, max_date),
-                min_value=min_date,
-                max_value=max_date,
-                format="DD.MM.YYYY"
-            )
-
-        # B. Ліміт рядків
-        with c_limit:
-            limit_options = [10, 25, 50, 100, "Всі"]
-            row_limit = st.selectbox("Рядків:", limit_options, index=0)
-
-        with c_info:
-            st.write("")
-            st.caption(f"Всього записів: **{len(df)}**")
-            st.caption(f"Діапазон даних: {min_date.strftime('%d.%m')} — {max_date.strftime('%d.%m')}")
-
-    # --- 4. ЗАСТОСУВАННЯ ФІЛЬТРІВ ---
-    
-    # Фільтр дати
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_d, end_d = date_range
-        mask_date = (df['Date_Only'] >= start_d) & (df['Date_Only'] <= end_d)
-        df_display = df[mask_date]
-    elif isinstance(date_range, tuple) and len(date_range) == 1:
-        # Якщо вибрали тільки одну дату
-        mask_date = (df['Date_Only'] == date_range[0])
-        df_display = df[mask_date]
+        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
-        df_display = df.copy()
+        df_scans['total_links'] = 0
+        df_scans['official_links'] = 0
+
+    # --- 4. ФІЛЬТРИ ТА СОРТУВАННЯ ---
+    st.markdown("### 🔍 Фільтрація")
+    
+    # Визначаємо межі дат для фільтру
+    if not df_scans.empty:
+        min_date_avail = df_scans['created_at_dt'].min().date()
+        max_date_avail = df_scans['created_at_dt'].max().date()
+    else:
+        min_date_avail = datetime.now().date()
+        max_date_avail = datetime.now().date()
+
+    c1, c2, c3 = st.columns([1, 1.2, 1.5])
+    
+    with c1:
+        all_providers = df_scans['provider'].unique().tolist()
+        sel_providers = st.multiselect("Модель (LLM)", all_providers, default=all_providers)
+    
+    with c2:
+        # 🔥 НОВИЙ ФІЛЬТР ДАТ (Range Picker)
+        # За замовчуванням вибираємо весь доступний період
+        sel_dates = st.date_input(
+            "Період сканування",
+            value=(min_date_avail, max_date_avail),
+            min_value=min_date_avail,
+            max_value=max_date_avail
+        )
+        
+    with c3:
+        sort_opts = [
+            "Найновіші спочатку", 
+            "Найстаріші спочатку", 
+            "Найбільше згадок бренду", 
+            "Найменше згадок бренду",
+            "Найбільше офіційних джерел",
+            "Найбільше знайдених брендів"
+        ]
+        sel_sort = st.selectbox("Сортування", sort_opts)
+
+    # --- ЗАСТОСУВАННЯ ФІЛЬТРІВ ---
+    mask = df_scans['provider'].isin(sel_providers)
+    
+    # Фільтр по датах
+    if isinstance(sel_dates, tuple):
+        if len(sel_dates) == 2:
+            start_d, end_d = sel_dates
+            # Конвертуємо start_d / end_d в datetime для порівняння, або date
+            mask &= (df_scans['created_at_dt'].dt.date >= start_d)
+            mask &= (df_scans['created_at_dt'].dt.date <= end_d)
+        elif len(sel_dates) == 1:
+            # Якщо користувач вибрав тільки одну дату (початок)
+            mask &= (df_scans['created_at_dt'].dt.date == sel_dates[0])
+        
+    df_final = df_scans[mask].copy()
 
     # Сортування
-    df_display = df_display.sort_values(by='created_at', ascending=False)
+    if sel_sort == "Найновіші спочатку":
+        df_final = df_final.sort_values('created_at_dt', ascending=False)
+    elif sel_sort == "Найстаріші спочатку":
+        df_final = df_final.sort_values('created_at_dt', ascending=True)
+    elif sel_sort == "Найбільше згадок бренду":
+        df_final = df_final.sort_values('my_mentions_count', ascending=False)
+    elif sel_sort == "Найменше згадок бренду":
+        df_final = df_final.sort_values('my_mentions_count', ascending=True)
+    elif sel_sort == "Найбільше офіційних джерел":
+        df_final = df_final.sort_values('official_links', ascending=False)
+    elif sel_sort == "Найбільше знайдених брендів":
+        df_final = df_final.sort_values('total_brands', ascending=False)
 
-    # Ліміт
-    if row_limit != "Всі":
-        df_display = df_display.head(int(row_limit))
-
-    # --- 5. ВІДОБРАЖЕННЯ ТАБЛИЦІ ---
+    # --- 5. ВІДОБРАЖЕННЯ ---
+    st.divider()
+    st.markdown(f"**Знайдено записів:** {len(df_final)}")
     
-    # Підготовка фінальної таблиці
-    final_table = df_display[['Дата', 'keyword_text', 'provider', 'Хто сканував']].copy()
-    final_table.columns = ['Дата та Час', 'Запит', 'LLM', 'Ініціатор']
+    cols_to_show = [
+        'created_at_dt', 'keyword', 'provider', 
+        'total_brands', 'total_links', 'my_mentions_count', 'official_links', 'initiator'
+    ]
+    
+    # Захист, якщо якихось колонок немає
+    cols_to_show = [c for c in cols_to_show if c in df_final.columns]
+    
+    df_display = df_final[cols_to_show].copy()
+    
+    if 'created_at_dt' in df_display.columns:
+        df_display['created_at_dt'] = df_display['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
 
     st.dataframe(
-        final_table,
+        df_display,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Дата та Час": st.column_config.TextColumn("Дата та Час", width="medium"),
-            "Запит": st.column_config.TextColumn("Запит", width="large"),
-            "LLM": st.column_config.TextColumn("LLM", width="small"),
-            "Ініціатор": st.column_config.TextColumn("Ініціатор", width="medium"),
+            "created_at_dt": "Дата та Час",
+            "keyword": st.column_config.TextColumn("Запит", width="medium"),
+            "provider": "LLM",
+            "total_brands": st.column_config.NumberColumn("Всього брендів", help="Унікальних брендів"),
+            "total_links": st.column_config.NumberColumn("Всього посилань", help="Всього знайдено"),
+            "my_mentions_count": st.column_config.NumberColumn("Згадок нас", help="Наш бренд"),
+            "official_links": st.column_config.NumberColumn("Офіц. джерела", help="Whitelist"),
+            "initiator": st.column_config.TextColumn("Ініціатор", help="Хто запустив")
         }
     )
 
