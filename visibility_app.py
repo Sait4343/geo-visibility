@@ -3830,11 +3830,9 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: ULTRA COMPACT & BUTTON MOVE.
-    1. Логотип піднято максимально вгору (-80px).
-    2. Кнопка "Закрити сайдбар" переміщена вниз (напроти профілю).
-    3. AI Visibility: 18px Bold Center.
-    4. Точні відступи (20px, 15px).
+    ВЕРСІЯ: FIX BUTTON & BIGGER PROJECT TITLE.
+    1. Кнопка згортання: Активна, навпроти профілю.
+    2. Проект: Видалено лейбл, назва збільшена до 20px.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3844,7 +3842,6 @@ def sidebar_menu():
     user = st.session_state.get("user")
     user_details = st.session_state.get("user_details", {}) 
     
-    # Дані користувача
     user_email = user.email if user else "guest@virshi.ai"
     
     first_name = user_details.get("first_name", "")
@@ -3852,17 +3849,15 @@ def sidebar_menu():
     full_name = f"{first_name} {last_name}".strip()
     if not full_name: full_name = "Користувач"
 
-    # Дані проекту
     proj_name = proj.get("brand_name", "No Project") if proj else "Оберіть проект"
     proj_id = proj.get("id", "") if proj else ""
     proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
-        # 🔥 CSS MAGIC:
-        # 1. Прибираємо відступи контейнера.
-        # 2. Переміщуємо кнопку закриття сайдбару (stSidebarHeader) вниз на ~130px.
+        # 🔥 CSS FIX: КНОПКА ТА ВІДСТУПИ
         st.markdown("""
             <style>
+                /* Обнулення відступів контенту */
                 [data-testid="stSidebarBody"] {
                     padding-top: 0rem !important;
                 }
@@ -3870,16 +3865,31 @@ def sidebar_menu():
                     padding-top: 0rem !important;
                     margin-top: -2rem !important;
                 }
-                /* Переміщення кнопки закриття сайдбару вниз */
+                
+                /* 🔥 НАЛАШТУВАННЯ КНОПКИ ЗГОРТАННЯ */
                 [data-testid="stSidebarHeader"] {
+                    padding-top: 0rem !important;
+                    height: 0rem !important;
+                    
+                    /* Фіксуємо позицію */
+                    position: absolute;
+                    top: 120px !important; /* Навпроти профілю */
+                    right: 15px !important;
+                    
+                    /* Робимо клікабельною */
+                    z-index: 999999 !important;
+                    pointer-events: auto !important;
+                    
                     background-color: transparent;
-                    top: 135px !important; /* Опускаємо кнопку навпроти профілю */
-                    z-index: 1000;
+                }
+                /* Стиль самої іконки (щоб було видно) */
+                [data-testid="stSidebarHeader"] button {
+                    color: #555 !important;
                 }
             </style>
         """, unsafe_allow_html=True)
 
-        # 🔥 ЛОГОТИП + AI VISIBILITY (Margin-top -80px тягне під самий верх)
+        # 1. ЛОГОТИП + AI VISIBILITY (Верх сайдбару)
         st.markdown(f"""
             <div style="margin-top: -80px; text-align: center;">
                 <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160" style="display: inline-block;">
@@ -3887,14 +3897,12 @@ def sidebar_menu():
             </div>
             
             <div style="margin-top: 20px; border-top: 1px solid #E0E0E0;"></div>
-            
             <div style="margin-top: 15px;"></div>
         """, unsafe_allow_html=True)
 
-        # 2. Профіль користувача
+        # 2. ПРОФІЛЬ (Навпроти цього блоку буде кнопка закриття)
         st.markdown(f"""
-        <div style='line-height: 1.2; margin-bottom: 10px;'>
-            <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви авторизовані як:</div>
+        <div style='line-height: 1.2; margin-bottom: 10px; padding-right: 30px;'> <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви авторизовані як:</div>
             <div style='font-weight: 600; font-size: 16px; color: #31333F;'>{full_name}</div>
             <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6);'>{user_email}</div>
         </div>
@@ -3902,7 +3910,7 @@ def sidebar_menu():
         
         st.write("") 
 
-        # --- БЛОК BRANDFETCH (ЛОГОТИП ПРОЕКТУ) ---
+        # --- БЛОК ПРОЕКТУ ---
         logo_url = None
         backup_logo_url = None
         clean_d = None
@@ -3922,11 +3930,11 @@ def sidebar_menu():
                     st.markdown(img_html, unsafe_allow_html=True)
                 
                 with col_brand_txt:
+                    # 🔥 ОНОВЛЕНО: Великий шрифт, без слова "Проект"
                     html_content = f"""
-                    <div style='line-height: 1.15; display: flex; flex-direction: column; justify-content: center; height: 48px;'>
-                        <div style='font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;'>Проект</div>
-                        <div style='font-weight: bold; font-size: 16px; color: #31333F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{proj_name}</div>
-                        <div style='font-size: 11px; color: #888;'>{clean_d if clean_d else ''}</div>
+                    <div style='line-height: 1.1; display: flex; flex-direction: column; justify-content: center; height: 48px;'>
+                        <div style='font-weight: bold; font-size: 20px; color: #31333F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{proj_name}</div>
+                        <div style='font-size: 12px; color: #888;'>{clean_d if clean_d else ''}</div>
                     </div>
                     """
                     st.markdown(html_content, unsafe_allow_html=True)
@@ -3937,7 +3945,7 @@ def sidebar_menu():
         # Відступ перед меню
         st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
-        # 4. Навігаційне меню
+        # 4. Меню
         options = [
             "Дашборд", 
             "Перелік запитів", 
@@ -3996,7 +4004,7 @@ def sidebar_menu():
         st.caption("Потрібна допомога?")
         st.markdown("📧 **hi@virshi.ai**")
 
-        # 6. Статус та Вихід
+        # 6. Статус
         if proj:
             st.write("")
             status = proj.get("status", "trial").upper()
