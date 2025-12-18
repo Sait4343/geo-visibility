@@ -3830,7 +3830,7 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: CLEANUP (No Settings/Change Button, ID added to footer).
+    ВЕРСІЯ: FIXED & FULL + DOMAIN SUBTITLE + 20PX GAP.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3865,8 +3865,10 @@ def sidebar_menu():
         # --- БЛОК BRANDFETCH (ЛОГОТИП ПРОЕКТУ) ---
         logo_url = None
         backup_logo_url = None
+        clean_d = None
 
         if proj and proj_domain:
+            # Нормалізація домену (використовуємо і для Brandfetch, і для відображення)
             clean_d = proj_domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
             if '/' in clean_d: clean_d = clean_d.split('/')[0]
             
@@ -3877,17 +3879,26 @@ def sidebar_menu():
             if logo_url:
                 col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
                 with col_brand_img:
+                    # Логотип
                     img_html = f'<img src="{logo_url}" style="width: 45px; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
                     st.markdown(img_html, unsafe_allow_html=True)
                 
                 with col_brand_txt:
-                    st.markdown(f"<div style='padding-top: 10px; font-weight: bold;'>{proj_name}</div>", unsafe_allow_html=True)
+                    # 🔥 Назва + Домен знизу
+                    html_content = f"""
+                    <div style='line-height: 1.2;'>
+                        <div style='font-weight: bold; font-size: 16px;'>{proj_name}</div>
+                        <div style='font-size: 12px; color: #888;'>{clean_d if clean_d else ''}</div>
+                    </div>
+                    """
+                    st.markdown(html_content, unsafe_allow_html=True)
             else:
                 st.markdown(f"### 📁 {proj_name}")
-        
-        # (Тут раніше були налаштування проекту - видалено)
+                if clean_d:
+                    st.caption(clean_d)
 
-        st.write("") 
+        # 🔥 ВІДСТУП 20PX перед меню
+        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
         # 4. Навігаційне меню (ОПЦІЇ)
         options = [
@@ -3914,6 +3925,7 @@ def sidebar_menu():
             "robot"
         ]
 
+        # Додаємо пункт "Адмін", якщо є права
         if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
@@ -3957,7 +3969,7 @@ def sidebar_menu():
             
             # Статус
             st.markdown(f"Статус: **:{color}[{status}]**")
-            # 🔥 ID Проекту (Додано сюди)
+            # ID Проекту
             st.caption(f"ID: `{proj_id}`")
             
             if st.session_state.get("is_impersonating"):
