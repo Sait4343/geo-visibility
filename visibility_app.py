@@ -3783,36 +3783,35 @@ def sidebar_menu():
         
         st.write("") 
 
-        # --- 🔥 ПОЧАТОК БЛОКУ BRANDFETCH ---
-        # Логіка: Якщо проект обраний і має домен -> формуємо лого
+# --- 🔥 ПОЧАТОК БЛОКУ BRANDFETCH (ОНОВЛЕНО) ---
         logo_url = None
-        if proj and proj_domain:
-            # Чистимо домен від сміття (https, www, path)
-            clean_d = proj_domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
-            if '/' in clean_d: 
-                clean_d = clean_d.split('/')[0]
-            
-            # Формуємо URL для Brandfetch
-            logo_url = f"https://cdn.brandfetch.io/{clean_d}"
+        backup_logo_url = None
 
-        # Відображення Лого + Назва Проекту (замість стандартного заголовка)
+        if proj and proj_domain:
+            # Чистимо домен
+            clean_d = proj_domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
+            if '/' in clean_d: clean_d = clean_d.split('/')[0]
+            
+            # Формуємо посилання
+            logo_url = f"https://cdn.brandfetch.io/{clean_d}"
+            backup_logo_url = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128"
+
+        # Відображення Лого + Назва Проекту
         if proj and proj_name != "Оберіть проект":
             if logo_url:
-                # Якщо лого знайдено: показуємо картинку і назву поруч
                 col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
                 with col_brand_img:
-                    # Використовуємо try-except або просто st.image, бо він ігнорує помилки часто
-                    try:
-                        st.image(logo_url, width=45)
-                    except:
-                        st.write("🏢")
+                    # 1. Формуємо HTML в окрему змінну (щоб код не був "синім")
+                    # 2. Додаємо onerror для завантаження Google Favicon, якщо Brandfetch впаде
+                    img_html = f'<img src="{logo_url}" style="width: 45px; border-radius: 5px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
+                    
+                    st.markdown(img_html, unsafe_allow_html=True)
+                
                 with col_brand_txt:
-                    # Вертикальне вирівнювання тексту
                     st.markdown(f"<div style='padding-top: 10px; font-weight: bold;'>{proj_name}</div>", unsafe_allow_html=True)
             else:
-                # Якщо домену немає, просто красивий заголовок
                 st.markdown(f"### 📁 {proj_name}")
-        # --- 🔥 КІНЕЦЬ БЛОКУ BRANDFETCH ---
+        # --- 🔥 КІНЕЦЬ БЛОКУ ---
 
         # 3. Вибір проекту / Налаштування (Трохи змінено логіку відображення)
         # Оскільки назву ми вивели вище з логотипом, тут робимо кнопку "Налаштування" або лишаємо як було
@@ -4249,39 +4248,60 @@ def show_admin_page():
                 clean_name = str(raw_name).replace('*', '').strip()
             else:
                 clean_name = domain.replace('https://', '').replace('www.', '').split('/')[0] if domain else "Без назви"
-
-            # 🔥 НОВЕ: Логіка для логотипу Brandfetch
+# ---------------------------------------------------------
+            # ЛОГІКА ЛОГОТИПУ (Brandfetch CDN + Google Fallback)
+            # ---------------------------------------------------------
             logo_url = None
+            backup_logo_url = None
+
             if domain:
+                # Очистка домену від сміття
                 clean_d = domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
                 if '/' in clean_d: clean_d = clean_d.split('/')[0]
+                
+                # 1. Основне посилання (Brandfetch CDN)
                 logo_url = f"https://cdn.brandfetch.io/{clean_d}"
+                # 2. Резервне посилання (Google Favicons)
+                backup_logo_url = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=64"
 
+            # Отримуємо кількість запитів
             k_count = kw_counts.get(p_id, 0)
 
+            # ---------------------------------------------------------
+            # ВІДОБРАЖЕННЯ В ТАБЛИЦІ
+            # ---------------------------------------------------------
             with st.container():
-                # Ті самі пропорції, що й у Header
+                # Пропорції колонок
                 c0, c1, c_dash, c2, c3, c_cnt, c4, c5 = st.columns([0.3, 2.5, 0.4, 1.3, 1.2, 0.7, 0.9, 0.5])
 
                 with c0: st.caption(f"{idx}")
 
                 with c1:
-                    # 🔥 НОВЕ: Виводимо Лого + Текст у під-колонках
+                    # Якщо є домен -> показуємо Лого + Назву
                     if logo_url:
                         sub_c1, sub_c2 = st.columns([0.15, 0.85])
+                        
                         with sub_c1:
-                            # st.image ігнорує помилки завантаження, тому безпечно
-                            st.image(logo_url, width=30) 
+                            # 🔥 ФІКС "СИНЬОГО КОДУ": 
+                            # Ми формуємо HTML в окремій змінній з одинарними лапками всередині.
+                            # Це гарантує, що Python не заплутається в лапках.
+                            img_html = f'<img src="{logo_url}" style="width: 30px; border-radius: 4px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
+                            
+                            st.markdown(img_html, unsafe_allow_html=True)
+
                         with sub_c2:
+                            # УВАГА: Тут тільки ОДНА лапка в кінці!
                             st.markdown(f"**{clean_name}**")
                     else:
+                        # Якщо домену немає -> просто назва
                         st.markdown(f"**{clean_name}**")
                     
-                    # Решта інфо про проект
+                    # Решта інфо про проект (ID, лінки)
                     st.caption(f"ID: `{p_id}`")
                     if domain: st.caption(f"🌐 {domain}")
                     st.caption(f"👤 {owner_info['full_name']} | {owner_info['email']}")
 
+                
                 with c_dash:
                     if st.button("↗️", key=f"goto_{p_id}", help="Відкрити дашборд"):
                         st.session_state["current_project"] = p
