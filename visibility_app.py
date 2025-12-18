@@ -11,7 +11,7 @@ from supabase import create_client, Client
 import numpy as np # Потрібно для адмінки
 import json
 import uuid
-
+XlsxWriter
 # =========================
 # 1. CONFIGURATION
 # =========================
@@ -853,10 +853,9 @@ def show_competitors_page():
     """
     Сторінка глибокого конкурентного аналізу.
     ОНОВЛЕНО: 
-    1. Оригінальні назви брендів (без lower/strip).
-    2. Нумерація рядків у таблиці.
-    3. Кнопка експорту в Excel.
-    4. Відображення середньої позиції мого бренду.
+    1. Fix 'ModuleNotFoundError': Додано try-except для експорту Excel.
+    2. Оригінальні назви брендів.
+    3. Нумерація та KPI.
     """
     import pandas as pd
     import plotly.express as px
@@ -956,7 +955,6 @@ def show_competitors_page():
 
     # --- 3. АГРЕГАЦІЯ ---
     
-    # Хелпер: Текст -> Число
     def sentiment_to_score(s):
         if s == 'Позитивний': return 100
         if s == 'Негативний': return 0
@@ -964,7 +962,6 @@ def show_competitors_page():
     
     df_filtered['sent_score_num'] = df_filtered['sentiment_score'].apply(sentiment_to_score)
 
-    # 🔥 FIX: Групуємо по оригінальній назві 'brand_name' без нормалізації
     stats = df_filtered.groupby('brand_name').agg(
         Mentions=('id_x', 'count'),
         Avg_Rank=('rank_position', 'mean'),
@@ -972,7 +969,6 @@ def show_competitors_page():
         Is_My_Brand=('is_my_brand', 'max')
     ).reset_index()
 
-    # Хелпер: Число -> Текст
     def get_sentiment_text(score):
         if score >= 60: return "Позитивна"
         if score <= 40: return "Негативна"
@@ -984,7 +980,6 @@ def show_competitors_page():
     # --- 4. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ---
     st.write("") 
     
-    # 🔥 Розрахунок середньої позиції НАШОГО бренду
     my_brand_row = stats[stats['Is_My_Brand'] == True]
     if not my_brand_row.empty:
         my_avg_pos = my_brand_row.iloc[0]['Avg_Rank']
@@ -992,7 +987,6 @@ def show_competitors_page():
     else:
         kpi_val = "-"
 
-    # Виводимо KPI над табами
     st.metric("🏆 Середня позиція вашого бренду", kpi_val)
     st.write("")
 
@@ -1010,26 +1004,29 @@ def show_competitors_page():
             st.markdown("##### 📋 Зведена таблиця")
         
         display_df = stats.copy().sort_values('Mentions', ascending=False).reset_index(drop=True)
-        
-        # 🔥 Додаємо нумерацію (починаючи з 1)
         display_df.index = display_df.index + 1
         display_df.index.name = '#'
         
-        # Форматування для відображення
         display_df['Сер. Позиція'] = display_df['Avg_Rank'].apply(lambda x: f"#{x:.1f}")
         
-        # Експорт в Excel
+        # 🔥 БЕЗПЕЧНИЙ ЕКСПОРТ (з обробкою помилки xlsxwriter)
         with c_export:
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                display_df.to_excel(writer, sheet_name='Competitors')
-            
-            st.download_button(
-                label="📥 Завантажити Excel",
-                data=buffer.getvalue(),
-                file_name=f"competitors_analysis_{proj['brand_name']}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            try:
+                buffer = io.BytesIO()
+                # Спробуємо створити файл
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    display_df.to_excel(writer, sheet_name='Competitors')
+                
+                st.download_button(
+                    label="📥 Завантажити Excel",
+                    data=buffer.getvalue(),
+                    file_name=f"competitors_analysis_{proj['brand_name']}.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
+            except ImportError:
+                st.error("⚠️ Встановіть 'XlsxWriter' у requirements.txt")
+            except Exception as e:
+                st.error(f"Помилка експорту: {e}")
 
         st.dataframe(
             display_df[['brand_name', 'Mentions', 'Reputation_Text', 'Сер. Позиція', 'Is_My_Brand']],
@@ -1041,9 +1038,6 @@ def show_competitors_page():
                 "Is_My_Brand": st.column_config.CheckboxColumn("Цільовий бренд", disabled=True),
                 "Сер. Позиція": st.column_config.TextColumn("Сер. Позиція")
             }
-            # index=True залишаємо за замовчуванням, якщо st.dataframe виводить індекс як окрему колонку, 
-            # або можна явно передати display_df.reset_index() якщо хочемо колонку "#" всередині.
-            # Тут st.dataframe(..., use_container_width=True) зазвичай показує індекс зліва.
         )
 
     # === TAB 2: ЧАСТОТА ЗГАДКИ (AREA CHART) ===
@@ -1053,7 +1047,6 @@ def show_competitors_page():
         col_table, col_chart = st.columns([1.8, 2.2])
 
         with col_table:
-            # Таблиця налаштувань
             df_freq_editor = stats[['Show', 'brand_name', 'Mentions', 'Is_My_Brand']].copy()
             df_freq_editor = df_freq_editor.sort_values('Mentions', ascending=False)
 
@@ -1076,7 +1069,6 @@ def show_competitors_page():
             )
 
         with col_chart:
-            # Дані для графіка
             chart_data = edited_freq_df[edited_freq_df['Show'] == True]
             
             if not chart_data.empty:
@@ -1091,12 +1083,10 @@ def show_competitors_page():
         st.markdown("##### ⭐ Аналіз Тональності")
         st.caption("Співвідношення: Позитивні vs Нейтральні vs Негативні.")
 
-        # Агрегація для Stacked Bar
         sent_distribution = df_filtered.groupby(['brand_name', 'sentiment_score']).size().reset_index(name='count')
         total_per_brand = sent_distribution.groupby('brand_name')['count'].transform('sum')
         sent_distribution['percentage'] = (sent_distribution['count'] / total_per_brand * 100).round(1)
 
-        # Керування
         col_list, col_chart = st.columns([1.5, 2.5])
         
         with col_list:
@@ -1174,7 +1164,6 @@ def show_competitors_page():
         with col_rank_chart:
             chart_data_rank = edited_rank_df[edited_rank_df['Show'] == True].copy()
             if not chart_data_rank.empty:
-                # Логіка інверсії (для візуального розміру)
                 max_rank_val = chart_data_rank['Avg_Rank'].max()
                 base_val = max_rank_val + 2 
                 chart_data_rank['Inverse_Score'] = base_val - chart_data_rank['Avg_Rank']
@@ -1182,13 +1171,12 @@ def show_competitors_page():
                 fig_rank = px.pie(
                     chart_data_rank,
                     names='brand_name',
-                    values='Inverse_Score', # Розмір сектора
+                    values='Inverse_Score', 
                     hole=0.6,
                     color='Is_My_Brand',
                     color_discrete_map={True: '#00C896', False: '#FFCE56', 1: '#00C896', 0: '#FFCE56'},
                     hover_data=['brand_name']
                 )
-                # У підписах показуємо РЕАЛЬНИЙ ранг!
                 fig_rank.update_traces(
                     customdata=chart_data_rank[['Avg_Rank']],
                     textinfo='label',
