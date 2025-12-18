@@ -3750,7 +3750,7 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FIXED & FULL (Menu, User Profile, Support, Navigation).
+    ВЕРСІЯ: FIXED & FULL (Menu, User Profile, Support, Navigation) + BRANDFETCH LOGO.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3763,28 +3763,67 @@ def sidebar_menu():
     user_email = user.email if user else "Користувач"
     proj_name = proj.get("brand_name", "No Project") if proj else "Оберіть проект"
     proj_id = proj.get("id", "") if proj else ""
+    # 🔥 НОВЕ: Отримуємо домен для логотипу
+    proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
-        # 1. Логотип
+        # 1. Логотип Virshi
         st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=160)
         
         st.divider()
 
-        # 2. Профіль користувача (Відновлено)
+        # 2. Профіль користувача
         with st.container():
             c1, c2 = st.columns([0.2, 0.8])
             with c1:
-                st.markdown("👤") # Або іконка аватара
+                st.markdown("👤") 
             with c2:
                 st.caption("Ви увійшли як:")
                 st.markdown(f"**{user_email}**")
         
-        st.write("") # Відступ
+        st.write("") 
 
-        # 3. Вибір проекту
-        with st.expander(f"📁 {proj_name}", expanded=False):
-            st.caption(f"ID: {proj_id}")
-            if st.button("🔄 Змінити проект"):
+        # --- 🔥 ПОЧАТОК БЛОКУ BRANDFETCH ---
+        # Логіка: Якщо проект обраний і має домен -> формуємо лого
+        logo_url = None
+        if proj and proj_domain:
+            # Чистимо домен від сміття (https, www, path)
+            clean_d = proj_domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
+            if '/' in clean_d: 
+                clean_d = clean_d.split('/')[0]
+            
+            # Формуємо URL для Brandfetch
+            logo_url = f"https://cdn.brandfetch.io/{clean_d}"
+
+        # Відображення Лого + Назва Проекту (замість стандартного заголовка)
+        if proj and proj_name != "Оберіть проект":
+            if logo_url:
+                # Якщо лого знайдено: показуємо картинку і назву поруч
+                col_brand_img, col_brand_txt = st.columns([0.25, 0.75])
+                with col_brand_img:
+                    # Використовуємо try-except або просто st.image, бо він ігнорує помилки часто
+                    try:
+                        st.image(logo_url, width=45)
+                    except:
+                        st.write("🏢")
+                with col_brand_txt:
+                    # Вертикальне вирівнювання тексту
+                    st.markdown(f"<div style='padding-top: 10px; font-weight: bold;'>{proj_name}</div>", unsafe_allow_html=True)
+            else:
+                # Якщо домену немає, просто красивий заголовок
+                st.markdown(f"### 📁 {proj_name}")
+        # --- 🔥 КІНЕЦЬ БЛОКУ BRANDFETCH ---
+
+        # 3. Вибір проекту / Налаштування (Трохи змінено логіку відображення)
+        # Оскільки назву ми вивели вище з логотипом, тут робимо кнопку "Налаштування" або лишаємо як було
+        expander_label = "⚙️ Налаштування проекту" if (proj and logo_url) else f"📁 {proj_name}"
+        
+        with st.expander(expander_label, expanded=False):
+            if proj:
+                st.caption(f"ID: {proj_id}")
+                st.caption(f"Domain: {proj_domain}") # Корисно бачити домен
+            
+            if st.button("🔄 Змінити проект", use_container_width=True):
                 st.session_state["current_project"] = None
                 st.rerun()
 
@@ -3798,8 +3837,8 @@ def sidebar_menu():
             "Конкуренти", 
             "Рекомендації", 
             "Історія сканувань", 
-            "Звіти",             
-            "FAQ",               
+            "Звіти",              
+            "FAQ",                
             "GPT-Visibility"
         ]
         
@@ -3811,11 +3850,10 @@ def sidebar_menu():
             "lightbulb", 
             "clock-history", 
             "file-earmark-text", 
-            "question-circle",   
+            "question-circle",    
             "robot"
         ]
 
-        # Додаємо Адмінку тільки для адмінів
         if st.session_state.get("role") in ["admin", "super_admin"]:
             options.append("Адмін")
             icons.append("shield-lock")
@@ -3836,7 +3874,7 @@ def sidebar_menu():
         
         st.divider()
 
-        # 5. Сапорт (Відновлено)
+        # 5. Сапорт
         st.caption("Потрібна допомога?")
         st.markdown("📧 **hi@virshi.ai**")
 
@@ -3852,11 +3890,9 @@ def sidebar_menu():
 
         st.write("")
         if st.button("🚪 Вийти з акаунту", use_container_width=True):
-            # Тут викликаємо вашу функцію logout
             if 'logout' in globals():
                 logout()
             else:
-                # Fallback, якщо функція logout не знайдена
                 st.session_state.clear()
                 st.rerun()
 
