@@ -12,6 +12,7 @@ import numpy as np # Потрібно для адмінки
 import json
 import uuid
 import xlsxwriter
+
 # =========================
 # 1. CONFIGURATION
 # =========================
