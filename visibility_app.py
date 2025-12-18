@@ -2655,7 +2655,8 @@ def show_keywords_page():
             st.divider()
             c_models, c_submit = st.columns([3, 1])
             with c_models:
-                selected_models_manual = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="manual_multiselect")
+                # Було: default=["Perplexity"]
+                selected_models_manual = st.multiselect("LLM для першого скану:", list(MODEL_MAPPING.keys()), default=list(MODEL_MAPPING.keys()), key="manual_multiselect")
             
             with c_submit:
                 st.write("")
@@ -2752,7 +2753,8 @@ def show_keywords_page():
                 c_imp_models, c_imp_btn1, c_imp_btn2 = st.columns([2, 1.5, 1.5])
                 
                 with c_imp_models:
-                    selected_models_import = st.multiselect("LLM (тільки для кнопки аналізу):", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="import_multiselect")
+                    # Було: default=["Perplexity"]
+                    selected_models_import = st.multiselect("LLM (тільки для кнопки аналізу):", list(MODEL_MAPPING.keys()), default=list(MODEL_MAPPING.keys()), key="import_multiselect")
                 
                 with c_imp_btn1:
                     st.write("")
@@ -2939,22 +2941,33 @@ def show_keywords_page():
     elif sort_option == "Нещодавно проскановані": keywords.sort(key=lambda x: x['last_scan_date'], reverse=True)
     elif sort_option == "Давно не скановані": keywords.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
-    with st.container(border=True):
+with st.container(border=True):
         c_check, c_models, c_btn = st.columns([0.5, 3, 1.5])
         with c_check:
             st.write("") 
+            # 1. Чекбокс "Всі" тепер керує станом сесії
             select_all = st.checkbox("Всі", key="select_all_kws")
+            
+            # Якщо натиснуто "Всі", оновлюємо стан для всіх видимих запитів
+            if select_all:
+                for idx, k in enumerate(keywords, start=1):
+                    st.session_state[f"chk_{k['id']}_{idx}"] = True
+            # Логіку зняття "Всі" можна не додавати примусово, щоб не скидати ручний вибір, 
+            # або додати else: ... = False, якщо хочете повне очищення.
+
         with c_models:
-            bulk_models = st.multiselect("ЛЛМ для запуску:", list(MODEL_MAPPING.keys()), default=["Perplexity"], label_visibility="collapsed", key="bulk_models_main")
+            # 2. Всі моделі обрані за замовчуванням
+            bulk_models = st.multiselect("ЛЛМ для запуску:", list(MODEL_MAPPING.keys()), default=list(MODEL_MAPPING.keys()), label_visibility="collapsed", key="bulk_models_main")
+        
         with c_btn:
             if st.button("🚀 Аналізувати обрані", use_container_width=True, type="primary"):
                 selected_kws_text = []
-                if select_all:
-                    selected_kws_text = [k['keyword_text'] for k in keywords]
-                else:
-                    for idx, k in enumerate(keywords, start=1):
-                        if st.session_state.get(f"chk_{k['id']}_{idx}", False):
-                            selected_kws_text.append(k['keyword_text'])
+                
+                # 3. Збираємо ТІЛЬКИ ті, де стоїть галочка (незалежно від того, як вона там з'явилась)
+                for idx, k in enumerate(keywords, start=1):
+                    # Перевіряємо стан чекбокса у session_state
+                    if st.session_state.get(f"chk_{k['id']}_{idx}", False):
+                        selected_kws_text.append(k['keyword_text'])
                 
                 if selected_kws_text:
                     my_bar = st.progress(0, text="Ініціалізація...")
@@ -2991,14 +3004,23 @@ def show_keywords_page():
     # Використовуємо лічильник оновлень для генерації унікальних ключів
     update_suffix = st.session_state["bulk_update_counter"]
 
-    for idx, k in enumerate(keywords, start=1):
+for idx, k in enumerate(keywords, start=1):
         with st.container(border=True):
             c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
             
             with c1:
                 st.write("") 
-                is_checked = select_all
-                st.checkbox("", key=f"chk_{k['id']}_{idx}", value=is_checked)
+                
+                # Ключ для чекбокса
+                chk_key = f"chk_{k['id']}_{idx}"
+                
+                # Логіка за замовчуванням: 
+                # Якщо "Всі" обрано, то default=True (але користувач може змінити).
+                # Важливо: st.checkbox запам'ятовує стан за ключем key. 
+                # select_all впливає на цей стан у блоці вище (через session_state).
+                
+                is_checked = st.session_state.get(chk_key, False)
+                st.checkbox("", key=chk_key, value=is_checked)
             
             with c2:
                 st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
