@@ -2921,17 +2921,17 @@ def show_keywords_page():
         return
 
 # ========================================================
-    # 4. & 5. ПАНЕЛЬ ТА СПИСОК (ОБ'ЄДНАНО ДЛЯ АВТО-ОНОВЛЕННЯ)
+    # 4. & 5. ПАНЕЛЬ ТА СПИСОК (STABLE STATE FIX)
     # ========================================================
 
-    # Оголошуємо змінну перед використанням
     update_suffix = st.session_state.get("bulk_update_counter", 0)
 
-    # Ця функція оновлює лише свій вміст кожні 5 секунд
+    # Функція-фрагмент (оновлюється незалежно)
     @st.fragment(run_every=5)
     def render_live_dashboard(keywords_data, proj_data, suffix_val):
         
-        # --- 1. LIVE DATA: Оновлюємо дати сканування ---
+        # --- 1. LIVE DATA FETCH ---
+        # Отримуємо свіжі статуси сканування без перезавантаження всієї сторінки
         try:
             fresh_scans = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj_data["id"]).order("created_at", desc=True).execute()
             fresh_map = {}
@@ -2940,41 +2940,57 @@ def show_keywords_page():
                     if s['keyword_id'] not in fresh_map:
                         fresh_map[s['keyword_id']] = s['created_at']
             
+            # Оновлюємо дати локально
             for k in keywords_data:
                 k['last_scan_date'] = fresh_map.get(k['id'], "1970-01-01T00:00:00+00:00")
         except Exception:
             pass
 
-        # --- 2. ЛОГІКА СОРТУВАННЯ ---
+        # --- 2. SORTING & FILTERING ---
         c_sort, _ = st.columns([2, 4])
         with c_sort:
-            sort_option = st.selectbox("Сортувати за:", ["Найновіші (Додані)", "Найстаріші (Додані)", "Нещодавно проскановані", "Давно не скановані"], label_visibility="collapsed")
+            sort_option = st.selectbox("Сортувати за:", 
+                                     ["Найновіші (Додані)", "Найстаріші (Додані)", "Нещодавно проскановані", "Давно не скановані"], 
+                                     label_visibility="collapsed")
 
-        # Створюємо локальну копію для сортування
         sorted_kws = keywords_data.copy()
         if sort_option == "Найновіші (Додані)": sorted_kws.sort(key=lambda x: x['created_at'], reverse=True)
         elif sort_option == "Найстаріші (Додані)": sorted_kws.sort(key=lambda x: x['created_at'], reverse=False)
         elif sort_option == "Нещодавно проскановані": sorted_kws.sort(key=lambda x: x['last_scan_date'], reverse=True)
         elif sort_option == "Давно не скановані": sorted_kws.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
-        # --- 3. CALLBACKS (СИНХРОНІЗАЦІЯ) ---
-        # Важливо: визначаємо список ID для поточної вибірки
-        current_ids = [k['id'] for k in sorted_kws]
+        # Збираємо ID поточного списку для логіки "Select All"
+        current_page_ids = [str(k['id']) for k in sorted_kws]
 
-        def on_select_all_change():
-            """Якщо натиснули 'Всі', присвоюємо цей стан усім видимим записам"""
-            new_val = st.session_state.select_all_kws_live
-            for kid in current_ids:
-                st.session_state[f"chk_{kid}"] = new_val
+        # --- 3. STATE MANAGEMENT (CALLBACKS) ---
+        # Ці функції запускаються ПЕРЕД рендерингом, коли користувач щось клікає
 
-        def on_item_change():
-            """Якщо змінили окремий запис, перевіряємо, чи всі обрані"""
+        def master_checkbox_change():
+            """Коли клікають 'Всі': проставляємо це значення всім видимим елементам"""
+            # Отримуємо новий стан чекбокса "Всі"
+            new_state = st.session_state.select_all_master_key
+            for kid in current_page_ids:
+                st.session_state[f"chk_{kid}"] = new_state
+
+        def child_checkbox_change():
+            """Коли клікають окремий рядок: перевіряємо, чи треба зняти галочку 'Всі'"""
+            # Якщо хоча б один з видимих елементів False -> Master має бути False
             all_selected = True
-            for kid in current_ids:
+            for kid in current_page_ids:
                 if not st.session_state.get(f"chk_{kid}", False):
                     all_selected = False
                     break
-            st.session_state.select_all_kws_live = all_selected
+            st.session_state.select_all_master_key = all_selected
+
+        # Ініціалізація стану для кожного рядка (якщо його ще немає)
+        for kid in current_page_ids:
+            key = f"chk_{kid}"
+            if key not in st.session_state:
+                st.session_state[key] = False
+
+        # Ініціалізація майстер-ключа
+        if "select_all_master_key" not in st.session_state:
+            st.session_state.select_all_master_key = False
 
         # --- 4. ПАНЕЛЬ ДІЙ ---
         with st.container(border=True):
@@ -2982,33 +2998,35 @@ def show_keywords_page():
             
             with c_check:
                 st.write("") 
-                # Чекбокс "Всі"
-                st.checkbox("Всі", key="select_all_kws_live", on_change=on_select_all_change)
+                # MASTER CHECKBOX
+                # Важливо: ми не передаємо value, бо key вже керує станом
+                st.checkbox("Всі", key="select_all_master_key", on_change=master_checkbox_change)
             
             with c_models:
                 all_models = list(MODEL_MAPPING.keys())
+                # Використовуємо окремий ключ для моделей, щоб не конфліктував
                 bulk_models = st.multiselect(
                     "ЛЛМ для запуску:", 
                     all_models, 
                     default=all_models, 
                     label_visibility="collapsed", 
-                    key="bulk_models_main_v5" # Новий ключ для скидання
+                    key="bulk_models_selector_v6"
                 )
             
             with c_btn:
                 if st.button("🚀 Аналізувати обрані", use_container_width=True, type="primary"):
-                    selected_kws_text = []
-                    # Збираємо текст запитів, де стоїть галочка
+                    selected_texts = []
+                    # Збираємо тільки ті, що True в session_state
                     for k in sorted_kws:
                         if st.session_state.get(f"chk_{k['id']}", False):
-                            selected_kws_text.append(k['keyword_text'])
+                            selected_texts.append(k['keyword_text'])
                     
-                    if selected_kws_text:
+                    if selected_texts:
                         try:
                             if 'n8n_trigger_analysis' in globals():
                                 my_bar = st.progress(0, text="Ініціалізація...")
-                                total = len(selected_kws_text)
-                                for i, txt in enumerate(selected_kws_text):
+                                total = len(selected_texts)
+                                for i, txt in enumerate(selected_texts):
                                     my_bar.progress((i / total), text=f"Відправка: {txt}...")
                                     n8n_trigger_analysis(proj_data["id"], [txt], proj_data.get("brand_name"), models=bulk_models)
                                     time.sleep(0.2)
@@ -3023,7 +3041,7 @@ def show_keywords_page():
                     else:
                         st.warning("Оберіть хоча б один запит.")
 
-        # --- 5. ТАБЛИЦЯ ---
+        # --- 5. ТАБЛИЦЯ (RENDER LIST) ---
         h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
         h_txt.markdown("**Запит**")
         h_cron.markdown("**Автозапуск**")
@@ -3033,53 +3051,51 @@ def show_keywords_page():
         allow_cron_global = proj_data.get('allow_cron', False)
 
         for idx, k in enumerate(sorted_kws, start=1):
+            k_id_str = str(k['id'])
+            
             with st.container(border=True):
                 c1, c2, c3, c4, c5, c6 = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
                 
                 with c1:
                     st.write("") 
-                    # 🔥 СТАБІЛЬНИЙ КЛЮЧ: Тільки ID, без idx
-                    chk_key = f"chk_{k['id']}"
-                    
-                    # Ініціалізація, якщо ключа немає
-                    if chk_key not in st.session_state: 
-                        st.session_state[chk_key] = False
-                    
-                    # Чекбокс прив'язаний до функції синхронізації
-                    st.checkbox("", key=chk_key, on_change=on_item_change)
+                    # ROW CHECKBOX
+                    # ВАЖЛИВО: Ніякого `value=...`. Стан повністю керується через key в session_state.
+                    # on_change викликає перевірку, чи треба зняти галочку "Всі"
+                    st.checkbox("", key=f"chk_{k_id_str}", on_change=child_checkbox_change)
                 
                 with c2:
                     st.markdown(f"<div class='green-number'>{idx}</div>", unsafe_allow_html=True)
                 
                 with c3:
-                    if st.button(k['keyword_text'], key=f"link_btn_{k['id']}", help="Деталі"):
+                    if st.button(k['keyword_text'], key=f"lnk_{k_id_str}", help="Деталі"):
                         st.session_state["focus_keyword_id"] = k["id"]
                         st.rerun()
                 
                 with c4:
+                    # Логіка автозапуску (БД Toggle)
+                    # Тут ми використовуємо suffix_val, щоб уникнути конфліктів ключів при оновленнях
                     cron_c1, cron_c2 = st.columns([0.8, 1.2])
                     is_auto_db = k.get('is_auto_scan', False)
-                    new_auto = is_auto_db
-
+                    
                     with cron_c1:
                         if allow_cron_global:
-                            # Тут suffix_val потрібен, бо це не session state toggle, а БД toggle
-                            toggle_key = f"auto_{k['id']}_{suffix_val}" 
+                            # Це toggle бази даних, він не залежить від чекбоксів вибору
+                            toggle_key = f"auto_{k_id_str}_{suffix_val}"
                             new_auto = st.toggle("Авто", value=is_auto_db, key=toggle_key, label_visibility="collapsed")
                             if new_auto != is_auto_db:
                                 update_kw_field(k['id'], "is_auto_scan", new_auto)
                         else:
-                            st.toggle("Авто", value=False, key=f"auto_{k['id']}_disabled", disabled=True, label_visibility="collapsed")
+                            st.toggle("Авто", value=False, key=f"auto_dis_{k_id_str}", disabled=True, label_visibility="collapsed")
                             st.caption("🔒")
 
                     with cron_c2:
-                        if new_auto and allow_cron_global:
+                        if allow_cron_global and (is_auto_db or new_auto): # Показуємо, якщо увімкнено (навіть щойно)
                             current_freq = k.get('frequency', 'daily')
                             freq_options = ["daily", "weekly", "monthly"]
                             try: idx_f = freq_options.index(current_freq)
                             except: idx_f = 0
                             
-                            freq_key = f"freq_{k['id']}_{suffix_val}"
+                            freq_key = f"freq_{k_id_str}_{suffix_val}"
                             new_freq = st.selectbox("Freq", freq_options, index=idx_f, key=freq_key, label_visibility="collapsed")
                             if new_freq != current_freq:
                                 update_kw_field(k['id'], "frequency", new_freq)
@@ -3092,27 +3108,28 @@ def show_keywords_page():
 
                 with c6:
                     st.write("")
-                    del_key = f"del_confirm_{k['id']}"
-                    if del_key not in st.session_state: st.session_state[del_key] = False
+                    # Логіка видалення
+                    del_confirm_key = f"del_confirm_{k_id_str}"
+                    if del_confirm_key not in st.session_state: st.session_state[del_confirm_key] = False
 
-                    if not st.session_state[del_key]:
-                        if st.button("🗑️", key=f"pre_del_{k['id']}"):
-                            st.session_state[del_key] = True
+                    if not st.session_state[del_confirm_key]:
+                        if st.button("🗑️", key=f"pre_del_{k_id_str}"):
+                            st.session_state[del_confirm_key] = True
                             st.rerun()
                     else:
                         dc1, dc2 = st.columns(2)
-                        if dc1.button("✅", key=f"yes_{k['id']}", type="primary"):
+                        if dc1.button("✅", key=f"yes_del_{k_id_str}", type="primary"):
                             try:
                                 supabase.table("scan_results").delete().eq("keyword_id", k["id"]).execute()
                                 supabase.table("keywords").delete().eq("id", k["id"]).execute()
                                 st.success("OK")
-                                st.session_state[del_key] = False
+                                st.session_state[del_confirm_key] = False
                                 time.sleep(0.5)
                                 st.rerun()
                             except:
                                 st.error("Error")
-                        if dc2.button("❌", key=f"no_{k['id']}"):
-                            st.session_state[del_key] = False
+                        if dc2.button("❌", key=f"no_del_{k_id_str}"):
+                            st.session_state[del_confirm_key] = False
                             st.rerun()
 
     # Запускаємо фрагмент
