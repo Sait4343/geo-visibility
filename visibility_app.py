@@ -3628,10 +3628,11 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: USER TRACKING & DATE RANGE.
-    1. Ліміт 100 записів.
-    2. Колонка "Ініціатор" (Авто або ПІБ).
-    3. Фільтр дат (Range) на основі даних.
+    ВЕРСІЯ: FINAL WITH INITIATOR.
+    1. Визначає ініціатора:
+       - Якщо є user_id -> виводить ПІБ (Human).
+       - Якщо немає -> "🤖 Автосканування".
+    2. Розумний фільтр дат та ліміт 100.
     """
     import pandas as pd
     import streamlit as st
@@ -3660,8 +3661,8 @@ def show_history_page():
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-            # 2. Scans (Ліміт 100) + user_id
-            # 🔥 Додано user_id у select та змінено ліміт на 100
+            # 2. Scans (Ліміт 100)
+            # 🔥 Тепер ми запитуємо 'user_id', бо ви додали колонку в базу
             scans_resp = supabase.table("scan_results")\
                 .select("id, created_at, provider, keyword_id, user_id")\
                 .eq("project_id", proj["id"])\
@@ -3677,14 +3678,15 @@ def show_history_page():
 
             scan_ids = [s['id'] for s in scans_data]
 
-            # 3. User Profiles (Спроба отримати імена)
-            # Збираємо унікальні ID користувачів, щоб не вантажити зайве
+            # 3. User Profiles (Отримання ПІБ)
+            # Збираємо унікальні ID користувачів, які є в історії
             user_ids = list(set([s['user_id'] for s in scans_data if s.get('user_id')]))
             user_map = {}
             
             if user_ids:
                 try:
-                    # Спробуємо таблицю user_profiles (або змініть на 'profiles', якщо у вас так називається)
+                    # Якщо ваша таблиця профілів називається 'user_profiles' або 'profiles'
+                    # Перевірте назву таблиці в Supabase! Тут приклад для 'user_profiles'
                     u_resp = supabase.table("user_profiles")\
                         .select("user_id, first_name, last_name")\
                         .in_("user_id", user_ids)\
@@ -3692,11 +3694,17 @@ def show_history_page():
                     
                     if u_resp.data:
                         for u in u_resp.data:
-                            name = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
-                            if not name: name = "Користувач"
-                            user_map[u['user_id']] = name
+                            # Формуємо ПІБ
+                            f_name = u.get('first_name', '') or ''
+                            l_name = u.get('last_name', '') or ''
+                            full_name = f"{f_name} {l_name}".strip()
+                            
+                            # Якщо імені немає, але ID є — пишемо заглушку
+                            if not full_name: full_name = "Користувач"
+                            
+                            user_map[u['user_id']] = full_name
                 except Exception:
-                    # Якщо таблиці немає або помилка, ігноруємо
+                    # Якщо таблиці немає або помилка доступу, ігноруємо
                     pass
 
             # 4. Mentions
@@ -3714,17 +3722,24 @@ def show_history_page():
             sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
 
         except Exception as e:
-            st.error(f"Помилка завантаження даних: {e}")
+            # Якщо колонка user_id все ще не створена, покажемо підказку
+            if "column scan_results.user_id does not exist" in str(e):
+                st.error("⚠️ У таблиці `scan_results` немає колонки `user_id`. Виконайте SQL запит в Supabase, щоб додати її.")
+            else:
+                st.error(f"Помилка завантаження даних: {e}")
             return
 
     # --- 3. ОБРОБКА ДАНИХ ---
     df_scans = pd.DataFrame(scans_data)
 
-    # 🔥 МАПІНГ ІНІЦІАТОРА (User vs Auto)
+    # 🔥 ЛОГІКА ІНІЦІАТОРА
     def get_initiator(uid):
+        # Якщо user_id немає (None/Null) -> це Автоскан
         if pd.isna(uid) or not uid:
-            return "🤖 Автоматично"
-        return user_map.get(uid, "👤 Вручну") # Якщо ID є, але імені немає в мапі
+            return "🤖 Автосканування"
+        
+        # Якщо user_id є -> шукаємо ім'я в мапі
+        return user_map.get(uid, "👤 Адмін/Користувач") 
     
     df_scans['initiator'] = df_scans['user_id'].apply(get_initiator)
 
@@ -3780,7 +3795,6 @@ def show_history_page():
     # --- 4. ФІЛЬТРИ ТА СОРТУВАННЯ ---
     st.markdown("### 🔍 Фільтрація")
     
-    # Визначаємо межі дат для фільтру
     if not df_scans.empty:
         min_date_avail = df_scans['created_at_dt'].min().date()
         max_date_avail = df_scans['created_at_dt'].max().date()
@@ -3795,8 +3809,6 @@ def show_history_page():
         sel_providers = st.multiselect("Модель (LLM)", all_providers, default=all_providers)
     
     with c2:
-        # 🔥 НОВИЙ ФІЛЬТР ДАТ (Range Picker)
-        # За замовчуванням вибираємо весь доступний період
         sel_dates = st.date_input(
             "Період сканування",
             value=(min_date_avail, max_date_avail),
@@ -3818,15 +3830,12 @@ def show_history_page():
     # --- ЗАСТОСУВАННЯ ФІЛЬТРІВ ---
     mask = df_scans['provider'].isin(sel_providers)
     
-    # Фільтр по датах
     if isinstance(sel_dates, tuple):
         if len(sel_dates) == 2:
             start_d, end_d = sel_dates
-            # Конвертуємо start_d / end_d в datetime для порівняння, або date
             mask &= (df_scans['created_at_dt'].dt.date >= start_d)
             mask &= (df_scans['created_at_dt'].dt.date <= end_d)
         elif len(sel_dates) == 1:
-            # Якщо користувач вибрав тільки одну дату (початок)
             mask &= (df_scans['created_at_dt'].dt.date == sel_dates[0])
         
     df_final = df_scans[mask].copy()
@@ -3847,6 +3856,7 @@ def show_history_page():
 
     # --- 5. ВІДОБРАЖЕННЯ ---
     st.divider()
+    
     st.markdown(f"**Знайдено записів:** {len(df_final)}")
     
     cols_to_show = [
@@ -3854,7 +3864,6 @@ def show_history_page():
         'total_brands', 'total_links', 'my_mentions_count', 'official_links', 'initiator'
     ]
     
-    # Захист, якщо якихось колонок немає
     cols_to_show = [c for c in cols_to_show if c in df_final.columns]
     
     df_display = df_final[cols_to_show].copy()
@@ -3874,7 +3883,7 @@ def show_history_page():
             "total_links": st.column_config.NumberColumn("Всього посилань", help="Всього знайдено"),
             "my_mentions_count": st.column_config.NumberColumn("Згадок нас", help="Наш бренд"),
             "official_links": st.column_config.NumberColumn("Офіц. джерела", help="Whitelist"),
-            "initiator": st.column_config.TextColumn("Ініціатор", help="Хто запустив")
+            "initiator": st.column_config.TextColumn("Ініціатор", help="Хто запустив аналіз")
         }
     )
 
