@@ -3830,9 +3830,10 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FINAL ADJUSTMENTS.
-    1. Текст: "Ви авторизовані як".
-    2. Шрифт імені: 16px.
+    ВЕРСІЯ: PIXEL PERFECT LAYOUT.
+    1. Логотип: 35px від верху.
+    2. Підпис: AI Visibility.
+    3. Відступи: 20px до лінії, 15px після лінії.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3857,13 +3858,26 @@ def sidebar_menu():
     proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
-        # 1. Логотип Virshi
-        st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=160)
-        
-        st.divider()
+        # 🔥 CSS FIX: Прибираємо стандартний padding сайдбару, щоб контролювати його вручну
+        st.markdown("""
+            <style>
+                [data-testid="stSidebarBody"] {
+                    padding-top: 0rem !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+
+        # 🔥 ЛОГОТИП + ПІДПИС + ЛІНІЯ (HTML верстка для точних відступів)
+        st.markdown(f"""
+            <div style="margin-top: 35px; margin-bottom: 20px;">
+                <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160">
+                <div style="margin-top: 5px; font-size: 13px; font-weight: 600; color: #555; letter-spacing: 0.5px;">AI Visibility</div>
+            </div>
+            
+            <div style="border-top: 1px solid #E0E0E0; margin-bottom: 15px;"></div>
+        """, unsafe_allow_html=True)
 
         # 2. Профіль користувача
-        # Змінено текст та розмір шрифту імені (16px)
         st.markdown(f"""
         <div style='line-height: 1.2; margin-bottom: 10px;'>
             <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви авторизовані як:</div>
@@ -3897,7 +3911,7 @@ def sidebar_menu():
                     html_content = f"""
                     <div style='line-height: 1.15; display: flex; flex-direction: column; justify-content: center; height: 48px;'>
                         <div style='font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px;'>Проект</div>
-                        <div style='font-weight: bold; font-size: 14px; color: #31333F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{proj_name}</div>
+                        <div style='font-weight: bold; font-size: 16px; color: #31333F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{proj_name}</div>
                         <div style='font-size: 11px; color: #888;'>{clean_d if clean_d else ''}</div>
                     </div>
                     """
