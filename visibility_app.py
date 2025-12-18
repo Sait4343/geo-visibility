@@ -3830,9 +3830,10 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: FIX BUTTON & BIGGER PROJECT TITLE.
-    1. Кнопка згортання: Активна, навпроти профілю.
-    2. Проект: Видалено лейбл, назва збільшена до 20px.
+    ВЕРСІЯ: LOGO RESTORED.
+    1. Логотип: Повернуто на місце (прибрано margin-top: -80px).
+    2. Кнопка згортання: Активна, позиція top: 120px.
+    3. Проект: Великий шрифт (20px), без лейбла.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3854,44 +3855,47 @@ def sidebar_menu():
     proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
-        # 🔥 CSS FIX: КНОПКА ТА ВІДСТУПИ
+        # 🔥 CSS FIX
         st.markdown("""
             <style>
-                /* Обнулення відступів контенту */
+                /* Обнуляємо відступи контейнера, щоб контент був зверху */
                 [data-testid="stSidebarBody"] {
                     padding-top: 0rem !important;
                 }
                 section[data-testid="stSidebar"] .block-container {
-                    padding-top: 0rem !important;
-                    margin-top: -2rem !important;
+                    padding-top: 1rem !important;
+                    margin-top: 0rem !important;
                 }
                 
-                /* 🔥 НАЛАШТУВАННЯ КНОПКИ ЗГОРТАННЯ */
+                /* 🔥 КНОПКА ЗГОРТАННЯ */
                 [data-testid="stSidebarHeader"] {
                     padding-top: 0rem !important;
                     height: 0rem !important;
                     
-                    /* Фіксуємо позицію */
+                    /* Фіксуємо позицію навпроти профілю */
                     position: absolute;
-                    top: 120px !important; /* Навпроти профілю */
-                    right: 15px !important;
+                    top: 135px !important; 
+                    right: 10px !important;
                     
-                    /* Робимо клікабельною */
+                    /* Робимо видимою та клікабельною */
                     z-index: 999999 !important;
                     pointer-events: auto !important;
-                    
                     background-color: transparent;
+                    width: auto !important;
                 }
-                /* Стиль самої іконки (щоб було видно) */
+                /* Колір іконки стрілочки */
                 [data-testid="stSidebarHeader"] button {
-                    color: #555 !important;
+                    color: #666 !important;
+                }
+                [data-testid="stSidebarHeader"] button:hover {
+                    color: #00C896 !important;
                 }
             </style>
         """, unsafe_allow_html=True)
 
-        # 1. ЛОГОТИП + AI VISIBILITY (Верх сайдбару)
+        # 1. ЛОГОТИП + AI VISIBILITY (Нормальне позиціонування)
         st.markdown(f"""
-            <div style="margin-top: -80px; text-align: center;">
+            <div style="text-align: center; margin-bottom: 5px;">
                 <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160" style="display: inline-block;">
                 <div style="margin-top: 5px; font-size: 18px; font-weight: bold; color: #333; letter-spacing: 0.5px;">AI Visibility</div>
             </div>
@@ -3900,9 +3904,10 @@ def sidebar_menu():
             <div style="margin-top: 15px;"></div>
         """, unsafe_allow_html=True)
 
-        # 2. ПРОФІЛЬ (Навпроти цього блоку буде кнопка закриття)
+        # 2. ПРОФІЛЬ (Текст)
         st.markdown(f"""
-        <div style='line-height: 1.2; margin-bottom: 10px; padding-right: 30px;'> <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви авторизовані як:</div>
+        <div style='line-height: 1.2; margin-bottom: 10px; padding-right: 40px;'>
+            <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6); margin-bottom: 2px;'>Ви авторизовані як:</div>
             <div style='font-weight: 600; font-size: 16px; color: #31333F;'>{full_name}</div>
             <div style='font-size: 12px; color: rgba(49, 51, 63, 0.6);'>{user_email}</div>
         </div>
@@ -3930,7 +3935,7 @@ def sidebar_menu():
                     st.markdown(img_html, unsafe_allow_html=True)
                 
                 with col_brand_txt:
-                    # 🔥 ОНОВЛЕНО: Великий шрифт, без слова "Проект"
+                    # 🔥 ОНОВЛЕНО: Великий шрифт назви проекту
                     html_content = f"""
                     <div style='line-height: 1.1; display: flex; flex-direction: column; justify-content: center; height: 48px;'>
                         <div style='font-weight: bold; font-size: 20px; color: #31333F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{proj_name}</div>
@@ -4025,7 +4030,6 @@ def sidebar_menu():
                 st.rerun()
 
     return selected
-
 
 def show_auth_page():
     """
