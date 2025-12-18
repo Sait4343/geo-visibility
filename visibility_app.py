@@ -854,9 +854,9 @@ def show_competitors_page():
     """
     Сторінка глибокого конкурентного аналізу.
     ОНОВЛЕНО: 
-    1. Fix 'ModuleNotFoundError': Додано try-except для експорту Excel.
-    2. Оригінальні назви брендів.
-    3. Нумерація та KPI.
+    1. Видалено KPI "Середня позиція".
+    2. Виправлено назву цільового бренду (Force Project Name).
+    3. Експорт Excel + Нумерація.
     """
     import pandas as pd
     import plotly.express as px
@@ -877,6 +877,9 @@ def show_competitors_page():
     if not proj:
         st.info("Спочатку створіть проект.")
         return
+    
+    # Офіційна назва бренду з налаштувань проекту
+    OFFICIAL_BRAND_NAME = proj.get("brand_name", "My Brand")
 
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
@@ -948,7 +951,7 @@ def show_competitors_page():
     else:
         mask_kw = df_full['keyword_text'].apply(lambda x: False)
 
-    df_filtered = df_full[mask_model & mask_kw]
+    df_filtered = df_full[mask_model & mask_kw].copy()
 
     if df_filtered.empty:
         st.warning("За обраними фільтрами даних немає.")
@@ -956,6 +959,14 @@ def show_competitors_page():
 
     # --- 3. АГРЕГАЦІЯ ---
     
+    # 🔥 FIX: НОРМАЛІЗАЦІЯ НАЗВИ ЦІЛЬОВОГО БРЕНДУ
+    # Якщо рядок позначено як 'is_my_brand', ми примусово ставимо йому офіційну назву проекту.
+    # Це об'єднає "beitagency", "Be-it" та "Be-it Agency" в один рядок.
+    mask_target = df_filtered['is_my_brand'] == True
+    if mask_target.any():
+        df_filtered.loc[mask_target, 'brand_name'] = OFFICIAL_BRAND_NAME
+
+    # Хелпер: Текст -> Число
     def sentiment_to_score(s):
         if s == 'Позитивний': return 100
         if s == 'Негативний': return 0
@@ -970,6 +981,7 @@ def show_competitors_page():
         Is_My_Brand=('is_my_brand', 'max')
     ).reset_index()
 
+    # Хелпер: Число -> Текст
     def get_sentiment_text(score):
         if score >= 60: return "Позитивна"
         if score <= 40: return "Негативна"
@@ -981,15 +993,7 @@ def show_competitors_page():
     # --- 4. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ---
     st.write("") 
     
-    my_brand_row = stats[stats['Is_My_Brand'] == True]
-    if not my_brand_row.empty:
-        my_avg_pos = my_brand_row.iloc[0]['Avg_Rank']
-        kpi_val = f"#{my_avg_pos:.1f}"
-    else:
-        kpi_val = "-"
-
-    st.metric("🏆 Середня позиція вашого бренду", kpi_val)
-    st.write("")
+    # (Блок KPI видалено)
 
     tab_list, tab_freq, tab_sent, tab_rank = st.tabs([
         "📋 Детальний рейтинг", 
@@ -1010,11 +1014,10 @@ def show_competitors_page():
         
         display_df['Сер. Позиція'] = display_df['Avg_Rank'].apply(lambda x: f"#{x:.1f}")
         
-        # 🔥 БЕЗПЕЧНИЙ ЕКСПОРТ (з обробкою помилки xlsxwriter)
+        # Експорт
         with c_export:
             try:
                 buffer = io.BytesIO()
-                # Спробуємо створити файл
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     display_df.to_excel(writer, sheet_name='Competitors')
                 
@@ -1024,10 +1027,8 @@ def show_competitors_page():
                     file_name=f"competitors_analysis_{proj['brand_name']}.xlsx",
                     mime="application/vnd.ms-excel"
                 )
-            except ImportError:
-                st.error("⚠️ Встановіть 'XlsxWriter' у requirements.txt")
-            except Exception as e:
-                st.error(f"Помилка експорту: {e}")
+            except Exception:
+                st.error("Помилка експорту")
 
         st.dataframe(
             display_df[['brand_name', 'Mentions', 'Reputation_Text', 'Сер. Позиція', 'Is_My_Brand']],
@@ -1048,6 +1049,7 @@ def show_competitors_page():
         col_table, col_chart = st.columns([1.8, 2.2])
 
         with col_table:
+            # Таблиця налаштувань
             df_freq_editor = stats[['Show', 'brand_name', 'Mentions', 'Is_My_Brand']].copy()
             df_freq_editor = df_freq_editor.sort_values('Mentions', ascending=False)
 
@@ -1070,6 +1072,7 @@ def show_competitors_page():
             )
 
         with col_chart:
+            # Дані для графіка
             chart_data = edited_freq_df[edited_freq_df['Show'] == True]
             
             if not chart_data.empty:
@@ -1194,6 +1197,7 @@ def show_competitors_page():
                 st.plotly_chart(fig_rank, use_container_width=True)
             else:
                 st.info("Оберіть бренд.")
+
 
 def show_recommendations_page():
     """
