@@ -3830,8 +3830,11 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: NO TOP PADDING.
-    Логотип піднято максимально вгору (видалено стандартні відступи Streamlit).
+    ВЕРСІЯ: ULTRA COMPACT & BUTTON MOVE.
+    1. Логотип піднято максимально вгору (-80px).
+    2. Кнопка "Закрити сайдбар" переміщена вниз (напроти профілю).
+    3. AI Visibility: 18px Bold Center.
+    4. Точні відступи (20px, 15px).
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -3844,7 +3847,6 @@ def sidebar_menu():
     # Дані користувача
     user_email = user.email if user else "guest@virshi.ai"
     
-    # Формуємо повне ім'я
     first_name = user_details.get("first_name", "")
     last_name = user_details.get("last_name", "")
     full_name = f"{first_name} {last_name}".strip()
@@ -3856,35 +3858,37 @@ def sidebar_menu():
     proj_domain = proj.get("domain", "") if proj else ""
 
     with st.sidebar:
-        # 🔥 CSS FIX: Агресивно прибираємо ВСІ верхні відступи сайдбару
+        # 🔥 CSS MAGIC:
+        # 1. Прибираємо відступи контейнера.
+        # 2. Переміщуємо кнопку закриття сайдбару (stSidebarHeader) вниз на ~130px.
         st.markdown("""
             <style>
-                /* Прибираємо відступ у головного контейнера сайдбару */
+                [data-testid="stSidebarBody"] {
+                    padding-top: 0rem !important;
+                }
                 section[data-testid="stSidebar"] .block-container {
                     padding-top: 0rem !important;
-                    margin-top: -2rem !important; /* Тягнемо весь контент вгору */
+                    margin-top: -2rem !important;
                 }
-                /* Прибираємо відступ у заголовка сайдбару (якщо є) */
-                div[data-testid="stSidebarHeader"] {
-                    padding-bottom: 0rem !important;
-                    height: 0rem !important;
-                }
-                /* Додаткова страховка для UserContent */
-                div[data-testid="stSidebarUserContent"] {
-                    padding-top: 0rem !important;
+                /* Переміщення кнопки закриття сайдбару вниз */
+                [data-testid="stSidebarHeader"] {
+                    background-color: transparent;
+                    top: 135px !important; /* Опускаємо кнопку навпроти профілю */
+                    z-index: 1000;
                 }
             </style>
         """, unsafe_allow_html=True)
 
-        # 🔥 ЛОГОТИП + ЗАГОЛОВОК
-        # margin-top: 10px (мінімальний відступ від "стелі")
+        # 🔥 ЛОГОТИП + AI VISIBILITY (Margin-top -80px тягне під самий верх)
         st.markdown(f"""
-            <div style="margin-top: 10px; margin-bottom: 20px; text-align: center;">
+            <div style="margin-top: -80px; text-align: center;">
                 <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160" style="display: inline-block;">
                 <div style="margin-top: 5px; font-size: 18px; font-weight: bold; color: #333; letter-spacing: 0.5px;">AI Visibility</div>
             </div>
             
-            <div style="border-top: 1px solid #E0E0E0; margin-bottom: 15px;"></div>
+            <div style="margin-top: 20px; border-top: 1px solid #E0E0E0;"></div>
+            
+            <div style="margin-top: 15px;"></div>
         """, unsafe_allow_html=True)
 
         # 2. Профіль користувача
