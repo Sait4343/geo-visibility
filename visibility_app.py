@@ -11,6 +11,12 @@ from supabase import create_client, Client
 import numpy as np # Потрібно для адмінки
 import json
 import uuid
+import streamlit as st
+import pandas as pd
+import json
+import uuid
+from datetime import datetime
+import io
 
 
 # =========================
@@ -1656,18 +1662,264 @@ def show_faq_page():
             st.write(answer)
 
 
-def show_reports_page():
-    """Сторінка Звітів"""
-    st.title("📊 Звіти")
-    st.info("Розділ знаходиться в розробці. Тут ви зможете генерувати PDF-звіти за обраний період.")
+def generate_html_report_content(project_name, df_full):
+    """
+    Генерує HTML код звіту.
+    ВИПРАВЛЕНО: Використано ''' для уникнення конфлікту лапок.
+    """
+    import pandas as pd
+    from datetime import datetime
     
-    c1, c2 = st.columns(2)
-    with c1:
-        st.date_input("Початок періоду")
-    with c2:
-        st.date_input("Кінець періоду")
+    # Отримуємо дату та провайдерів
+    current_date = datetime.now().strftime('%d.%m.%Y')
+    providers = df_full['provider'].unique().tolist()
+    
+    # ---------------------------------------------------------
+    # 1. CSS СТИЛІ (Використовуємо ''' щоб не ламало f-string)
+    # ---------------------------------------------------------
+    css_block = '''
+    @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; background-color: #00d18f; font-family: 'Golca', 'Montserrat', sans-serif; color: #333; line-height: 1.6; }
+    .content-card { background: #ffffff; border-radius: 20px; padding: 25px; max-width: 950px; margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.15); }
+    .virshi-logo-container { text-align: center; margin: 0 auto 20px auto; }
+    .logo-img-real { max-width: 150px; height: auto; }
+    .report-header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; }
+    h1 { font-size: 26px; color: #2c3e50; margin: 0; font-weight: 800; }
+    .subtitle { color: #888; margin-top: 10px; font-size: 14px; }
+    
+    .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
+    .kpi-box { flex: 1 1 200px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; text-align: center; background: #e0f2f1; position: relative; min-height: 180px; }
+    .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; min-height: 30px; display: flex; align-items: center; justify-content: center; }
+    .kpi-big-num { font-size: 28px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
+    .chart-container { position: relative; width: 120px; height: 120px; margin: auto; }
+    
+    h3 { font-size: 20px; color: #2c3e50; margin-top: 40px; margin-bottom: 20px; padding-left: 15px; border-left: 5px solid #00d18f; font-weight: 800; }
+
+    .rt-tabs { display: flex; justify-content: center; gap: 10px; margin-bottom: 30px; flex-wrap: wrap; }
+    .rt-btn { padding: 12px 25px; border: 2px solid #00d18f; background: #fff; color: #00d18f; border-radius: 30px; cursor: pointer; font-weight: 800; font-size: 14px; transition: all 0.3s ease; text-transform: uppercase; }
+    .rt-btn.active, .rt-btn:hover { background: #00d18f; color: #fff; }
+    .rt-content { display: none; animation: fadeIn 0.5s; }
+    .rt-content.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    .item-box { border: 2px solid #4DD0E1; border-radius: 15px; margin-bottom: 20px; overflow: hidden; background: #fff; }
+    .accordion-trigger { background: #fff; padding: 15px 20px; display: flex; align-items: center; gap: 15px; cursor: pointer; transition: background-color 0.3s ease; justify-content: space-between; }
+    .accordion-trigger:hover { background-color: #f9f9f9; }
+    .accordion-trigger.active { background-color: #f0fdff; }
+    .item-number-wrapper { width: 30px; height: 30px; flex-shrink: 0; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight:bold; color:#fff; font-size: 12px; }
+    .item-metrics-container { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; border-top: 1px solid #eee; }
+    .metric-cell { flex: 1 1 calc(33% - 10px); border: 2px solid #00d18f; border-radius: 10px; padding: 15px 10px; text-align: center; }
+    .m-label { display: block; font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 5px; }
+    .m-val { display: block; font-size: 16px; font-weight: 800; color: #222; }
+    .item-response { background-color: #e8def8; color: #1d192b; padding: 20px; font-size: 14px; text-align: left; }
+    
+    @media (min-width: 768px) { .content-card { padding: 50px; } }
+    '''
+
+    # ---------------------------------------------------------
+    # 2. JS СКРИПТИ
+    # ---------------------------------------------------------
+    js_block = '''
+    <script>
+    Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
+    
+    function createDoughnut(id, val, color) {
+        const ctx = document.getElementById(id);
+        if(!ctx) return;
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                datasets: [{
+                    data: [val, 100 - val],
+                    backgroundColor: [color, '#ffcdd2'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, cutout: '75%',
+                plugins: { legend: { display: false }, tooltip: { enabled: false } }
+            }
+        });
+    }
+
+    function openReportTab(evt, tabName) {
+        var i, tabcontent, tablinks;
+        tabcontent = document.getElementsByClassName("rt-content");
+        for (i = 0; i < tabcontent.length; i++) {
+            tabcontent[i].style.display = "none";
+            tabcontent[i].classList.remove("active");
+        }
+        tablinks = document.getElementsByClassName("rt-btn");
+        for (i = 0; i < tablinks.length; i++) {
+            tablinks[i].className = tablinks[i].className.replace(" active", "");
+        }
+        document.getElementById(tabName).style.display = "block";
+        document.getElementById(tabName).classList.add("active");
+        evt.currentTarget.className += " active";
+    }
+
+    function toggleAcc(el) {
+        el.classList.toggle("active");
+        var panel = el.nextElementSibling;
+        if (panel.style.display === "block") {
+            panel.style.display = "none";
+        } else {
+            panel.style.display = "block";
+        }
+    }
+    
+    window.addEventListener('load', function() {
+        __JS_CHARTS_PLACEHOLDER__
+    });
+    </script>
+    '''
+
+    # ---------------------------------------------------------
+    # 3. HTML ШАБЛОН
+    # ---------------------------------------------------------
+    html_template = '''<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Звіт AI Visibility</title>
+<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/faviconV2.png">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;800;900&display=swap" rel="stylesheet">
+<style>
+__CSS_PLACEHOLDER__
+</style>
+</head>
+<body>
+<div class="content-card">
+    <div class="virshi-logo-container">
+        <img src="https://raw.githubusercontent.com/virshi-ai/image/39ba460ec649893b9495427aa102420beb1fa48d/virshi-op_logo-main.png" class="logo-img-real" alt="VIRSHI Logo">
+    </div>
+    <div class="report-header">
+        <h1>Звіт AI Visibility: __PROJECT_NAME__</h1>
+        <div class="subtitle">Дата формування: __DATE__</div>
+    </div>
+    
+    <div class="rt-tabs">
+        __TABS_BUTTONS__
+    </div>
+    
+    __TABS_CONTENT__
+    
+</div>
+__JS_BLOCK__
+</body>
+</html>
+'''
+
+    # ---------------------------------------------------------
+    # 4. ЛОГІКА НАПОВНЕННЯ (КНОПКИ ТА КОНТЕНТ)
+    # ---------------------------------------------------------
+    
+    tabs_buttons_html = ""
+    for i, prov in enumerate(providers):
+        active_cls = "active" if i == 0 else ""
+        btn = f'<button class="rt-btn {active_cls}" onclick="openReportTab(event, \'{prov}\')">{prov.upper()}</button>\n'
+        tabs_buttons_html += btn
+
+    tabs_content_html = ""
+    js_charts_code = ""
+
+    for i, prov in enumerate(providers):
+        active_cls = "active" if i == 0 else ""
         
-    st.button("Згенерувати PDF (Demo)", disabled=True)
+        df_p = df_full[df_full['provider'] == prov].copy()
+        total_scans = len(df_p)
+        if total_scans == 0: continue
+
+        # Metrics
+        pres_count = df_p[df_p['my_mentions_count'] > 0].shape[0]
+        pres_pct = (pres_count / total_scans * 100)
+        
+        tot_links = df_p['total_links'].sum()
+        off_links = df_p['official_links'].sum()
+        off_pct = (off_links / tot_links * 100) if tot_links > 0 else 0
+        
+        tot_brands = df_p['total_brands'].sum()
+        my_mentions = df_p['my_mentions_count'].sum()
+        sov_pct = (my_mentions / tot_brands * 100) if tot_brands > 0 else 0
+
+        # Tab Content
+        tabs_content_html += f'''
+        <div id="{prov}" class="rt-content {active_cls}">
+            <div class="kpi-row">
+                <div class="kpi-box">
+                    <div class="kpi-title">Частка голосу (SOV)</div>
+                    <div class="kpi-big-num">{sov_pct:.1f}%</div>
+                    <div class="chart-container"><canvas id="chartSOV_{prov}"></canvas></div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-title">% Офіційних джерел</div>
+                    <div class="kpi-big-num">{off_pct:.1f}%</div>
+                    <div class="chart-container"><canvas id="chartOff_{prov}"></canvas></div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-title">Присутність бренду</div>
+                    <div class="kpi-big-num">{pres_pct:.1f}%</div>
+                    <div class="chart-container"><canvas id="chartPres_{prov}"></canvas></div>
+                </div>
+            </div>
+
+            <h3>Детальний аналіз запитів ({prov})</h3>
+            <div class="accordion-wrapper">
+        '''
+        
+        # Accordion Items
+        top_scans = df_p.head(10)
+        for idx, row in top_scans.iterrows():
+            q_text = row.get('keyword', 'Запит')
+            date_scan = row.get('created_at_dt').strftime('%d.%m.%Y') if pd.notnull(row.get('created_at_dt')) else ""
+            
+            tabs_content_html += f'''
+            <div class="item-box">
+                <div class="accordion-trigger" onclick="toggleAcc(this)">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <div class="item-number-wrapper">{idx+1}</div>
+                        <div style="font-weight:bold;">{q_text}</div>
+                    </div>
+                    <div style="color:#00d18f;">▼</div>
+                </div>
+                <div class="accordion-content" style="display:none;">
+                    <div class="item-metrics-container">
+                        <div class="metric-cell"><span class="m-label">Згадок нас</span><span class="m-val">{int(row.get('my_mentions_count',0))}</span></div>
+                        <div class="metric-cell"><span class="m-label">Всього брендів</span><span class="m-val">{int(row.get('total_brands',0))}</span></div>
+                        <div class="metric-cell"><span class="m-label">Офіц. посилань</span><span class="m-val">{int(row.get('official_links',0))}</span></div>
+                    </div>
+                    <div class="item-response">
+                        <p><strong>Дата:</strong> {date_scan}</p>
+                        <p><em>Текст відповіді відобразиться тут, якщо він є у базі.</em></p>
+                    </div>
+                </div>
+            </div>
+            '''
+        
+        tabs_content_html += "</div></div>"
+
+        # JS Charts Accumulation
+        js_charts_code += f"createDoughnut('chartSOV_{prov}', {sov_pct}, '#00d18f');\n"
+        js_charts_code += f"createDoughnut('chartOff_{prov}', {off_pct}, '#4DD0E1');\n"
+        js_charts_code += f"createDoughnut('chartPres_{prov}', {pres_pct}, '#00d18f');\n"
+
+    # ---------------------------------------------------------
+    # 5. ФІНАЛЬНЕ ЗБИРАННЯ (REPLACE)
+    # ---------------------------------------------------------
+    final_js = js_block.replace("__JS_CHARTS_PLACEHOLDER__", js_charts_code)
+    
+    final_html = html_template \
+        .replace("__CSS_PLACEHOLDER__", css_block) \
+        .replace("__PROJECT_NAME__", str(project_name)) \
+        .replace("__DATE__", str(current_date)) \
+        .replace("__TABS_BUTTONS__", tabs_buttons_html) \
+        .replace("__TABS_CONTENT__", tabs_content_html) \
+        .replace("__JS_BLOCK__", final_js)
+
+    return final_html
 
 
 
@@ -5297,9 +5549,9 @@ def main():
             if 'show_history_page' in globals(): show_history_page()
             else: st.warning("Функція show_history_page не знайдена.")
             
+# 🔥 ОСЬ ТУТ ВАША ЗАМІНА:
         elif page == "Звіти":
-            if 'show_reports_page' in globals(): show_reports_page()
-            else: st.warning("Функція show_reports_page не знайдена.")
+            show_reports_page()
             
         elif page == "FAQ":
             if 'show_faq_page' in globals(): show_faq_page()
