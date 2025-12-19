@@ -853,10 +853,12 @@ def onboarding_wizard():
 def show_competitors_page():
     """
     Сторінка глибокого конкурентного аналізу.
-    ВЕРСІЯ: TONALITY BREAKDOWN & HIGHLIGHT.
-    1. Тональність: виводиться як "🟢 20% ⚪ 50% 🔴 30%".
-    2. Виділення: Рядок цільового бренду підсвічується зеленим.
-    3. Видалено стовпчик "Цільовий".
+    ВЕРСІЯ: SENTIMENT DISTRIBUTION & HIGHLIGHT.
+    1. Таб "Детальний рейтинг":
+       - Стовпчик "Тональність" замість Репутації (🔴 XX% ⚪ XX% 🟢 XX%).
+       - Видалено "Цільовий бренд" та кнопку Експорт.
+       - Рядок цільового бренду підсвічено зеленим.
+    2. Збережено пагінацію, пошук, авто-висоту.
     """
     import pandas as pd
     import plotly.express as px
@@ -974,46 +976,45 @@ def show_competitors_page():
     
     df_filtered['sent_score_num'] = df_filtered['sentiment_score'].apply(sentiment_to_score)
 
-    # Базова статистика
+    # Базова агрегація
     stats = df_filtered.groupby('brand_name').agg(
         Mentions=('id_x', 'count'),
         Avg_Rank=('rank_position', 'mean'),
+        Avg_Sentiment_Num=('sent_score_num', 'mean'),
         Is_My_Brand=('is_my_brand', 'max')
     ).reset_index()
 
-    # 🔥 РОЗРАХУНОК ТОНАЛЬНОСТІ (%)
-    # Групуємо, щоб отримати кількість кожного типу тональності для кожного бренду
+    # 🔥 РОЗРАХУНОК ВІДСОТКІВ ТОНАЛЬНОСТІ (ДЛЯ СТОВПЧИКА)
     sent_counts = df_filtered.groupby(['brand_name', 'sentiment_score']).size().unstack(fill_value=0)
     
-    # Додаємо колонки, якщо їх немає (на випадок, якщо якийсь тип відсутній у вибірці)
-    for col in ['Позитивний', 'Нейтральний', 'Негативний']:
+    # Переконаємось, що всі колонки є
+    for col in ['Негативний', 'Нейтральний', 'Позитивний']:
         if col not in sent_counts.columns:
             sent_counts[col] = 0
             
-    # Рахуємо відсотки
     sent_counts['Total'] = sent_counts.sum(axis=1)
-    sent_counts['Pos_Pct'] = (sent_counts['Позитивний'] / sent_counts['Total'] * 100).round(0).astype(int)
-    sent_counts['Neu_Pct'] = (sent_counts['Нейтральний'] / sent_counts['Total'] * 100).round(0).astype(int)
-    sent_counts['Neg_Pct'] = (sent_counts['Негативний'] / sent_counts['Total'] * 100).round(0).astype(int)
+    
+    # Рахуємо відсотки
+    sent_counts['Neg_Pct'] = (sent_counts['Негативний'] / sent_counts['Total'] * 100).fillna(0).astype(int)
+    sent_counts['Neu_Pct'] = (sent_counts['Нейтральний'] / sent_counts['Total'] * 100).fillna(0).astype(int)
+    sent_counts['Pos_Pct'] = (sent_counts['Позитивний'] / sent_counts['Total'] * 100).fillna(0).astype(int)
 
-    # Формуємо красивий рядок: "🟢 20% ⚪ 50% 🔴 30%"
-    def format_tonality(row):
-        parts = []
-        if row['Pos_Pct'] > 0: parts.append(f"🟢 {row['Pos_Pct']}%")
-        if row['Neu_Pct'] > 0: parts.append(f"⚪ {row['Neu_Pct']}%")
-        if row['Neg_Pct'] > 0: parts.append(f"🔴 {row['Neg_Pct']}%")
-        return " ".join(parts) if parts else "⚪ 0%"
+    # Формуємо рядок: 🔴 10%  ⚪ 50%  🟢 40%
+    sent_counts['Тональність_Str'] = sent_counts.apply(
+        lambda x: f"🔴 {x['Neg_Pct']}%   ⚪ {x['Neu_Pct']}%   🟢 {x['Pos_Pct']}%", axis=1
+    )
 
-    sent_counts['Tonality_Str'] = sent_counts.apply(format_tonality, axis=1)
+    # Об'єднуємо з основною статистикою
+    stats = stats.merge(sent_counts[['Тональність_Str']], on='brand_name', how='left')
+    stats['Тональність_Str'] = stats['Тональність_Str'].fillna("🔴 0% ⚪ 0% 🟢 0%")
 
-    # Об'єднуємо з основною таблицею
-    stats = pd.merge(stats, sent_counts[['Tonality_Str']], on='brand_name', how='left')
-    stats['Show'] = True
+    def get_sentiment_text(score):
+        if score >= 60: return "Позитивна"
+        if score <= 40: return "Негативна"
+        return "Нейтральна"
 
-    # Для решти вкладок (стара логіка текстова)
-    def get_sentiment_text_legacy(score): # Заглушка, якщо знадобиться
-        return "N/A"
-    stats['Reputation_Text'] = stats['Tonality_Str'] # Використовуємо новий рядок
+    stats['Reputation_Text'] = stats['Avg_Sentiment_Num'].apply(get_sentiment_text)
+    stats['Show'] = True 
 
     # --- 4. ВІДОБРАЖЕННЯ (ВКЛАДКИ) ---
     st.write("") 
@@ -1025,7 +1026,7 @@ def show_competitors_page():
         "🏆 Середня позиція"
     ])
 
-    # === TAB 1: ДЕТАЛЬНИЙ РЕЙТИНГ (ОНОВЛЕНО) ===
+    # === TAB 1: ДЕТАЛЬНИЙ РЕЙТИНГ ===
     with tab_list:
         c_head, c_search, c_rows = st.columns([2, 2, 1])
         with c_head:
@@ -1040,11 +1041,8 @@ def show_competitors_page():
         display_df.index = display_df.index + 1
         display_df.index.name = '#'
         display_df['Сер. Позиція'] = display_df['Avg_Rank'].apply(lambda x: f"#{x:.1f}")
-        
-        # Перейменовуємо для відображення
-        display_df.rename(columns={'Tonality_Str': 'Тональність'}, inplace=True)
 
-        # Фільтр пошуку
+        # Пошук
         if search_list:
             display_df = display_df[display_df['brand_name'].astype(str).str.contains(search_list, case=False, na=False)]
 
@@ -1056,25 +1054,10 @@ def show_competitors_page():
         
         start_idx = (curr_p - 1) * rows_list
         end_idx = start_idx + rows_list
-        
-        # Слайс даних для поточної сторінки
         df_page = display_df.iloc[start_idx:end_idx].copy()
 
-        # 🔥 STYLING: Підсвічуємо рядок цільового бренду зеленим
-        # Використовуємо Pandas Styler
-        def highlight_target_row(row):
-            # Якщо це наш бренд - світло-зелений фон
-            if row.get('Is_My_Brand') == True:
-                return ['background-color: #dcfce7; color: black; font-weight: 500;'] * len(row)
-            else:
-                return [''] * len(row)
-
-        # Створюємо стилізований об'єкт
-        # Ховаємо технічні колонки
-        styled_df = df_page.style.apply(highlight_target_row, axis=1)
-        
-        # Навігація (Верх)
-        nc1, nc2, nc3, nc4 = st.columns([1, 2, 1, 1])
+        # Навігація Top
+        nc1, nc2, nc3 = st.columns([1, 2, 1])
         with nc1:
             if curr_p > 1: 
                 if st.button("⬅️ Попередня", key="prev_list_t"): 
@@ -1087,35 +1070,37 @@ def show_competitors_page():
                 if st.button("Наступна ➡️", key="next_list_t"):
                     st.session_state.cp_page_list += 1
                     st.rerun()
-        with nc4:
-            try:
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    display_df.drop(columns=['Is_My_Brand']).to_excel(writer, sheet_name='Competitors')
-                st.download_button("📥 Excel", data=buffer.getvalue(), file_name=f"competitors_{proj['brand_name']}.xlsx", mime="application/vnd.ms-excel")
-            except: pass
+
+        # 🔥 СТИЛІЗАЦІЯ (ЗЕЛЕНИЙ ФОН ДЛЯ ЦІЛЬОВОГО)
+        # Функція для підсвічування рядка
+        def highlight_target_row(row):
+            # Якщо назва бренду співпадає з офіційною -> зелений фон
+            if row['brand_name'] == OFFICIAL_BRAND_NAME:
+                return ['background-color: #d4edda; color: #155724; font-weight: bold'] * len(row)
+            return [''] * len(row)
+
+        # Вибір колонок для відображення (БЕЗ Is_My_Brand)
+        cols_to_show = ['brand_name', 'Mentions', 'Сер. Позиція', 'Тональність_Str']
+        final_view = df_page[cols_to_show]
+
+        # Застосування стилів
+        styled_df = final_view.style.apply(highlight_target_row, axis=1)
 
         # Таблиця
         dynamic_h = (len(df_page) * 35) + 38
-        
-        # Виводимо стилізовану таблицю. Ховаємо 'Is_My_Brand' через column_config (hidden=True)
-        # ⚠️ Примітка: Styler і column_config можуть конфліктувати при приховуванні колонок.
-        # Тому краще приховати в самому Styler.
-        styled_df.hide(axis="columns", subset=["Is_My_Brand"])
-
         st.dataframe(
             styled_df,
             use_container_width=True,
             height=dynamic_h,
             column_config={
-                "brand_name": st.column_config.TextColumn("Бренд", width="medium"),
+                "brand_name": "Бренд",
                 "Mentions": st.column_config.ProgressColumn("Згадок", format="%d", min_value=0, max_value=int(stats['Mentions'].max())),
-                "Тональність": st.column_config.TextColumn("Тональність", width="medium"),
-                "Сер. Позиція": st.column_config.TextColumn("Сер. Позиція", width="small")
+                "Сер. Позиція": st.column_config.TextColumn("Сер. Позиція", width="small"),
+                "Тональність_Str": st.column_config.TextColumn("Тональність", width="medium")
             }
         )
 
-        # Навігація (Низ)
+        # Навігація Bottom
         if total_rows > 10:
             bc1, bc2, bc3 = st.columns([1, 2, 1])
             with bc1:
@@ -1196,7 +1181,7 @@ def show_competitors_page():
             else:
                 st.info("Оберіть бренд.")
 
-    # === TAB 3: ТОНАЛЬНІСТЬ ===
+    # === TAB 3: ТОНАЛЬНІСТЬ (ГРАФІК) ===
     with tab_sent:
         c_head, c_search, c_rows = st.columns([2, 2, 1])
         with c_head: st.markdown("##### ⭐ Тональність")
@@ -1210,7 +1195,7 @@ def show_competitors_page():
         col_list, col_chart = st.columns([1.5, 2.5])
         
         with col_list:
-            df_sent_editor = stats[['Show', 'brand_name', 'Tonality_Str']].sort_values('brand_name')
+            df_sent_editor = stats[['Show', 'brand_name', 'Reputation_Text']].sort_values('brand_name')
             if search_sent:
                 df_sent_editor = df_sent_editor[df_sent_editor['brand_name'].astype(str).str.contains(search_sent, case=False, na=False)]
 
@@ -1238,7 +1223,7 @@ def show_competitors_page():
                 column_config={
                     "Show": st.column_config.CheckboxColumn("Show", width="small"),
                     "brand_name": "Бренд",
-                    "Tonality_Str": "Тональність"
+                    "Reputation_Text": "Репутація"
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -1358,7 +1343,10 @@ def show_competitors_page():
                 )
                 
                 leader = chart_data_rank.iloc[0]
-                fig_rank.update_layout(showlegend=False, margin=dict(t=20, b=20, l=20, r=20), height=350,
+                fig_rank.update_layout(
+                    showlegend=False, 
+                    margin=dict(t=20, b=20, l=20, r=20), 
+                    height=350,
                     annotations=[dict(text=f"Лідер:<br>{leader['brand_name']}<br>#{leader['Avg_Rank']:.1f}", x=0.5, y=0.5, font_size=14, showarrow=False)]
                 )
                 st.plotly_chart(fig_rank, use_container_width=True)
