@@ -5548,10 +5548,13 @@ def main():
         elif page == "Історія сканувань":
             if 'show_history_page' in globals(): show_history_page()
             else: st.warning("Функція show_history_page не знайдена.")
-            
-# 🔥 ОСЬ ТУТ ВАША ЗАМІНА:
+         
         elif page == "Звіти":
-            show_reports_page()
+            # Безпечний виклик: перевіряємо, чи Python бачить функцію
+            if 'show_reports_page' in globals():
+                show_reports_page()
+            else:
+                st.error("🚨 Помилка: функції.")
             
         elif page == "FAQ":
             if 'show_faq_page' in globals(): show_faq_page()
