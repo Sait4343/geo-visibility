@@ -3628,9 +3628,11 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: NO SCROLL FRAME (AUTO HEIGHT).
-    1. Таблиця автоматично розтягується по висоті (без внутрішнього скролу).
-    2. Виправлено всі попередні помилки.
+    ВЕРСІЯ: EMAIL INITIATOR CHECK.
+    1. Перевіряє стовпчик user_email.
+    2. Якщо є email -> виводить його.
+    3. Якщо немає -> "🤖 Автосканування".
+    4. Збережено: Пагінація, Авто-висота, Timezone.
     """
     import pandas as pd
     import streamlit as st
@@ -3671,9 +3673,9 @@ def show_history_page():
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-            # 2. Scans (Ліміт 1000 для пагінації)
+            # 2. Scans (Запитуємо user_email!)
             scans_resp = supabase.table("scan_results")\
-                .select("id, created_at, provider, keyword_id, user_id")\
+                .select("id, created_at, provider, keyword_id, user_email")\
                 .eq("project_id", proj["id"])\
                 .order("created_at", desc=True)\
                 .limit(1000)\
@@ -3687,31 +3689,16 @@ def show_history_page():
 
             scan_ids = [s['id'] for s in scans_data]
 
-            # 3. User Profiles
-            user_ids = list(set([s['user_id'] for s in scans_data if s.get('user_id')]))
-            user_map = {}
-            if user_ids:
-                try:
-                    u_resp = supabase.table("user_profiles")\
-                        .select("user_id, first_name, last_name")\
-                        .in_("user_id", user_ids)\
-                        .execute()
-                    if u_resp.data:
-                        for u in u_resp.data:
-                            f_name = u.get('first_name', '') or ''
-                            l_name = u.get('last_name', '') or ''
-                            full_name = f"{f_name} {l_name}".strip() or "Користувач"
-                            user_map[u['user_id']] = full_name
-                except:
-                    pass
+            # (Блок User Profiles видалено, бо ми беремо email напряму)
 
-            # 4. Mentions & Sources
+            # 3. Mentions
             m_resp = supabase.table("brand_mentions")\
                 .select("scan_result_id, is_my_brand, mention_count")\
                 .in_("scan_result_id", scan_ids)\
                 .execute()
             mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
 
+            # 4. Sources
             s_resp = supabase.table("extracted_sources")\
                 .select("scan_result_id, is_official")\
                 .in_("scan_result_id", scan_ids)\
@@ -3719,8 +3706,9 @@ def show_history_page():
             sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
 
         except Exception as e:
-            if "column scan_results.user_id does not exist" in str(e):
-                st.error("⚠️ Відсутня колонка `user_id`. Виконайте SQL Migration.")
+            # Підказка, якщо колонки ще немає
+            if "column scan_results.user_email does not exist" in str(e):
+                st.error("⚠️ Помилка: У таблиці `scan_results` відсутня колонка `user_email`. Додайте її в Supabase.")
             else:
                 st.error(f"Помилка завантаження даних: {e}")
             return
@@ -3728,12 +3716,19 @@ def show_history_page():
     # --- 3. ОБРОБКА ДАНИХ ---
     df_scans = pd.DataFrame(scans_data)
 
-    # Ініціатор
-    def get_initiator(uid):
-        if pd.isna(uid) or not uid: return "🤖 Автосканування"
-        return user_map.get(uid, "👤 Адмін/Користувач")
+    # 🔥 ЛОГІКА ІНІЦІАТОРА (ПО ЕМЕЙЛУ)
+    def check_initiator(email_val):
+        # Перевіряємо, чи є значення і чи воно не пусте
+        if pd.isna(email_val) or str(email_val).strip() == "" or str(email_val).lower() == "none":
+            return "🤖 Автосканування"
+        else:
+            return f"👤 {email_val}"
     
-    df_scans['initiator'] = df_scans['user_id'].apply(get_initiator)
+    # Застосовуємо логіку, якщо колонка існує
+    if 'user_email' in df_scans.columns:
+        df_scans['initiator'] = df_scans['user_email'].apply(check_initiator)
+    else:
+        df_scans['initiator'] = "🤖 Автосканування"
 
     # Провайдери
     PROVIDER_MAP = {"gpt-4o": "OpenAI", "gpt-4-turbo": "OpenAI", "gemini-1.5-pro": "Gemini", "perplexity": "Perplexity"}
@@ -3745,7 +3740,7 @@ def show_history_page():
     # Timezone Fix
     df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(KYIV_TZ)
     
-    # 🔥 SAFE MERGE (Почергове злиття)
+    # 🔥 SAFE MERGE
     if not mentions_df.empty:
         brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
         my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
@@ -3840,10 +3835,9 @@ def show_history_page():
     
     df_display_page = df_filtered.iloc[start_idx:end_idx].copy()
 
-    # --- 6. ВІДОБРАЖЕННЯ (БЕЗ СКРОЛУ) ---
+    # --- 6. ВІДОБРАЖЕННЯ (AUTO HEIGHT) ---
     st.divider()
     
-    # Кнопки навігації (Top)
     p_col1, p_col2, p_col3 = st.columns([1, 2, 1])
     with p_col1:
         if current_page > 1:
@@ -3858,36 +3852,32 @@ def show_history_page():
                 st.session_state.history_page_number += 1
                 st.rerun()
 
-    # Підготовка
     if 'created_at_dt' in df_display_page.columns:
         df_display_page['created_at_dt'] = df_display_page['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
 
     cols_to_show = ['created_at_dt', 'keyword', 'provider', 'total_brands', 'total_links', 'my_mentions_count', 'official_links', 'initiator']
     df_show = df_display_page[[c for c in cols_to_show if c in df_display_page.columns]]
 
-    # 🔥 РОЗРАХУНОК ВИСОТИ
-    # 35 пікселів на рядок + 38 пікселів на заголовок + невеликий запас
-    # Це змушує таблицю показувати всі рядки без внутрішнього скролбару
+    # Авто-висота (35px рядок + 38px хедер)
     dynamic_height = (len(df_show) * 35) + 38
 
     st.dataframe(
         df_show,
         use_container_width=True,
         hide_index=True,
-        height=dynamic_height,  # <--- Ключова зміна
+        height=dynamic_height,
         column_config={
             "created_at_dt": "Дата (Kyiv)",
             "keyword": st.column_config.TextColumn("Запит", width="medium"),
             "provider": "LLM",
-            "total_brands": st.column_config.NumberColumn("Бренди", help="Кількість знайдених конкурентів"),
-            "total_links": st.column_config.NumberColumn("Посилання", help="Всього джерел"),
-            "my_mentions_count": st.column_config.NumberColumn("Згадки", help="Згадки нашого бренду"),
-            "official_links": st.column_config.NumberColumn("Офіц.", help="Офіційні джерела"),
-            "initiator": "Ініціатор"
+            "total_brands": st.column_config.NumberColumn("Бренди", help="Конкуренти"),
+            "total_links": st.column_config.NumberColumn("Посилання", help="Джерела"),
+            "my_mentions_count": st.column_config.NumberColumn("Згадки", help="Згадки нас"),
+            "official_links": st.column_config.NumberColumn("Офіц.", help="Офіційні"),
+            "initiator": st.column_config.TextColumn("Ініціатор", width="medium")
         }
     )
 
-    # Кнопки навігації (Bottom)
     if total_rows > 10:
         st.write("")
         b_col1, b_col2, b_col3 = st.columns([1, 2, 1])
@@ -3901,6 +3891,7 @@ def show_history_page():
                 if st.button("Наступна ➡️", key="hist_next_btm"):
                     st.session_state.history_page_number += 1
                     st.rerun()
+
 
 def sidebar_menu():
     """
