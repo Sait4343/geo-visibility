@@ -3628,11 +3628,10 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: EMAIL INITIATOR CHECK.
-    1. Перевіряє стовпчик user_email.
-    2. Якщо є email -> виводить його.
-    3. Якщо немає -> "🤖 Автосканування".
-    4. Збережено: Пагінація, Авто-висота, Timezone.
+    ВЕРСІЯ: PROFILES MAPPING.
+    1. Бере user_email з scan_results.
+    2. Шукає власника в таблиці 'profiles'.
+    3. Формує ПІБ (first_name + last_name).
     """
     import pandas as pd
     import streamlit as st
@@ -3673,7 +3672,7 @@ def show_history_page():
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-            # 2. Scans (Запитуємо user_email!)
+            # 2. Scans (Беремо user_email)
             scans_resp = supabase.table("scan_results")\
                 .select("id, created_at, provider, keyword_id, user_email")\
                 .eq("project_id", proj["id"])\
@@ -3689,16 +3688,39 @@ def show_history_page():
 
             scan_ids = [s['id'] for s in scans_data]
 
-            # (Блок User Profiles видалено, бо ми беремо email напряму)
+            # 🔥 3. ОТРИМАННЯ ПІБ З ТАБЛИЦІ PROFILES
+            unique_emails = list(set([s['user_email'] for s in scans_data if s.get('user_email')]))
+            email_to_name_map = {}
 
-            # 3. Mentions
+            if unique_emails:
+                try:
+                    # ⚠️ Змінено таблицю на 'profiles'
+                    p_resp = supabase.table("profiles")\
+                        .select("email, first_name, last_name")\
+                        .in_("email", unique_emails)\
+                        .execute()
+                    
+                    if p_resp.data:
+                        for p in p_resp.data:
+                            f_n = p.get('first_name', '') or ''
+                            l_n = p.get('last_name', '') or ''
+                            full_n = f"{f_n} {l_n}".strip()
+                            
+                            # Якщо ім'я знайдене, записуємо його в мапу
+                            if full_n and p.get('email'):
+                                email_to_name_map[p['email']] = full_n
+                except Exception:
+                    # Якщо таблиці profiles немає або помилка доступу
+                    pass
+
+            # 4. Mentions
             m_resp = supabase.table("brand_mentions")\
                 .select("scan_result_id, is_my_brand, mention_count")\
                 .in_("scan_result_id", scan_ids)\
                 .execute()
             mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
 
-            # 4. Sources
+            # 5. Sources
             s_resp = supabase.table("extracted_sources")\
                 .select("scan_result_id, is_official")\
                 .in_("scan_result_id", scan_ids)\
@@ -3706,9 +3728,8 @@ def show_history_page():
             sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
 
         except Exception as e:
-            # Підказка, якщо колонки ще немає
             if "column scan_results.user_email does not exist" in str(e):
-                st.error("⚠️ Помилка: У таблиці `scan_results` відсутня колонка `user_email`. Додайте її в Supabase.")
+                st.error("⚠️ Відсутня колонка `user_email` у таблиці scan_results.")
             else:
                 st.error(f"Помилка завантаження даних: {e}")
             return
@@ -3716,17 +3737,22 @@ def show_history_page():
     # --- 3. ОБРОБКА ДАНИХ ---
     df_scans = pd.DataFrame(scans_data)
 
-    # 🔥 ЛОГІКА ІНІЦІАТОРА (ПО ЕМЕЙЛУ)
-    def check_initiator(email_val):
-        # Перевіряємо, чи є значення і чи воно не пусте
+    # 🔥 ЛОГІКА ІНІЦІАТОРА
+    def resolve_initiator(email_val):
+        # 1. Якщо емейл пустий -> Авто
         if pd.isna(email_val) or str(email_val).strip() == "" or str(email_val).lower() == "none":
             return "🤖 Автосканування"
-        else:
-            return f"👤 {email_val}"
+        
+        # 2. Якщо ми знайшли ім'я у profiles -> Виводимо ПІБ
+        if email_val in email_to_name_map:
+            return f"👤 {email_to_name_map[email_val]}"
+        
+        # 3. Якщо імені не знайшли (профіль не заповнений) -> Виводимо Email
+        return f"👤 {email_val}"
     
-    # Застосовуємо логіку, якщо колонка існує
+    # Застосовуємо, якщо колонка є
     if 'user_email' in df_scans.columns:
-        df_scans['initiator'] = df_scans['user_email'].apply(check_initiator)
+        df_scans['initiator'] = df_scans['user_email'].apply(resolve_initiator)
     else:
         df_scans['initiator'] = "🤖 Автосканування"
 
@@ -3740,7 +3766,7 @@ def show_history_page():
     # Timezone Fix
     df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(KYIV_TZ)
     
-    # 🔥 SAFE MERGE
+    # Merge (Безпечне злиття)
     if not mentions_df.empty:
         brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
         my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
@@ -3858,7 +3884,7 @@ def show_history_page():
     cols_to_show = ['created_at_dt', 'keyword', 'provider', 'total_brands', 'total_links', 'my_mentions_count', 'official_links', 'initiator']
     df_show = df_display_page[[c for c in cols_to_show if c in df_display_page.columns]]
 
-    # Авто-висота (35px рядок + 38px хедер)
+    # Авто-висота
     dynamic_height = (len(df_show) * 35) + 38
 
     st.dataframe(
@@ -3870,11 +3896,11 @@ def show_history_page():
             "created_at_dt": "Дата (Kyiv)",
             "keyword": st.column_config.TextColumn("Запит", width="medium"),
             "provider": "LLM",
-            "total_brands": st.column_config.NumberColumn("Бренди", help="Конкуренти"),
-            "total_links": st.column_config.NumberColumn("Посилання", help="Джерела"),
-            "my_mentions_count": st.column_config.NumberColumn("Згадки", help="Згадки нас"),
-            "official_links": st.column_config.NumberColumn("Офіц.", help="Офіційні"),
-            "initiator": st.column_config.TextColumn("Ініціатор", width="medium")
+            "total_brands": st.column_config.NumberColumn("Бренди", help="Кількість знайдених конкурентів"),
+            "total_links": st.column_config.NumberColumn("Посил.", help="Всього джерел"),
+            "my_mentions_count": st.column_config.NumberColumn("Згадки", help="Згадки нашого бренду"),
+            "official_links": st.column_config.NumberColumn("Офіц.", help="Офіційні джерела"),
+            "initiator": st.column_config.TextColumn("Ініціатор", help="Хто запустив", width="medium")
         }
     )
 
