@@ -2086,7 +2086,8 @@ __JS_BLOCK__
 def show_reports_page():
     """
     Сторінка Звітів.
-    Збирає дані, приводить ID до рядків (str), передає в генератор.
+    Збирає дані останнього сканування для кожного запиту та моделі.
+    Використовує Relational Query для гарантованої цілісності даних.
     """
     import streamlit as st
     import pandas as pd
@@ -2122,17 +2123,20 @@ def show_reports_page():
         if st.button("🚀 Згенерувати звіт", type="primary"):
             with st.spinner("Аналіз даних та генерація HTML..."):
                 try:
+                    # 1. Keywords (для мапінгу тексту)
                     kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
                     kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
                     if not kw_map:
                         st.error("Немає запитів.")
                         st.stop()
 
+                    # 2. Scans WITH Relations (Ключовий момент)
+                    # Ми беремо скани разом зі згадками, щоб не втратити зв'язок
                     scans_resp = supabase.table("scan_results")\
-                        .select("id, created_at, provider, keyword_id, raw_response")\
+                        .select("*, brand_mentions(*), extracted_sources(*)")\
                         .eq("project_id", proj["id"])\
                         .order("created_at", desc=True)\
-                        .limit(3000)\
+                        .limit(2000)\
                         .execute()
                     
                     raw_scans = scans_resp.data if scans_resp.data else []
@@ -2140,41 +2144,31 @@ def show_reports_page():
                         st.error("Історія пуста.")
                         st.stop()
 
-                    df_raw = pd.DataFrame(raw_scans)
-                    df_raw = df_raw.sort_values('created_at', ascending=False)
-                    df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first').copy()
-                    
-                    # Convert IDs to string to match correctly
-                    df_latest['id'] = df_latest['id'].astype(str)
-                    scan_ids = df_latest['id'].tolist()
-                    
-                    # Details
-                    m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
-                    s_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
-                    
-                    mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
-                    sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
-
-                    # Data Prep
-                    df_latest['keyword'] = df_latest['keyword_id'].map(kw_map).fillna("Unknown")
-                    try: df_latest['created_at_dt'] = pd.to_datetime(df_latest['created_at'])
-                    except: pass
-                    
-                    # CLEANING & TYPE CASTING
-                    if not mentions_df.empty:
-                        mentions_df['scan_result_id'] = mentions_df['scan_result_id'].astype(str)
+                    # 3. Snapshot: Latest per Keyword/Provider
+                    # Сортуємо в Python, щоб взяти найсвіжіші
+                    # Додаємо текст запиту прямо в структуру
+                    processed_scans = []
+                    for s in raw_scans:
+                        s['keyword_text'] = kw_map.get(s['keyword_id'], "Unknown Query")
+                        processed_scans.append(s)
+                        
+                    # Перетворюємо на DF для зручного групування і сортування
+                    df_raw = pd.DataFrame(processed_scans)
+                    if not df_raw.empty:
+                        df_raw = df_raw.sort_values('created_at', ascending=False)
+                        # Залишаємо тільки унікальні (останні) для пари (keyword_id, provider)
+                        df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first')
+                        
+                        # Перетворюємо назад у список словників для генератора
+                        final_scans_data = df_latest.to_dict('records')
                     else:
-                        mentions_df = pd.DataFrame(columns=['scan_result_id', 'brand_name', 'mention_count', 'is_my_brand'])
+                        final_scans_data = []
 
-                    if not sources_df.empty:
-                        sources_df['scan_result_id'] = sources_df['scan_result_id'].astype(str)
-                    else:
-                        sources_df = pd.DataFrame(columns=['scan_result_id', 'url', 'is_official'])
+                    # 4. Generate
+                    # Передаємо вже готовий список словників, де всередині є 'brand_mentions'
+                    html_code = generate_html_report_content(proj.get('brand_name'), final_scans_data)
 
-                    # Call Generator
-                    html_code = generate_html_report_content(proj.get('brand_name'), df_latest, mentions_df, sources_df)
-
-                    # Save
+                    # 5. Save
                     supabase.table("reports").insert({
                         "project_id": proj["id"],
                         "report_name": rep_name,
@@ -2182,47 +2176,37 @@ def show_reports_page():
                         "status": "pending"
                     }).execute()
                     
-                    st.success("✅ Звіт успішно сформовано! (Вкладка Адмінка)")
+                    st.success("✅ Звіт успішно сформовано!")
                     
                 except Exception as e:
                     st.error(f"Помилка: {e}")
+                    import traceback
+                    st.text(traceback.format_exc())
 
-    # === ГОТОВІ ===
     with tabs[1]:
         st.markdown("### 📂 Архів")
         try:
             pub_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "published").order("created_at", desc=True).execute()
             reports = pub_resp.data if pub_resp.data else []
-            
-            if not reports:
-                st.info("Немає опублікованих звітів.")
+            if not reports: st.info("Немає звітів.")
             else:
                 for r in reports:
-                    with st.expander(f"📄 {r['report_name']} ({r['created_at'][:10]})"):
-                        c1, c2 = st.columns([1, 2])
-                        with c1:
-                            st.download_button("📥 Завантажити HTML", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
-                        with c2:
-                            if st.checkbox("Показати", key=f"sh_{r['id']}"):
-                                st.components.v1.html(r['html_content'], height=800, scrolling=True)
-        except Exception as e:
-            st.error(f"Помилка: {e}")
+                    with st.expander(f"📄 {r['report_name']}"):
+                        st.download_button("📥 Завантажити", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
+        except Exception as e: st.error(f"Помилка: {e}")
 
-    # === АДМІНКА ===
     if is_admin:
         with tabs[2]:
-            st.markdown("### ⚙️ Модерація (Pending)")
+            st.markdown("### ⚙️ Модерація")
             try:
                 pend_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "pending").order("created_at", desc=True).execute()
                 pending = pend_resp.data if pend_resp.data else []
-                
-                if not pending:
-                    st.info("Черга пуста.")
+                if not pending: st.info("Черга пуста.")
                 else:
                     for pr in pending:
                         st.divider()
                         st.subheader(f"📝 {pr['report_name']}")
-                        new_html = st.text_area("Редактор HTML:", value=pr['html_content'], height=300, key=f"ed_{pr['id']}")
+                        new_html = st.text_area("HTML", value=pr['html_content'], height=200, key=f"ed_{pr['id']}")
                         c1, c2 = st.columns([1, 4])
                         if c1.button("✅ Опублікувати", key=f"pub_{pr['id']}", type="primary"):
                             supabase.table("reports").update({"status": "published", "html_content": new_html}).eq("id", pr['id']).execute()
@@ -2230,9 +2214,9 @@ def show_reports_page():
                         if c2.button("❌ Видалити", key=f"del_{pr['id']}"):
                             supabase.table("reports").delete().eq("id", pr['id']).execute()
                             st.rerun()
-            except Exception as e:
-                st.error(f"Помилка: {e}")
-                
+            except Exception as e: st.error(f"Помилка: {e}")
+
+
 
 def show_dashboard():
     """
