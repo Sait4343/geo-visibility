@@ -1657,24 +1657,20 @@ def show_faq_page():
 
 def generate_html_report_content(project_name, df_full):
     """
-    Генерує статичний HTML звіт.
-    - Дані про відповіді беруться з поля 'raw_response'.
-    - Використовується JS для вкладок (Tabs) та графіків (Chart.js).
+    Генерує HTML код звіту.
+    ВИПРАВЛЕНО: Змінна css_styles використовується коректно.
+    ДОДАНО: Відображення реального тексту відповіді з 'raw_response'.
     """
     import pandas as pd
     from datetime import datetime
     import json
-    import re
 
-    # Поточна дата
     current_date = datetime.now().strftime('%d.%m.%Y')
-    
-    # Список моделей (Gemini, GPT...)
     providers = df_full['provider'].unique().tolist()
     if not providers: providers = ["Unknown"]
 
     # ---------------------------------------------------------
-    # 1. CSS СТИЛІ (Дизайн)
+    # 1. CSS СТИЛІ
     # ---------------------------------------------------------
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
@@ -1686,74 +1682,53 @@ def generate_html_report_content(project_name, df_full):
     .report-header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; }
     h1 { font-size: 26px; color: #2c3e50; margin: 0; font-weight: 800; }
     .subtitle { color: #888; margin-top: 10px; font-size: 14px; }
-
-    /* TABS */
-    .tabs-nav { display: flex; justify-content: center; gap: 10px; margin-bottom: 30px; flex-wrap: wrap; }
-    .tab-btn { 
-        padding: 12px 25px; border: 2px solid #00d18f; background: #fff; color: #00d18f; 
-        border-radius: 30px; cursor: pointer; font-weight: 800; font-size: 14px; 
-        transition: all 0.3s ease; text-transform: uppercase; 
-    }
-    .tab-btn.active, .tab-btn:hover { background: #00d18f; color: #fff; }
-    .tab-content { display: none; animation: fadeIn 0.5s; }
-    .tab-content.active { display: block; }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-    /* KPI */
+    
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
-    .kpi-box { 
-        flex: 1 1 300px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; 
-        text-align: center; background: #e0f2f1; position: relative; 
-        display: flex; flex-direction: column; align-items: center; 
-    }
-    .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height:30px; display:flex; align-items:center; }
+    .kpi-box { flex: 1 1 200px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; text-align: center; background: #e0f2f1; position: relative; min-height: 180px; }
+    .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; min-height: 30px; display: flex; align-items: center; justify-content: center; }
     .kpi-big-num { font-size: 28px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
-    .chart-container { position: relative; width: 140px; height: 140px; margin: auto; }
+    .chart-container { position: relative; width: 120px; height: 120px; margin: auto; }
     
     h3 { font-size: 20px; color: #2c3e50; margin-top: 40px; margin-bottom: 20px; padding-left: 15px; border-left: 5px solid #00d18f; font-weight: 800; }
 
-    /* ACCORDION */
+    .rt-tabs { display: flex; justify-content: center; gap: 10px; margin-bottom: 30px; flex-wrap: wrap; }
+    .rt-btn { padding: 12px 25px; border: 2px solid #00d18f; background: #fff; color: #00d18f; border-radius: 30px; cursor: pointer; font-weight: 800; font-size: 14px; transition: all 0.3s ease; text-transform: uppercase; }
+    .rt-btn.active, .rt-btn:hover { background: #00d18f; color: #fff; }
+    .rt-content { display: none; animation: fadeIn 0.5s; }
+    .rt-content.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
     .item-box { border: 2px solid #4DD0E1; border-radius: 15px; margin-bottom: 20px; overflow: hidden; background: #fff; }
-    .accordion-trigger { background: #fff; padding: 15px 20px; display: flex; align-items: center; gap: 15px; cursor: pointer; transition: 0.3s; justify-content: space-between; }
+    .accordion-trigger { background: #fff; padding: 15px 20px; display: flex; align-items: center; gap: 15px; cursor: pointer; transition: background-color 0.3s ease; justify-content: space-between; }
     .accordion-trigger:hover { background-color: #f9f9f9; }
     .accordion-trigger.active { background-color: #f0fdff; }
-    .item-number-wrapper { width: 30px; height: 30px; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; margin-right: 10px; font-size:12px; }
-    .item-query { font-weight: bold; color: #333; }
-    
+    .item-number-wrapper { width: 30px; height: 30px; flex-shrink: 0; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight:bold; color:#fff; font-size: 12px; }
     .item-metrics-container { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; border-top: 1px solid #eee; }
-    .metric-cell { flex: 1 1 calc(33% - 10px); border: 2px solid #00d18f; border-radius: 10px; padding: 10px; text-align: center; }
-    .m-label { display: block; font-size: 10px; text-transform: uppercase; color: #888; }
+    .metric-cell { flex: 1 1 calc(33% - 10px); border: 2px solid #00d18f; border-radius: 10px; padding: 15px 10px; text-align: center; }
+    .m-label { display: block; font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 5px; }
     .m-val { display: block; font-size: 16px; font-weight: 800; color: #222; }
-    
     .item-response { background-color: #e8def8; color: #1d192b; padding: 20px; font-size: 14px; text-align: left; line-height: 1.6; }
-    
-    /* Markdown simulation */
-    .item-response h1, .item-response h2, .item-response h3 { margin-top: 15px; margin-bottom: 5px; color: #333; }
-    .item-response p { margin-bottom: 10px; }
-    .item-response ul { padding-left: 20px; margin-bottom: 10px; }
     
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
     # ---------------------------------------------------------
-    # 2. JS СКРИПТИ (Логіка на стороні клієнта)
+    # 2. JS СКРИПТИ
     # ---------------------------------------------------------
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
     
-    // Малювання графіків
-    function drawChart(id, val, color) {
-        var ctx = document.getElementById(id);
-        if (!ctx) return;
+    function createDoughnut(id, val, color) {
+        const ctx = document.getElementById(id);
+        if(!ctx) return;
         new Chart(ctx, {
             type: 'doughnut',
             data: {
                 datasets: [{
                     data: [val, 100 - val],
                     backgroundColor: [color, '#ffcdd2'],
-                    borderWidth: 0,
-                    hoverOffset: 4
+                    borderWidth: 0
                 }]
             },
             options: {
@@ -1763,15 +1738,14 @@ def generate_html_report_content(project_name, df_full):
         });
     }
 
-    // Перемикання вкладок
-    function openTab(evt, tabName) {
+    function openReportTab(evt, tabName) {
         var i, tabcontent, tablinks;
-        tabcontent = document.getElementsByClassName("tab-content");
+        tabcontent = document.getElementsByClassName("rt-content");
         for (i = 0; i < tabcontent.length; i++) {
             tabcontent[i].style.display = "none";
             tabcontent[i].classList.remove("active");
         }
-        tablinks = document.getElementsByClassName("tab-btn");
+        tablinks = document.getElementsByClassName("rt-btn");
         for (i = 0; i < tablinks.length; i++) {
             tablinks[i].className = tablinks[i].className.replace(" active", "");
         }
@@ -1780,7 +1754,6 @@ def generate_html_report_content(project_name, df_full):
         evt.currentTarget.className += " active";
     }
 
-    // Акордеон
     function toggleAcc(el) {
         el.classList.toggle("active");
         var panel = el.nextElementSibling;
@@ -1791,7 +1764,6 @@ def generate_html_report_content(project_name, df_full):
         }
     }
     
-    // Ініціалізація
     window.addEventListener('load', function() {
         __JS_CHARTS_PLACEHOLDER__
     });
@@ -1821,17 +1793,17 @@ __CSS_PLACEHOLDER__
     </div>
     <div class="report-header">
         <h1>Звіт AI Visibility: __PROJECT_NAME__</h1>
-        <div class="subtitle">Сформовано: __DATE__</div>
+        <div class="subtitle">Дата формування: __DATE__</div>
     </div>
     
-    <div class="tabs-nav">
+    <div class="rt-tabs">
         __TABS_BUTTONS__
     </div>
     
     __TABS_CONTENT__
     
-    <div style="margin-top: 40px; text-align: center; color: #888; font-size: 12px;">
-        Згенеровано платформою Virshi.ai
+    <div class="cta-block" style="margin-top:40px; text-align:center; color:#888;">
+        Згенеровано автоматично платформою VIRSHI.ai
     </div>
 </div>
 __JS_BLOCK__
@@ -1843,29 +1815,28 @@ __JS_BLOCK__
     # 4. ЛОГІКА НАПОВНЕННЯ
     # ---------------------------------------------------------
     
-    # 4.1 Кнопки
+    # Кнопки
     tabs_buttons_html = ""
     for i, prov in enumerate(providers):
         active_cls = "active" if i == 0 else ""
-        # Замінюємо пробіли в ID, щоб не ламався JS
-        prov_id = prov.replace(" ", "_")
-        btn = f'<button class="tab-btn {active_cls}" onclick="openTab(event, \'{prov_id}\')">{prov.upper()}</button>\n'
+        # Видаляємо пробіли з ID, щоб не ламався JS
+        prov_id = str(prov).replace(" ", "_")
+        btn = f'<button class="rt-btn {active_cls}" onclick="openReportTab(event, \'{prov_id}\')">{prov.upper()}</button>\n'
         tabs_buttons_html += btn
 
-    # 4.2 Контент вкладок
+    # Контент
     tabs_content_html = ""
     js_charts_code = ""
 
     for i, prov in enumerate(providers):
         active_cls = "active" if i == 0 else ""
-        prov_id = prov.replace(" ", "_")
+        prov_id = str(prov).replace(" ", "_")
         
-        # Дані для конкретної моделі
         df_p = df_full[df_full['provider'] == prov].copy()
         total_scans = len(df_p)
         if total_scans == 0: continue
 
-        # МЕТРИКИ
+        # Metrics
         pres_count = df_p[df_p['my_mentions_count'] > 0].shape[0]
         pres_pct = (pres_count / total_scans * 100)
         
@@ -1876,19 +1847,10 @@ __JS_BLOCK__
         tot_brands = df_p['total_brands'].sum()
         my_mentions = df_p['my_mentions_count'].sum()
         sov_pct = (my_mentions / tot_brands * 100) if tot_brands > 0 else 0
-        
-        # Середня позиція (Rank)
-        avg_pos_val = 0.0
-        if 'rank_position' in df_p.columns:
-            # Беремо тільки ті, де ранк > 0
-            ranks = df_p[df_p['rank_position'] > 0]['rank_position']
-            if not ranks.empty:
-                avg_pos_val = ranks.mean()
 
-        # HTML Вкладки
+        # Tab Content
         tabs_content_html += f'''
-        <div id="{prov_id}" class="tab-content {active_cls}">
-            
+        <div id="{prov_id}" class="rt-content {active_cls}">
             <div class="kpi-row">
                 <div class="kpi-box">
                     <div class="kpi-title">Частка голосу (SOV)</div>
@@ -1911,29 +1873,29 @@ __JS_BLOCK__
             <div class="accordion-wrapper">
         '''
         
-        # СПИСОК ЗАПИТІВ (Accordion)
-        # Використовуємо .head(50), щоб звіт не був безкінечним, якщо запитів 1000
-        for idx, row in df_p.head(50).iterrows():
+        # Accordion Items
+        top_scans = df_p.head(10)
+        for idx, row in top_scans.iterrows():
             q_text = row.get('keyword', 'Запит')
             date_scan = row.get('created_at_dt').strftime('%d.%m.%Y') if pd.notnull(row.get('created_at_dt')) else ""
             
-            # 🔥 ОСНОВНЕ: Беремо реальну відповідь з бази
+            # 🔥 ОТРИМАННЯ ТА ОЧИСТКА ВІДПОВІДІ (RAW RESPONSE)
             raw_text = row.get('raw_response', '')
-            if not raw_text or str(raw_text) == 'nan':
-                raw_text = "Текст відповіді відсутній у базі."
+            if pd.isna(raw_text) or not raw_text:
+                raw_text = "Текст відповіді не збережено."
             
-            # Проста обробка Markdown в HTML (перенос рядків)
-            # Якщо текст приходить як HTML - супер, якщо ні - робимо br
-            formatted_text = raw_text.replace('\n', '<br>')
+            # Заміна нових рядків на <br> для HTML відображення
+            # Використовуємо .replace('\n', '<br>') для простого тексту
+            formatted_text = str(raw_text).replace('\n', '<br>')
             
             tabs_content_html += f'''
             <div class="item-box">
                 <div class="accordion-trigger" onclick="toggleAcc(this)">
-                    <div style="display:flex; align-items:center;">
+                    <div style="display:flex; align-items:center; gap:10px;">
                         <div class="item-number-wrapper">{idx+1}</div>
-                        <div class="item-query">{q_text}</div>
+                        <div style="font-weight:bold;">{q_text}</div>
                     </div>
-                    <div style="font-size:12px; color:#888;">{date_scan} ▼</div>
+                    <div style="color:#00d18f;">▼</div>
                 </div>
                 <div class="accordion-content" style="display:none;">
                     <div class="item-metrics-container">
@@ -1942,27 +1904,28 @@ __JS_BLOCK__
                         <div class="metric-cell"><span class="m-label">Офіц. посилань</span><span class="m-val">{int(row.get('official_links',0))}</span></div>
                     </div>
                     <div class="item-response">
-                        <strong style="color:#5e35b1;">Відповідь {prov}:</strong><br><br>
-                        {formatted_text}
+                        <p><strong>Дата:</strong> {date_scan}</p>
+                        <p><strong>Відповідь {prov}:</strong></p>
+                        <div style="white-space: pre-wrap; font-family: sans-serif;">{formatted_text}</div>
                     </div>
                 </div>
             </div>
             '''
         
-        tabs_content_html += "</div></div>" # Закриваємо контейнери
+        tabs_content_html += "</div></div>"
 
         # JS Charts
-        js_charts_code += f"drawChart('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
-        js_charts_code += f"drawChart('chartOff_{prov_id}', {off_pct}, '#4DD0E1');\n"
-        js_charts_code += f"drawChart('chartPres_{prov_id}', {pres_pct}, '#00d18f');\n"
+        js_charts_code += f"createDoughnut('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
+        js_charts_code += f"createDoughnut('chartOff_{prov_id}', {off_pct}, '#4DD0E1');\n"
+        js_charts_code += f"createDoughnut('chartPres_{prov_id}', {pres_pct}, '#00d18f');\n"
 
     # ---------------------------------------------------------
-    # 5. ЗБИРАННЯ (REPLACE)
+    # 5. ФІНАЛЬНЕ ЗБИРАННЯ (ВИКОРИСТОВУЄМО css_styles!)
     # ---------------------------------------------------------
     final_js = js_block.replace("__JS_CHARTS_PLACEHOLDER__", js_charts_code)
     
     final_html = html_template \
-        .replace("__CSS_PLACEHOLDER__", css_block) \
+        .replace("__CSS_PLACEHOLDER__", css_styles) \
         .replace("__PROJECT_NAME__", str(project_name)) \
         .replace("__DATE__", str(current_date)) \
         .replace("__TABS_BUTTONS__", tabs_buttons_html) \
