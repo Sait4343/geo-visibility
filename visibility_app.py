@@ -3899,7 +3899,7 @@ def show_history_page():
             if current_page < total_pages:
                 if st.button("Наступна ➡️", key="hist_next_btm"):
                     st.session_state.history_page_number += 1
-                    st.rerun()rerun()
+                    st.rerun()
 
 
 def sidebar_menu():
