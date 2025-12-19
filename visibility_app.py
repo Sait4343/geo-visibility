@@ -3628,9 +3628,9 @@ def show_sources_page():
 def show_history_page():
     """
     Сторінка історії сканувань.
-    ВЕРСІЯ: FIXED MERGE ERROR.
-    1. Виправлено: 'MergeError' шляхом розділення операцій злиття.
-    2. Пагінація + Timezone + Ініціатор (збережено).
+    ВЕРСІЯ: NO SCROLL FRAME (AUTO HEIGHT).
+    1. Таблиця автоматично розтягується по висоті (без внутрішнього скролу).
+    2. Виправлено всі попередні помилки.
     """
     import pandas as pd
     import streamlit as st
@@ -3671,7 +3671,7 @@ def show_history_page():
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
 
-            # 2. Scans
+            # 2. Scans (Ліміт 1000 для пагінації)
             scans_resp = supabase.table("scan_results")\
                 .select("id, created_at, provider, keyword_id, user_id")\
                 .eq("project_id", proj["id"])\
@@ -3745,35 +3745,27 @@ def show_history_page():
     # Timezone Fix
     df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at']).dt.tz_convert(KYIV_TZ)
     
-    # 🔥 БЕЗПЕЧНЕ ЗЛИТТЯ (SAFE MERGE)
-    # Ми додаємо колонки по черзі і одразу видаляємо scan_result_id, щоб уникнути конфліктів
-    
-    # 1. Mentions
+    # 🔥 SAFE MERGE (Почергове злиття)
     if not mentions_df.empty:
         brands_count = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
         my_mentions = mentions_df[mentions_df['is_my_brand'] == True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
         
-        # Merge Brands Count
         df_scans = df_scans.merge(brands_count, left_on='id', right_on='scan_result_id', how='left')
         if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
         
-        # Merge My Mentions
         df_scans = df_scans.merge(my_mentions, left_on='id', right_on='scan_result_id', how='left')
         if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
         df_scans['total_brands'] = 0
         df_scans['my_mentions_count'] = 0
 
-    # 2. Sources
     if not sources_df.empty:
         links_count = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
         off_count = sources_df[sources_df['is_official'] == True].groupby('scan_result_id').size().reset_index(name='official_links')
         
-        # Merge Links Count
         df_scans = df_scans.merge(links_count, left_on='id', right_on='scan_result_id', how='left')
         if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
         
-        # Merge Official Links
         df_scans = df_scans.merge(off_count, left_on='id', right_on='scan_result_id', how='left')
         if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
     else:
@@ -3816,7 +3808,7 @@ def show_history_page():
     with c4:
         rows_per_page = st.selectbox("Рядків на стор.", [10, 20, 50, 100, 200], index=0, on_change=reset_page)
 
-    # Застосування фільтрів
+    # --- ЗАСТОСУВАННЯ ФІЛЬТРІВ ---
     mask = df_scans['provider'].isin(sel_providers)
     
     if isinstance(sel_dates, tuple):
@@ -3848,9 +3840,10 @@ def show_history_page():
     
     df_display_page = df_filtered.iloc[start_idx:end_idx].copy()
 
-    # --- 6. ВІДОБРАЖЕННЯ ---
+    # --- 6. ВІДОБРАЖЕННЯ (БЕЗ СКРОЛУ) ---
     st.divider()
     
+    # Кнопки навігації (Top)
     p_col1, p_col2, p_col3 = st.columns([1, 2, 1])
     with p_col1:
         if current_page > 1:
@@ -3865,16 +3858,23 @@ def show_history_page():
                 st.session_state.history_page_number += 1
                 st.rerun()
 
+    # Підготовка
     if 'created_at_dt' in df_display_page.columns:
         df_display_page['created_at_dt'] = df_display_page['created_at_dt'].dt.strftime('%d.%m.%Y %H:%M')
 
     cols_to_show = ['created_at_dt', 'keyword', 'provider', 'total_brands', 'total_links', 'my_mentions_count', 'official_links', 'initiator']
     df_show = df_display_page[[c for c in cols_to_show if c in df_display_page.columns]]
 
+    # 🔥 РОЗРАХУНОК ВИСОТИ
+    # 35 пікселів на рядок + 38 пікселів на заголовок + невеликий запас
+    # Це змушує таблицю показувати всі рядки без внутрішнього скролбару
+    dynamic_height = (len(df_show) * 35) + 38
+
     st.dataframe(
         df_show,
         use_container_width=True,
         hide_index=True,
+        height=dynamic_height,  # <--- Ключова зміна
         column_config={
             "created_at_dt": "Дата (Kyiv)",
             "keyword": st.column_config.TextColumn("Запит", width="medium"),
@@ -3887,6 +3887,7 @@ def show_history_page():
         }
     )
 
+    # Кнопки навігації (Bottom)
     if total_rows > 10:
         st.write("")
         b_col1, b_col2, b_col3 = st.columns([1, 2, 1])
@@ -3900,7 +3901,6 @@ def show_history_page():
                 if st.button("Наступна ➡️", key="hist_next_btm"):
                     st.session_state.history_page_number += 1
                     st.rerun()
-
 
 def sidebar_menu():
     """
