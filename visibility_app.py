@@ -1657,11 +1657,12 @@ def show_faq_page():
 
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
-    Генерує HTML-звіт.
-    ВИПРАВЛЕНО:
-    1. Синхронізація типів ID (всі в str) для коректного з'єднання даних.
-    2. Приховування блоків "Знайдені бренди/Джерела", якщо вони пусті.
-    3. Коректний розрахунок метрик всередині акордеону.
+    Generates an HTML report.
+    FIXES:
+    1. Explicit type casting of IDs to strings to ensure data merging works.
+    2. Local metrics calculation for each query.
+    3. Hiding "Brands" and "Sources" tables if empty.
+    4. Correct CSS for 2-row KPI and cards inside accordion.
     """
     import pandas as pd
     from datetime import datetime
@@ -1670,33 +1671,38 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
 
     current_date = datetime.now().strftime('%d.%m.%Y')
     
-    # --- 0. DATA PRE-PROCESSING (CRITICAL FIX) ---
-    # Приводимо всі ID до рядкового типу, щоб уникнути помилок порівняння UUID vs Object
+    # --- 0. DATA CLEANING & TYPE CASTING (CRITICAL FIX) ---
+    # Ensure all IDs are strings for accurate comparison
     df_scans['id'] = df_scans['id'].astype(str)
     
     if not df_mentions.empty:
         df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str)
-        # Конвертуємо числа, замінюємо NaN на 0
         df_mentions['mention_count'] = pd.to_numeric(df_mentions['mention_count'], errors='coerce').fillna(0)
         df_mentions['rank_position'] = pd.to_numeric(df_mentions['rank_position'], errors='coerce').fillna(0)
+        # Ensure boolean
+        df_mentions['is_my_brand'] = df_mentions['is_my_brand'].astype(bool)
     
     if not df_sources.empty:
         df_sources['scan_result_id'] = df_sources['scan_result_id'].astype(str)
+        df_sources['is_official'] = df_sources['is_official'].astype(bool)
 
-    # Функція форматування тексту відповіді
+    # Helper for safe integers
+    def safe_int(val):
+        try:
+            if pd.isna(val) or val == "": return 0
+            return int(float(val))
+        except: return 0
+
+    # Text formatting helper
     def format_llm_text(text):
         if pd.isna(text) or not text: return "Текст відповіді відсутній."
         txt = str(text)
         txt = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', txt) # Bold
         txt = txt.replace('* ', '<br>• ') # Lists
-        txt = txt.replace('\n', '<br>') # Newlines
+        txt = txt.replace('\n', '<br>') # New lines
         return txt
 
-    def safe_int(val):
-        try: return int(float(val))
-        except: return 0
-
-    # Мапінг назв
+    # Provider Mapping
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
         "gpt-4o": "OpenAI GPT",
@@ -1715,11 +1721,12 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     providers_ui = sorted(df_scans['provider_ui'].unique().tolist())
 
     # ---------------------------------------------------------
-    # CSS
+    # CSS STYLES
     # ---------------------------------------------------------
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
     * { box-sizing: border-box; }
+    
     body { margin: 0; padding: 20px; background-color: #00d18f; font-family: 'Golca', 'Montserrat', sans-serif; color: #333; line-height: 1.6; }
     .content-card { background: #ffffff; border-radius: 20px; padding: 40px; max-width: 1000px; margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.15); }
     .virshi-logo-container { text-align: center; margin: 0 auto 20px auto; }
@@ -1736,14 +1743,25 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* KPI */
+    /* KPI BOXES */
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
-    .kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; position: relative; min-height: 200px; }
+    .kpi-box { 
+        flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; 
+        text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+        position: relative; min-height: 200px; 
+    }
     .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; }
     .kpi-big-num { font-size: 28px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
     .chart-container { position: relative; width: 130px; height: 130px; margin: auto; }
-    .kpi-tooltip { visibility: hidden; opacity: 0; width: 220px; background-color: #2c3e50; color: #fff; text-align: center; border-radius: 8px; padding: 10px; position: absolute; z-index: 100; bottom: 105%; left: 50%; transform: translateX(-50%); font-size: 11px; transition: opacity 0.3s; pointer-events: none; }
+    
+    .kpi-tooltip { 
+        visibility: hidden; opacity: 0; width: 220px; background-color: #2c3e50; color: #fff; text-align: center; border-radius: 8px; padding: 10px; 
+        position: absolute; z-index: 100; bottom: 105%; left: 50%; transform: translateX(-50%); font-size: 11px; transition: opacity 0.3s; pointer-events: none;
+    }
+    .kpi-tooltip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #2c3e50 transparent transparent transparent; }
     .kpi-box:hover .kpi-tooltip { visibility: visible; opacity: 1; }
+
+    /* LEGEND */
     .custom-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 10px; font-size: 11px; font-weight: bold; color: #555; }
     .legend-item { display: flex; align-items: center; }
     .legend-dot { width: 12px; height: 8px; margin-right: 5px; border-radius: 2px; display: inline-block; }
@@ -1758,9 +1776,9 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .item-number-wrapper { width: 36px; height: 36px; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 14px; flex-shrink: 0; }
     .item-query { font-size: 15px; font-weight: bold; color: #333; flex-grow: 1; margin-left: 15px;}
     
-    /* CARDS INSIDE */
+    /* ITEM METRICS (CARDS) */
     .cards-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; border-bottom: 1px solid #eee; }
-    .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; }
+    .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }
     .mc-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px; display:flex; align-items:center; justify-content:center; gap:5px; }
     .mc-val { font-size: 20px; font-weight: 800; color: #333; }
     .info-icon { display:inline-block; width:14px; height:14px; background:#3b82f6; color:white; border-radius:50%; font-size:10px; line-height:14px; text-align:center; cursor:help; }
@@ -1781,7 +1799,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
-    # JS
+    # JS Code
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1864,8 +1882,6 @@ __JS_BLOCK__
         if df_p.empty: continue
         
         scan_ids_in_prov = df_p['id'].tolist()
-        
-        # Filter Details (By ID List)
         mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
         sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
         
@@ -1893,8 +1909,11 @@ __JS_BLOCK__
         if not my_ranks.empty: avg_pos = my_ranks.mean()
         
         sent_label = "Нейтральна"
-        valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
-        if not valid_sent.empty: sent_label = valid_sent['sentiment_score'].mode()[0]
+        if not mentions_prov.empty:
+            valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
+            if not valid_sent.empty:
+                mode = valid_sent['sentiment_score'].mode()
+                if not mode.empty: sent_label = mode[0]
 
         # TAB HTML
         tabs_content_html += f'''
@@ -1916,45 +1935,39 @@ __JS_BLOCK__
         # Loop Queries
         for idx, row in df_p.reset_index(drop=True).iterrows():
             q_text = row.get('keyword', 'Запит')
-            scan_id = str(row['id']) # Ensure String
+            scan_id = str(row['id']) # KEY FIX
             
             # --- LOCAL METRICS ---
-            # 1. Знаходимо дані для конкретного scan_id
+            # Використовуємо .loc для точної фільтрації по строковому ID
             loc_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
             loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
-            # 2. Обраховуємо локальні KPI (те, що в жовтій рамці)
+            # Local SOV
             l_tot = loc_mentions['mention_count'].sum()
             l_my_row = loc_mentions[loc_mentions['is_my_brand'] == True]
             l_my = l_my_row['mention_count'].sum()
             
-            # SOV для цього запиту
             l_sov = (l_my / l_tot * 100) if l_tot > 0 else 0.0
             
-            # Кількість згадок
+            # Metrics for Card
             l_count = safe_int(l_my)
-            
-            # Тональність і Позиція
             l_sent = "Нейтральний"
             l_pos = "-"
             
             if not l_my_row.empty:
-                # Беремо перший знайдений сентимент (зазвичай там один запис на бренд)
                 l_sent = l_my_row['sentiment_score'].iloc[0]
                 val = l_my_row[l_my_row['rank_position'] > 0]['rank_position'].min()
                 if pd.notnull(val) and val > 0: l_pos = f"#{safe_int(val)}"
 
-            # --- TABLES HTML ---
-            # Якщо бренди є - показуємо таблицю, якщо ні - нічого
+            # --- TABLES ---
             details_html = ""
-            
             has_brands = not loc_mentions.empty
             has_sources = not loc_sources.empty
             
             if has_brands or has_sources:
                 details_html += '<div class="detail-charts-wrapper">'
                 
-                # Table Brands
+                # Brands Table
                 if has_brands:
                     rows_b = ""
                     sort_b = loc_mentions.sort_values(['is_my_brand', 'mention_count'], ascending=[False, False])
@@ -1969,7 +1982,7 @@ __JS_BLOCK__
                     </div>
                     '''
                 
-                # Table Sources
+                # Sources Table
                 if has_sources:
                     rows_s = ""
                     for _, s in loc_sources.iterrows():
@@ -1984,9 +1997,9 @@ __JS_BLOCK__
                     </div>
                     '''
                 
-                details_html += '</div>' # End wrapper
+                details_html += '</div>'
 
-            # Response Text
+            # Response
             raw_t = row.get('raw_response', '')
             fmt_t = format_llm_text(raw_t)
 
@@ -2032,6 +2045,7 @@ __JS_BLOCK__
         .replace("__JS_BLOCK__", final_js)
 
     return final_html
+    
 
 def show_reports_page():
     """
