@@ -1658,24 +1658,29 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    Приймає:
-      - project_name (str)
-      - df_scans (DataFrame): список сканувань (зріз)
-      - df_mentions (DataFrame): всі згадки брендів для цих сканувань
-      - df_sources (DataFrame): всі джерела для цих сканувань
+    ВИПРАВЛЕНО: Обробка NaN (пустих значень) перед конвертацією в int.
     """
     import pandas as pd
     from datetime import datetime
-    import json
+    import numpy as np
 
     current_date = datetime.now().strftime('%d.%m.%Y')
     
-    # Отримуємо список унікальних моделей (провайдерів)
+    # Хелпер для безпечного перетворення в int
+    def safe_int(val):
+        try:
+            if pd.isna(val) or val == "":
+                return 0
+            return int(float(val))
+        except:
+            return 0
+
+    # Отримуємо список провайдерів
     providers = df_scans['provider'].unique().tolist()
     if not providers: providers = ["Unknown"]
 
     # ---------------------------------------------------------
-    # 1. CSS СТИЛІ (Дизайн під ваші скріншоти)
+    # 1. CSS СТИЛІ
     # ---------------------------------------------------------
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
@@ -1696,7 +1701,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* GLOBAL KPI (TOP) */
+    /* GLOBAL KPI */
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 30px; }
     .kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; min-height: 160px; }
     .kpi-title { font-size: 12px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; }
@@ -1713,33 +1718,14 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .item-number-wrapper { width: 32px; height: 32px; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 12px; flex-shrink: 0; }
     .item-query { font-weight: bold; color: #333; font-size: 15px; }
 
-    /* --- DETAILED CARDS (Як на скріншоті) --- */
-    .cards-row { 
-        display: flex; flex-wrap: wrap; gap: 15px; padding: 20px; background: #fff; border-bottom: 1px solid #eee; 
-    }
-    .metric-card {
-        flex: 1 1 200px;
-        background: #ffffff;
-        border: 1px solid #e0e0e0;
-        border-top: 4px solid #00d18f; /* Зелена смужка */
-        border-radius: 8px;
-        padding: 15px;
-        text-align: center;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.03);
-    }
-    .mc-label {
-        font-size: 11px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px;
-        display: flex; align-items: center; justify-content: center; gap: 5px;
-    }
-    .mc-val {
-        font-size: 24px; font-weight: 800; color: #333;
-    }
-    .info-icon {
-        display: inline-block; width: 14px; height: 14px; background: #3b82f6; color: white; 
-        border-radius: 50%; font-size: 10px; line-height: 14px; text-align: center; cursor: help;
-    }
+    /* ITEM CARDS */
+    .cards-row { display: flex; flex-wrap: wrap; gap: 15px; padding: 20px; background: #fff; border-bottom: 1px solid #eee; }
+    .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }
+    .mc-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px; display: flex; align-items: center; justify-content: center; gap: 5px; }
+    .mc-val { font-size: 24px; font-weight: 800; color: #333; }
+    .info-icon { display: inline-block; width: 14px; height: 14px; background: #3b82f6; color: white; border-radius: 50%; font-size: 10px; line-height: 14px; text-align: center; cursor: help; }
 
-    /* TABLES INSIDE ACCORDION */
+    /* TABLES INSIDE */
     .details-section { padding: 20px; display: flex; flex-wrap: wrap; gap: 20px; background: #fff; }
     .detail-col { flex: 1 1 400px; min-width: 300px; }
     .detail-title { font-weight: bold; font-size: 14px; margin-bottom: 10px; color: #2c3e50; }
@@ -1749,7 +1735,6 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     table.inner-table td { padding: 10px; border-bottom: 1px solid #eee; color: #333; }
     table.inner-table tr:last-child td { border-bottom: none; }
 
-    /* RAW RESPONSE */
     .item-response { background-color: #f0fdf9; color: #333; padding: 25px; font-size: 15px; line-height: 1.6; border-top: 1px solid #eee; }
     .response-label { font-weight: bold; color: #00d18f; margin-bottom: 15px; display: block; font-size: 16px; border-bottom: 1px dashed #00d18f; padding-bottom: 5px;}
     
@@ -1813,7 +1798,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     </script>
     '''
 
-    # 3. HTML ШАБЛОН
+    # 3. HTML HEADER
     html_template = '''<!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -1852,17 +1837,16 @@ __JS_BLOCK__
 </html>
 '''
 
-    # 4. ЛОГІКА НАПОВНЕННЯ КОНТЕНТУ
+    # 4. ЛОГІКА
     
-    # 4.1. Кнопки вкладок
+    # Кнопки
     tabs_buttons_html = ""
     for i, prov in enumerate(providers):
         active_cls = "active" if i == 0 else ""
-        # Видаляємо пробіли та крапки для ID
         prov_id = str(prov).replace(" ", "_").replace(".", "")
         tabs_buttons_html += f'<button class="tab-btn {active_cls}" onclick="openTab(event, \'{prov_id}\')">{prov}</button>\n'
 
-    # 4.2. Вміст вкладок
+    # Контент
     tabs_content_html = ""
     js_charts_code = ""
 
@@ -1870,35 +1854,33 @@ __JS_BLOCK__
         active_cls = "active" if i == 0 else ""
         prov_id = str(prov).replace(" ", "_").replace(".", "")
         
-        # Фільтруємо сканування тільки для цього провайдера
         df_p = df_scans[df_scans['provider'] == prov].copy()
         total_scans = len(df_p)
         if total_scans == 0: continue
 
-        # Отримуємо ID сканувань цього провайдера
         scan_ids_in_prov = df_p['id'].tolist()
         
-        # Фільтруємо детальні таблиці (mentions, sources) тільки для цих ID
-        # Це важливо для правильної математики
+        # Деталі
         mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
         sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
         
-        # --- ГЛОБАЛЬНА МАТЕМАТИКА (Верхні графіки) ---
-        # 1. Share of Voice = (Всі мої згадки / Всі згадки ринку) * 100
+        # --- GLOBAL MATH ---
+        # Використовуємо fillna(0) і safe_int не тут, а при виводі, але для математики треба чисті числа
+        mentions_prov['mention_count'] = mentions_prov['mention_count'].fillna(0)
+        
         total_market_mentions = mentions_prov['mention_count'].sum()
         my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
+        
         sov_pct = (my_total_mentions / total_market_mentions * 100) if total_market_mentions > 0 else 0
         
-        # 2. Official Links = (Офіційні / Всі посилання) * 100
         total_links_count = len(sources_prov)
         official_links_count = len(sources_prov[sources_prov['is_official'] == True])
         off_pct = (official_links_count / total_links_count * 100) if total_links_count > 0 else 0
         
-        # 3. Presence = (Кількість унікальних сканів, де мене згадали / Всього сканів) * 100
         scans_with_me = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
         pres_pct = (scans_with_me / total_scans * 100) if total_scans > 0 else 0
 
-        # Початок HTML вкладки
+        # Tab Start
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content {active_cls}">
             <div class="kpi-row">
@@ -1923,46 +1905,43 @@ __JS_BLOCK__
             <div class="accordion-wrapper">
         '''
         
-        # 4.3. Цикл по запитах (Accordion Items)
+        # Loop Queries
         for idx, row in df_p.iterrows():
             q_text = row.get('keyword', 'Запит')
             date_scan = row.get('created_at_dt').strftime('%d.%m.%Y') if pd.notnull(row.get('created_at_dt')) else ""
             scan_id = row['id']
             
-            # --- ЛОКАЛЬНІ ДАНІ ДЛЯ КОНКРЕТНОГО ЗАПИТУ ---
+            # Local Data
             local_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
             local_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
-            # Розрахунок метрик для карток
             l_tot_mentions = local_mentions['mention_count'].sum()
             my_rows = local_mentions[local_mentions['is_my_brand'] == True]
             l_my_mentions = my_rows['mention_count'].sum()
             
-            # 1. SOV
+            # Calculate Local Metrics
             l_sov = (l_my_mentions / l_tot_mentions * 100) if l_tot_mentions > 0 else 0.0
-            # 2. Count
-            l_count = int(l_my_mentions)
-            # 3. Sentiment
+            l_count = safe_int(l_my_mentions)
+            
             l_sent = "Нейтральний"
             if not my_rows.empty:
                 l_sent = my_rows['sentiment_score'].mode()[0] if not my_rows['sentiment_score'].mode().empty else "Нейтральний"
-            # 4. Rank
+            
             l_rank = "-"
             if not my_rows.empty:
                 ranks = my_rows[my_rows['rank_position'] > 0]['rank_position']
                 if not ranks.empty:
-                    l_rank = f"#{int(ranks.min())}"
+                    l_rank = f"#{safe_int(ranks.min())}"
 
-            # --- ГЕНЕРАЦІЯ ТАБЛИЦІ БРЕНДІВ ---
+            # --- BRANDS TABLE ---
             brands_html = ""
             if not local_mentions.empty:
                 rows_b = ""
-                # Сортуємо: спочатку наш бренд, потім за кількістю
                 sorted_brands = local_mentions.sort_values(by=['is_my_brand', 'mention_count'], ascending=[False, False])
-                
                 for _, b in sorted_brands.iterrows():
                     style = "style='background:#e6fffa; font-weight:bold;'" if b['is_my_brand'] else ""
-                    rows_b += f"<tr {style}><td>{b['brand_name']}</td><td>{int(b['mention_count'])}</td><td>{int(b.get('rank_position',0))}</td><td>{b.get('sentiment_score','-')}</td></tr>"
+                    # ВИКОРИСТОВУЄМО safe_int ТУТ!
+                    rows_b += f"<tr {style}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{safe_int(b.get('rank_position',0))}</td><td>{b.get('sentiment_score','-')}</td></tr>"
                 
                 brands_html = f"""
                 <div class="detail-col">
@@ -1976,11 +1955,11 @@ __JS_BLOCK__
             else:
                 brands_html = "<div class='detail-col'><i>Брендів не знайдено</i></div>"
 
-            # --- ГЕНЕРАЦІЯ ТАБЛИЦІ ДЖЕРЕЛ ---
+            # --- SOURCES TABLE ---
             sources_html = ""
             if not local_sources.empty:
                 rows_s = ""
-                for _, s in local_sources.head(10).iterrows(): # Топ 10 джерел
+                for _, s in local_sources.head(10).iterrows():
                     icon = "✅" if s['is_official'] else "🔗"
                     url = str(s['url'])
                     short_url = (url[:40] + '...') if len(url) > 40 else url
@@ -1998,12 +1977,12 @@ __JS_BLOCK__
             else:
                 sources_html = "<div class='detail-col'><i>Джерел не знайдено</i></div>"
 
-            # Текст відповіді
+            # Response Text
             raw_t = row.get('raw_response', '')
             if pd.isna(raw_t) or not raw_t: raw_t = "Текст відповіді відсутній."
             formatted_t = str(raw_t).replace('\n', '<br>')
 
-            # --- ЗБИРАЄМО HTML ДЛЯ ОДНОГО ЗАПИТУ ---
+            # HTML ITEM
             tabs_content_html += f'''
             <div class="item-box">
                 <div class="accordion-trigger" onclick="toggleAcc(this)">
@@ -2014,31 +1993,28 @@ __JS_BLOCK__
                     <div style="font-size:12px; color:#888;">{date_scan} ▼</div>
                 </div>
                 <div class="accordion-content" style="display:none;">
-                    
                     <div class="cards-row">
                         <div class="metric-card">
-                            <div class="mc-label">ЧАСТКА ГОЛОСУ (SOV) <span class="info-icon" title="Частка згадок бренду">%</span></div>
+                            <div class="mc-label">ЧАСТКА ГОЛОСУ (SOV) <span class="info-icon" title="Частка">%</span></div>
                             <div class="mc-val">{l_sov:.1f}%</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ЗГАДОК БРЕНДУ <span class="info-icon" title="Кількість згадок">#</span></div>
+                            <div class="mc-label">ЗГАДОК БРЕНДУ <span class="info-icon" title="Кількість">#</span></div>
                             <div class="mc-val">{l_count}</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ТОНАЛЬНІСТЬ <span class="info-icon" title="Загальний настрій">☺</span></div>
+                            <div class="mc-label">ТОНАЛЬНІСТЬ <span class="info-icon" title="Настрій">☺</span></div>
                             <div class="mc-val" style="font-size:20px;">{l_sent}</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ПОЗИЦІЯ У СПИСКУ <span class="info-icon" title="Порядковий номер">1</span></div>
+                            <div class="mc-label">ПОЗИЦІЯ <span class="info-icon" title="Ранг">1</span></div>
                             <div class="mc-val">{l_rank}</div>
                         </div>
                     </div>
-
                     <div class="details-section">
                         {brands_html}
                         {sources_html}
                     </div>
-
                     <div class="item-response">
                         <span class="response-label">Відповідь від {prov}:</span>
                         <div>{formatted_t}</div>
@@ -2047,14 +2023,14 @@ __JS_BLOCK__
             </div>
             '''
         
-        tabs_content_html += "</div></div>" # Закриваємо Accordion Wrapper і Tab Content
+        tabs_content_html += "</div></div>"
 
         # JS Charts
         js_charts_code += f"drawChart('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
         js_charts_code += f"drawChart('chartOff_{prov_id}', {off_pct}, '#4DD0E1');\n"
         js_charts_code += f"drawChart('chartPres_{prov_id}', {pres_pct}, '#00d18f');\n"
 
-    # 5. Final Replace
+    # 5. Final
     final_js = js_block.replace("__JS_CHARTS_PLACEHOLDER__", js_charts_code)
     
     final_html = html_template \
@@ -2066,7 +2042,6 @@ __JS_BLOCK__
         .replace("__JS_BLOCK__", final_js)
 
     return final_html
-
 
 
 def show_reports_page():
