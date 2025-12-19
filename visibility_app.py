@@ -1365,6 +1365,7 @@ def show_competitors_page():
             else:
                 st.info("Оберіть бренд.")
 
+
 def show_recommendations_page():
     """
     Сторінка рекомендацій.
