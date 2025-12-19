@@ -2033,6 +2033,156 @@ __JS_BLOCK__
 
     return final_html
 
+def show_reports_page():
+    """
+    Сторінка Звітів.
+    Збирає дані, приводить ID до рядків (str), передає в генератор.
+    """
+    import streamlit as st
+    import pandas as pd
+    from datetime import datetime
+    
+    st.title("📊 Звіти")
+
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
+    else:
+        st.error("🚨 Помилка підключення до БД.")
+        return
+    
+    proj = st.session_state.get("current_project")
+    if not proj:
+        st.info("Оберіть проект.")
+        return
+
+    user_role = st.session_state.get("role", "user")
+    is_admin = (user_role in ["admin", "super_admin"])
+    
+    tabs = st.tabs(["📥 Замовити звіт", "📂 Готові звіти"] + (["⚙️ Адмінка"] if is_admin else []))
+
+    # === ЗАМОВЛЕННЯ ===
+    with tabs[0]:
+        st.markdown("### Створення нового звіту")
+        st.info("Звіт формується на основі останніх актуальних сканувань.")
+        
+        rep_name = st.text_input("Назва звіту", value=f"Звіт {proj.get('brand_name')} - {datetime.now().strftime('%d.%m.%Y')}")
+        
+        if st.button("🚀 Згенерувати звіт", type="primary"):
+            with st.spinner("Аналіз даних та генерація HTML..."):
+                try:
+                    kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+                    kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
+                    if not kw_map:
+                        st.error("Немає запитів.")
+                        st.stop()
+
+                    scans_resp = supabase.table("scan_results")\
+                        .select("id, created_at, provider, keyword_id, raw_response")\
+                        .eq("project_id", proj["id"])\
+                        .order("created_at", desc=True)\
+                        .limit(3000)\
+                        .execute()
+                    
+                    raw_scans = scans_resp.data if scans_resp.data else []
+                    if not raw_scans:
+                        st.error("Історія пуста.")
+                        st.stop()
+
+                    df_raw = pd.DataFrame(raw_scans)
+                    df_raw = df_raw.sort_values('created_at', ascending=False)
+                    df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first').copy()
+                    
+                    # Convert IDs to string to match correctly
+                    df_latest['id'] = df_latest['id'].astype(str)
+                    scan_ids = df_latest['id'].tolist()
+                    
+                    # Details
+                    m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
+                    s_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
+                    
+                    mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
+                    sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
+
+                    # Data Prep
+                    df_latest['keyword'] = df_latest['keyword_id'].map(kw_map).fillna("Unknown")
+                    try: df_latest['created_at_dt'] = pd.to_datetime(df_latest['created_at'])
+                    except: pass
+                    
+                    # CLEANING & TYPE CASTING
+                    if not mentions_df.empty:
+                        mentions_df['scan_result_id'] = mentions_df['scan_result_id'].astype(str)
+                    else:
+                        mentions_df = pd.DataFrame(columns=['scan_result_id', 'brand_name', 'mention_count', 'is_my_brand'])
+
+                    if not sources_df.empty:
+                        sources_df['scan_result_id'] = sources_df['scan_result_id'].astype(str)
+                    else:
+                        sources_df = pd.DataFrame(columns=['scan_result_id', 'url', 'is_official'])
+
+                    # Call Generator
+                    html_code = generate_html_report_content(proj.get('brand_name'), df_latest, mentions_df, sources_df)
+
+                    # Save
+                    supabase.table("reports").insert({
+                        "project_id": proj["id"],
+                        "report_name": rep_name,
+                        "html_content": html_code,
+                        "status": "pending"
+                    }).execute()
+                    
+                    st.success("✅ Звіт успішно сформовано! (Вкладка Адмінка)")
+                    
+                except Exception as e:
+                    st.error(f"Помилка: {e}")
+
+    # === ГОТОВІ ===
+    with tabs[1]:
+        st.markdown("### 📂 Архів")
+        try:
+            pub_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "published").order("created_at", desc=True).execute()
+            reports = pub_resp.data if pub_resp.data else []
+            
+            if not reports:
+                st.info("Немає опублікованих звітів.")
+            else:
+                for r in reports:
+                    with st.expander(f"📄 {r['report_name']} ({r['created_at'][:10]})"):
+                        c1, c2 = st.columns([1, 2])
+                        with c1:
+                            st.download_button("📥 Завантажити HTML", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
+                        with c2:
+                            if st.checkbox("Показати", key=f"sh_{r['id']}"):
+                                st.components.v1.html(r['html_content'], height=800, scrolling=True)
+        except Exception as e:
+            st.error(f"Помилка: {e}")
+
+    # === АДМІНКА ===
+    if is_admin:
+        with tabs[2]:
+            st.markdown("### ⚙️ Модерація (Pending)")
+            try:
+                pend_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "pending").order("created_at", desc=True).execute()
+                pending = pend_resp.data if pend_resp.data else []
+                
+                if not pending:
+                    st.info("Черга пуста.")
+                else:
+                    for pr in pending:
+                        st.divider()
+                        st.subheader(f"📝 {pr['report_name']}")
+                        new_html = st.text_area("Редактор HTML:", value=pr['html_content'], height=300, key=f"ed_{pr['id']}")
+                        c1, c2 = st.columns([1, 4])
+                        if c1.button("✅ Опублікувати", key=f"pub_{pr['id']}", type="primary"):
+                            supabase.table("reports").update({"status": "published", "html_content": new_html}).eq("id", pr['id']).execute()
+                            st.success("Опубліковано!"); st.rerun()
+                        if c2.button("❌ Видалити", key=f"del_{pr['id']}"):
+                            supabase.table("reports").delete().eq("id", pr['id']).execute()
+                            st.rerun()
+            except Exception as e:
+                st.error(f"Помилка: {e}")
+                
 
 def show_dashboard():
     """
