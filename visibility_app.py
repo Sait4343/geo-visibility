@@ -1658,38 +1658,47 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    Виправлено: Примусове приведення ID до рядків для коректного злиття даних.
+    Виправлено:
+    1. Примусова синхронізація ID (type casting) для відображення метрик.
+    2. Форматування тексту (Markdown -> HTML).
     """
     import pandas as pd
     from datetime import datetime
     import numpy as np
+    import re
 
     current_date = datetime.now().strftime('%d.%m.%Y')
     
-    # --- 0. DATA CLEANING (ВИПРАВЛЕННЯ ПУСТИХ МЕТРИК) ---
-    # Приводимо всі ID до рядкового типу, щоб фільтрація працювала точно
+    # --- 0. DATA CLEANING & TYPE CASTING (КРИТИЧНО ВАЖЛИВО) ---
+    # Перетворюємо всі ID на рядки, щоб гарантувати збіг при фільтрації
     df_scans['id'] = df_scans['id'].astype(str)
     
     if not df_mentions.empty:
         df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str)
-        # Конвертуємо counts в числа (якщо там були рядки або NaN)
         df_mentions['mention_count'] = pd.to_numeric(df_mentions['mention_count'], errors='coerce').fillna(0)
         df_mentions['rank_position'] = pd.to_numeric(df_mentions['rank_position'], errors='coerce').fillna(0)
-        # Гарантуємо, що is_my_brand це boolean
-        df_mentions['is_my_brand'] = df_mentions['is_my_brand'].astype(bool)
     
     if not df_sources.empty:
         df_sources['scan_result_id'] = df_sources['scan_result_id'].astype(str)
-        df_sources['is_official'] = df_sources['is_official'].astype(bool)
 
-    # Helper
+    # Функція форматування тексту (Markdown bold/list -> HTML)
+    def format_llm_text(text):
+        if pd.isna(text) or not text: return "Текст відповіді відсутній."
+        txt = str(text)
+        # Жирний шрифт **text** -> <b>text</b>
+        txt = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', txt)
+        # Списки * item -> • item
+        txt = txt.replace('* ', '• ')
+        # Нові рядки
+        txt = txt.replace('\n', '<br>')
+        return txt
+
+    # Helper int
     def safe_int(val):
-        try:
-            return int(float(val))
-        except:
-            return 0
+        try: return int(float(val))
+        except: return 0
 
-    # 1. Мапінг
+    # 1. Мапінг назв
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
         "gpt-4o": "OpenAI GPT",
@@ -1708,7 +1717,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     providers_ui = sorted(df_scans['provider_ui'].unique().tolist())
 
     # ---------------------------------------------------------
-    # 2. CSS
+    # 2. CSS СТИЛІ
     # ---------------------------------------------------------
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
@@ -1764,7 +1773,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .item-number-wrapper { width: 36px; height: 36px; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 14px; flex-shrink: 0; }
     .item-query { font-size: 15px; font-weight: bold; color: #333; flex-grow: 1; margin-left: 15px;}
     
-    /* CARDS */
+    /* ITEM CARDS */
     .cards-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; border-bottom: 1px solid #eee; }
     .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }
     .mc-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px; display:flex; align-items:center; justify-content:center; gap:5px; }
@@ -1773,7 +1782,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
 
     /* RESPONSE & TABLES */
     .item-response { background-color: #f9fafb; color: #1d192b; padding: 25px; font-size: 14px; text-align: left; line-height: 1.6; }
-    .response-label { font-weight: bold; color: #5e35b1; margin-bottom: 10px; display: block; font-size: 16px; border-bottom: 1px dashed #5e35b1; padding-bottom: 5px; width: fit-content; }
+    .response-label { font-weight: bold; color: #5e35b1; margin-bottom: 15px; display: block; font-size: 16px; border-bottom: 1px dashed #5e35b1; padding-bottom: 5px; width: fit-content; }
 
     .detail-charts-wrapper { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; }
     .detail-chart-block { flex: 1 1 400px; min-width: 0; }
@@ -1850,7 +1859,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     </script>
     '''
 
-    # 4. HTML
+    # 4. HTML HEADER
     html_template = '''<!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -1912,64 +1921,36 @@ __JS_BLOCK__
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
-        # Filter Data (Provider)
+        # Filter Data
         df_p = df_scans[df_scans['provider_ui'] == prov_ui].copy()
         if df_p.empty: continue
         
         scan_ids_in_prov = df_p['id'].tolist()
-        
-        # Filter Details (By ID List)
-        if not df_mentions.empty:
-            mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
-        else:
-            mentions_prov = pd.DataFrame()
-            
-        if not df_sources.empty:
-            sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
-        else:
-            sources_prov = pd.DataFrame()
+        mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
+        sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
         
         total_queries = len(df_p)
         
-        # --- GLOBAL METRICS ---
-        
-        # SOV
-        total_market_mentions = 0
-        my_total_mentions = 0
-        if not mentions_prov.empty:
-            total_market_mentions = mentions_prov['mention_count'].sum()
-            my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
-        
+        # --- GLOBAL MATH ---
+        total_market_mentions = mentions_prov['mention_count'].sum()
+        my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
         sov_pct = (my_total_mentions / total_market_mentions * 100) if total_market_mentions > 0 else 0
         
-        # Official Links
-        total_links = 0
-        official_links = 0
-        if not sources_prov.empty:
-            total_links = len(sources_prov)
-            official_links = len(sources_prov[sources_prov['is_official'] == True])
-        
+        total_links = len(sources_prov)
+        official_links = len(sources_prov[sources_prov['is_official'] == True])
         off_pct = (official_links / total_links * 100) if total_links > 0 else 0
         
-        # Brand Coverage
-        brand_cov_pct = 0
-        if not mentions_prov.empty:
-            scans_with_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
-            brand_cov_pct = (scans_with_brand / total_queries * 100) if total_queries > 0 else 0
+        scans_with_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
+        brand_cov_pct = (scans_with_brand / total_queries * 100) if total_queries > 0 else 0
         
-        # Domain Coverage
-        domain_cov_pct = 0
-        if not sources_prov.empty:
-            scans_with_off_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
-            domain_cov_pct = (scans_with_off_link / total_queries * 100) if total_queries > 0 else 0
+        scans_with_off_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
+        domain_cov_pct = (scans_with_off_link / total_queries * 100) if total_queries > 0 else 0
         
-        # Avg Position
         avg_pos = 0
         if not mentions_prov.empty:
             my_ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
             avg_pos = my_ranks.mean() if not my_ranks.empty else 0
         
-        # Sentiment
         sent_label = "Нейтральна"
         if not mentions_prov.empty:
             valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
@@ -1977,7 +1958,7 @@ __JS_BLOCK__
                 mode = valid_sent['sentiment_score'].mode()
                 if not mode.empty: sent_label = mode[0]
 
-        # --- HTML Tab ---
+        # --- HTML TAB ---
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
             <div class="kpi-row">
@@ -2033,12 +2014,12 @@ __JS_BLOCK__
         # Loop Queries
         for idx, row in df_p.reset_index(drop=True).iterrows():
             q_text = row.get('keyword', 'Запит')
-            date_scan = row.get('created_at_dt').strftime('%d.%m.%Y') if pd.notnull(row.get('created_at_dt')) else ""
-            scan_id = str(row['id']) # Ensure String
+            scan_id = str(row['id']) # ВАЖЛИВО: string matching
             
             # --- Local Data ---
             loc_mentions = pd.DataFrame()
             if not mentions_prov.empty:
+                # ВАЖЛИВО: строге порівняння рядків
                 loc_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
             
             loc_sources = pd.DataFrame()
@@ -2046,10 +2027,8 @@ __JS_BLOCK__
                 loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
             # --- Local Metrics ---
-            l_tot = 0
-            l_my = 0
-            l_sov = 0
             l_count = 0
+            l_sov = 0
             l_sent = "Нейтральний"
             l_pos = "-"
 
@@ -2064,7 +2043,7 @@ __JS_BLOCK__
                 if not l_my_row.empty:
                     l_sent = l_my_row['sentiment_score'].iloc[0]
                     val = l_my_row[l_my_row['rank_position'] > 0]['rank_position'].min()
-                    if pd.notnull(val): l_pos = f"#{safe_int(val)}"
+                    if pd.notnull(val) and val > 0: l_pos = f"#{safe_int(val)}"
 
             # Inner Tables
             brands_inner = ""
@@ -2085,10 +2064,9 @@ __JS_BLOCK__
             else:
                 sources_inner = "<tr><td colspan='2'>Джерел не знайдено</td></tr>"
 
-            # Response Text
+            # Response Text & Formatting
             raw_t = row.get('raw_response', '')
-            if pd.isna(raw_t): raw_t = "Текст не збережено."
-            fmt_t = str(raw_t).replace('\n', '<br>')
+            formatted_text = format_llm_text(raw_t)
 
             tabs_content_html += f'''
             <div class="item-box">
@@ -2105,7 +2083,7 @@ __JS_BLOCK__
                             <div class="mc-val">{l_sov:.1f}%</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ЗГАДОК <span class="info-icon" title="Кількість">#</span></div>
+                            <div class="mc-label">ЗГАДОК БРЕНДУ <span class="info-icon" title="Кількість">#</span></div>
                             <div class="mc-val">{l_count}</div>
                         </div>
                         <div class="metric-card">
@@ -2113,14 +2091,14 @@ __JS_BLOCK__
                             <div class="mc-val" style="font-size:18px;">{l_sent}</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ПОЗИЦІЯ <span class="info-icon" title="Ранг">1</span></div>
+                            <div class="mc-label">ПОЗИЦІЯ У СПИСКУ <span class="info-icon" title="Ранг">1</span></div>
                             <div class="mc-val">{l_pos}</div>
                         </div>
                     </div>
 
                     <div class="item-response">
                         <div class="response-label">Відповідь LLM:</div>
-                        {fmt_t}
+                        {formatted_text}
                         
                         <div class="detail-charts-wrapper">
                             <div class="detail-chart-block">
@@ -2144,10 +2122,7 @@ __JS_BLOCK__
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov_pct}, '#4DD0E1');\n"
-        
-        # Sentiment Placeholder
         js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
-        
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
         js_charts_code += f"createDoughnut('chartPos_{prov_id}', {score_pos * 10}, '#00d18f');\n"
 
