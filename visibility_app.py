@@ -1917,10 +1917,9 @@ __JS_BLOCK__
 
 def show_reports_page():
     """
-    Сторінка Звітів:
-    1. Замовити (Юзер/Адмін) -> Створює 'pending' звіт.
-    2. Готові (Юзер/Адмін) -> Показує 'published' звіти.
-    3. Адмінка (Адмін) -> Редагує 'pending', публікує.
+    Сторінка Звітів (Фінальна логіка).
+    1. ЗБІР ДАНИХ: Бере останні сканування для КОЖНОГО запиту по КОЖНІЙ моделі.
+    2. ПОТІК: Генерація -> Pending -> Публікація Admin -> Published.
     """
     import streamlit as st
     import pandas as pd
@@ -1944,6 +1943,7 @@ def show_reports_page():
 
     # --- ПЕРЕВІРКА ПРАВ АДМІНА ---
     user_role = st.session_state.get("role", "user")
+    # Тільки адміни бачать вкладку модерації
     is_admin = (user_role in ["admin", "super_admin"])
     
     # Вкладки
@@ -1953,102 +1953,137 @@ def show_reports_page():
     
     tabs = st.tabs(tabs_titles)
 
-    # === TAB 1: ЗАМОВЛЕННЯ ===
+    # ==============================================================================
+    # TAB 1: ЗАМОВЛЕННЯ ЗВІТУ (ГЕНЕРАЦІЯ ПО ВСІХ ЗАПИТАХ)
+    # ==============================================================================
     with tabs[0]:
         st.markdown("### Створення нового звіту")
-        st.info("Звіт формується автоматично на основі останніх 50 сканувань у цьому проекті.")
+        st.info("Звіт буде згенеровано на основі **найактуальніших** сканувань для **всіх** запитів проекту по **всіх** доступних моделях.")
         
-        new_rep_name = st.text_input("Назва звіту", value=f"Звіт {proj.get('brand_name')} - {datetime.now().strftime('%d.%m.%Y')}")
+        default_name = f"Звіт {proj.get('brand_name')} - {datetime.now().strftime('%d.%m.%Y')}"
+        new_rep_name = st.text_input("Назва звіту", value=default_name)
         
         if st.button("🚀 Згенерувати звіт", type="primary"):
-            with st.spinner("Аналіз даних та генерація HTML..."):
+            with st.spinner("Збір найсвіжіших даних по всіх запитах..."):
                 try:
-                    # 1. Отримуємо дані
+                    # 1. Завантажуємо Keywords (щоб мати мапу ID -> Текст)
+                    kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+                    kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
+                    
+                    if not kw_map:
+                        st.error("У проекті немає запитів. Спочатку додайте запити.")
+                        st.stop()
+
+                    # 2. Завантажуємо ВЕЛИКИЙ пул останніх сканувань (наприклад, 2000)
+                    # Щоб гарантовано охопити всі запити * всі моделі
                     scans_resp = supabase.table("scan_results")\
                         .select("id, created_at, provider, keyword_id")\
                         .eq("project_id", proj["id"])\
                         .order("created_at", desc=True)\
-                        .limit(50)\
+                        .limit(2000)\
                         .execute()
                     
-                    if not scans_resp.data:
-                        st.error("Недостатньо даних для звіту (0 сканувань).")
+                    raw_scans = scans_resp.data if scans_resp.data else []
+                    
+                    if not raw_scans:
+                        st.error("Історія сканувань порожня. Запустіть сканування у розділі 'Перелік запитів'.")
                         st.stop()
                         
-                    df_scans = pd.DataFrame(scans_resp.data)
-                    scan_ids = df_scans['id'].tolist()
+                    # 3. ЛОГІКА "ЗРІЗУ": Залишаємо тільки 1 найновіший запис для пари (keyword_id + provider)
+                    df_raw = pd.DataFrame(raw_scans)
                     
-                    # 2. Отримуємо деталі
+                    # Сортуємо: нові зверху
+                    df_raw = df_raw.sort_values('created_at', ascending=False)
+                    
+                    # Видаляємо дублікати, залишаючи перший (найновіший) для кожного комбінації
+                    df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first').copy()
+                    
+                    scan_ids = df_latest['id'].tolist()
+                    st.write(f"🔍 Знайдено {len(scan_ids)} актуальних зрізів даних (Запит + LLM).")
+                    
+                    # 4. Підтягуємо деталі (Mentions & Sources) тільки для цих ID
+                    # Використовуємо chunks, якщо ID дуже багато, але для <1000 ок
                     m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
                     s_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
-                    k_resp = supabase.table("keywords").select("id, keyword_text").execute()
-                    kw_map = {k['id']: k['keyword_text'] for k in k_resp.data}
                     
                     mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
                     sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
                     
-                    # 3. Обробка (Merge)
-                    df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Unknown")
-                    # Timezone fix
+                    # 5. Приєднуємо дані (Покроково, щоб уникнути помилки suffixes)
+                    df_latest['keyword'] = df_latest['keyword_id'].map(kw_map).fillna("Видалений запит")
                     try:
-                        df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
+                        df_latest['created_at_dt'] = pd.to_datetime(df_latest['created_at'])
                     except:
                         pass
-                    
-                    # 🔥 ВИПРАВЛЕННЯ ЗЛИТТЯ (MERGE FIX)
-                    # Робимо merge покроково і відразу видаляємо зайві колонки, щоб не було конфлікту імен
-                    
+
+                    # --- MERGE MENTIONS ---
                     if not mentions_df.empty:
-                        # 1. Brands Count
+                        # Всього брендів у відповіді
                         bc = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
-                        df_scans = df_scans.merge(bc, left_on='id', right_on='scan_result_id', how='left')
-                        if 'scan_result_id' in df_scans.columns: 
-                            df_scans = df_scans.drop(columns=['scan_result_id'])
+                        df_latest = df_latest.merge(bc, left_on='id', right_on='scan_result_id', how='left')
+                        # Чистимо дублікат колонки
+                        if 'scan_result_id' in df_latest.columns: 
+                            df_latest = df_latest.drop(columns=['scan_result_id'])
                         
-                        # 2. My Mentions Count
+                        # Наші згадки
                         my = mentions_df[mentions_df['is_my_brand']==True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
-                        df_scans = df_scans.merge(my, left_on='id', right_on='scan_result_id', how='left')
-                        if 'scan_result_id' in df_scans.columns: 
-                            df_scans = df_scans.drop(columns=['scan_result_id'])
-                    else:
-                        df_scans['total_brands'] = 0
-                        df_scans['my_mentions_count'] = 0
+                        df_latest = df_latest.merge(my, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_latest.columns: 
+                            df_latest = df_latest.drop(columns=['scan_result_id'])
                         
+                        # Середня позиція (Rank)
+                        ranks = mentions_df[mentions_df['is_my_brand']==True][['scan_result_id', 'rank_position']]
+                        # Якщо кілька згадок, беремо кращу (мін) або середню
+                        ranks_agg = ranks.groupby('scan_result_id')['rank_position'].mean().reset_index(name='rank_position')
+                        df_latest = df_latest.merge(ranks_agg, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_latest.columns: 
+                            df_latest = df_latest.drop(columns=['scan_result_id'])
+
+                    else:
+                        df_latest['total_brands'] = 0
+                        df_latest['my_mentions_count'] = 0
+                        df_latest['rank_position'] = 0
+                        
+                    # --- MERGE SOURCES ---
                     if not sources_df.empty:
-                        # 3. Links Count
                         lc = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
-                        df_scans = df_scans.merge(lc, left_on='id', right_on='scan_result_id', how='left')
-                        if 'scan_result_id' in df_scans.columns: 
-                            df_scans = df_scans.drop(columns=['scan_result_id'])
+                        df_latest = df_latest.merge(lc, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_latest.columns: 
+                            df_latest = df_latest.drop(columns=['scan_result_id'])
                         
-                        # 4. Official Links Count
                         oc = sources_df[sources_df['is_official']==True].groupby('scan_result_id').size().reset_index(name='official_links')
-                        df_scans = df_scans.merge(oc, left_on='id', right_on='scan_result_id', how='left')
-                        if 'scan_result_id' in df_scans.columns: 
-                            df_scans = df_scans.drop(columns=['scan_result_id'])
+                        df_latest = df_latest.merge(oc, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_latest.columns: 
+                            df_latest = df_latest.drop(columns=['scan_result_id'])
                     else:
-                        df_scans['total_links'] = 0
-                        df_scans['official_links'] = 0
+                        df_latest['total_links'] = 0
+                        df_latest['official_links'] = 0
                         
-                    df_scans = df_scans.fillna(0)
+                    df_latest = df_latest.fillna(0)
                     
-                    # 4. Генерація HTML (Викликаємо функцію, яка має бути оголошена вище!)
-                    html_code = generate_html_report_content(proj.get('brand_name'), df_scans)
-                    
-                    # 5. Запис у базу
-                    supabase.table("reports").insert({
-                        "project_id": proj["id"],
-                        "report_name": new_rep_name,
-                        "html_content": html_code,
-                        "status": "pending"
-                    }).execute()
-                    
-                    st.success("✅ Звіт успішно згенеровано! Очікуйте підтвердження адміністратора.")
+                    # 6. ГЕНЕРАЦІЯ HTML
+                    # Тут ми викликаємо функцію, яка має бути оголошена ВИЩЕ
+                    if 'generate_html_report_content' in globals():
+                        html_code = generate_html_report_content(proj.get('brand_name'), df_latest)
+                        
+                        # 7. ЗБЕРЕЖЕННЯ В БАЗУ (Pending)
+                        supabase.table("reports").insert({
+                            "project_id": proj["id"],
+                            "report_name": new_rep_name,
+                            "html_content": html_code,
+                            "status": "pending" # <-- ВАЖЛИВО: Спочатку статус 'pending'
+                        }).execute()
+                        
+                        st.success("✅ Звіт успішно сформовано! Він надісланий на модерацію (Вкладка 'Адмінка').")
+                    else:
+                        st.error("Функція генерації HTML не знайдена в коді.")
                     
                 except Exception as e:
-                    st.error(f"Помилка генерації: {e}")
+                    st.error(f"Помилка при генерації звіту: {e}")
 
-    # === TAB 2: ГОТОВІ ЗВІТИ ===
+    # ==============================================================================
+    # TAB 2: ГОТОВІ ЗВІТИ (Тільки Published)
+    # ==============================================================================
     with tabs[1]:
         st.markdown("### 📂 Архів готових звітів")
         
@@ -2063,33 +2098,36 @@ def show_reports_page():
             reports = pub_resp.data if pub_resp.data else []
             
             if not reports:
-                st.info("Немає опублікованих звітів.")
+                st.info("У цьому проекті ще немає опублікованих звітів.")
             else:
                 for r in reports:
-                    with st.expander(f"📄 {r['report_name']} ({r['created_at'][:10]})"):
+                    date_display = r['created_at'][:10]
+                    with st.expander(f"📄 {r['report_name']} ({date_display})"):
                         c_down, c_view = st.columns([1, 2])
                         with c_down:
                             st.download_button(
                                 label="📥 Завантажити HTML",
                                 data=r['html_content'],
-                                file_name=f"report_{r['created_at'][:10]}.html",
+                                file_name=f"report_{date_display}.html",
                                 mime="text/html",
                                 key=f"dl_{r['id']}"
                             )
                         with c_view:
-                            # Попередній перегляд у фреймі
-                            if st.checkbox("Показати звіт", key=f"sh_{r['id']}"):
+                            if st.checkbox("Переглянути", key=f"sh_{r['id']}"):
                                 st.components.v1.html(r['html_content'], height=800, scrolling=True)
         except Exception as e:
             if "permission denied" in str(e):
-                st.error("⚠️ Немає прав доступу до таблиці 'reports'. Виконайте SQL-міграцію.")
+                st.error("⚠️ Помилка доступу до таблиці 'reports'. Виконайте SQL Migration.")
             else:
                 st.error(f"Помилка завантаження: {e}")
 
-    # === TAB 3: АДМІНКА (ТІЛЬКИ ДЛЯ ADMIN) ===
+    # ==============================================================================
+    # TAB 3: АДМІНКА (Тільки для Admin -> Редагування Pending)
+    # ==============================================================================
     if is_admin:
         with tabs[2]:
             st.markdown("### ⚙️ Модерація звітів (Pending)")
+            st.caption("Тут відображаються звіти, які були згенеровані, але ще не підтверджені.")
             
             try:
                 pend_resp = supabase.table("reports")\
@@ -2102,34 +2140,40 @@ def show_reports_page():
                 pending = pend_resp.data if pend_resp.data else []
                 
                 if not pending:
-                    st.info("Черга на перевірку пуста.")
+                    st.info("Черга на модерацію пуста.")
                 else:
                     for pr in pending:
                         st.divider()
                         st.subheader(f"📝 {pr['report_name']}")
                         
-                        # РЕДАКТОР HTML
-                        edited_html = st.text_area("HTML Код (можна редагувати):", value=pr['html_content'], height=400, key=f"editor_{pr['id']}")
+                        # РЕДАКТОР КОДУ (Можливість правити HTML перед публікацією)
+                        edited_html = st.text_area(
+                            "HTML код (Редактор):", 
+                            value=pr['html_content'], 
+                            height=300, 
+                            key=f"editor_{pr['id']}"
+                        )
                         
-                        # PREVIEW
-                        with st.expander("👁️ Попередній перегляд змін"):
-                            st.components.v1.html(edited_html, height=600, scrolling=True)
+                        with st.expander("👁️ Попередній перегляд (Live Preview)"):
+                            st.components.v1.html(edited_html, height=500, scrolling=True)
                         
-                        # ДІЇ
                         c_pub, c_del = st.columns([1, 4])
                         with c_pub:
                             if st.button("✅ Опублікувати", key=f"pub_{pr['id']}", type="primary"):
+                                # Змінюємо статус на 'published'
                                 supabase.table("reports").update({
                                     "status": "published",
                                     "html_content": edited_html,
                                     "updated_at": datetime.now().isoformat()
                                 }).eq("id", pr['id']).execute()
-                                st.success("Опубліковано!")
+                                
+                                st.success("Звіт опубліковано! Він тепер доступний у вкладці 'Готові звіти'.")
                                 st.rerun()
+                                
                         with c_del:
-                            if st.button("❌ Видалити", key=f"del_{pr['id']}"):
+                            if st.button("❌ Видалити чернетку", key=f"del_{pr['id']}"):
                                 supabase.table("reports").delete().eq("id", pr['id']).execute()
-                                st.warning("Видалено.")
+                                st.warning("Чернетку видалено.")
                                 st.rerun()
                                 
             except Exception as e:
