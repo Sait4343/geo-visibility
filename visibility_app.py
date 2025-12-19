@@ -1658,8 +1658,7 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    - Дизайн: Вкладки, KPI (2 ряди), Акордеон з картками метрик.
-    - Дані: Реальні відповіді, бренди та джерела з БД.
+    Виправлено: Примусове приведення ID до рядків для коректного злиття даних.
     """
     import pandas as pd
     from datetime import datetime
@@ -1667,14 +1666,30 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
 
     current_date = datetime.now().strftime('%d.%m.%Y')
     
-    # 0. Helper для безпечного перетворення в int
+    # --- 0. DATA CLEANING (ВИПРАВЛЕННЯ ПУСТИХ МЕТРИК) ---
+    # Приводимо всі ID до рядкового типу, щоб фільтрація працювала точно
+    df_scans['id'] = df_scans['id'].astype(str)
+    
+    if not df_mentions.empty:
+        df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str)
+        # Конвертуємо counts в числа (якщо там були рядки або NaN)
+        df_mentions['mention_count'] = pd.to_numeric(df_mentions['mention_count'], errors='coerce').fillna(0)
+        df_mentions['rank_position'] = pd.to_numeric(df_mentions['rank_position'], errors='coerce').fillna(0)
+        # Гарантуємо, що is_my_brand це boolean
+        df_mentions['is_my_brand'] = df_mentions['is_my_brand'].astype(bool)
+    
+    if not df_sources.empty:
+        df_sources['scan_result_id'] = df_sources['scan_result_id'].astype(str)
+        df_sources['is_official'] = df_sources['is_official'].astype(bool)
+
+    # Helper
     def safe_int(val):
         try:
-            if pd.isna(val) or val == "" or str(val).lower() == 'nan': return 0
             return int(float(val))
-        except: return 0
+        except:
+            return 0
 
-    # 1. Мапінг назв (Технічні -> Красиві) ТІЛЬКИ для вкладок
+    # 1. Мапінг
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
         "gpt-4o": "OpenAI GPT",
@@ -1689,12 +1704,11 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
             if k in p_str: return v
         return str(p).capitalize()
 
-    # Створюємо колонку для групування
     df_scans['provider_ui'] = df_scans['provider'].apply(get_pretty_name)
     providers_ui = sorted(df_scans['provider_ui'].unique().tolist())
 
     # ---------------------------------------------------------
-    # 2. CSS СТИЛІ (Дизайн "Сервус")
+    # 2. CSS
     # ---------------------------------------------------------
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
@@ -1721,7 +1735,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .kpi-box { 
         flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; 
         text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-        position: relative; min-height: 200px; cursor: help;
+        position: relative; min-height: 200px; 
     }
     .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; }
     .kpi-big-num { font-size: 28px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
@@ -1750,7 +1764,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .item-number-wrapper { width: 36px; height: 36px; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 14px; flex-shrink: 0; }
     .item-query { font-size: 15px; font-weight: bold; color: #333; flex-grow: 1; margin-left: 15px;}
     
-    /* ITEM METRICS (CARDS) */
+    /* CARDS */
     .cards-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; border-bottom: 1px solid #eee; }
     .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }
     .mc-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px; display:flex; align-items:center; justify-content:center; gap:5px; }
@@ -1770,7 +1784,6 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     table.inner-table td { padding: 8px; border-bottom: 1px solid #eee; color: #333; }
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
-    
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
@@ -1837,7 +1850,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     </script>
     '''
 
-    # 4. HTML HEADER
+    # 4. HTML
     html_template = '''<!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -1899,49 +1912,72 @@ __JS_BLOCK__
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
-        # Filter Data
+        # Filter Data (Provider)
         df_p = df_scans[df_scans['provider_ui'] == prov_ui].copy()
         if df_p.empty: continue
         
         scan_ids_in_prov = df_p['id'].tolist()
-        mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
-        sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
+        
+        # Filter Details (By ID List)
+        if not df_mentions.empty:
+            mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
+        else:
+            mentions_prov = pd.DataFrame()
+            
+        if not df_sources.empty:
+            sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
+        else:
+            sources_prov = pd.DataFrame()
         
         total_queries = len(df_p)
         
-        # --- GLOBAL MATH ---
-        mentions_prov['mention_count'] = mentions_prov['mention_count'].fillna(0)
+        # --- GLOBAL METRICS ---
         
-        # 1. SOV
-        total_market_mentions = mentions_prov['mention_count'].sum()
-        my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
+        # SOV
+        total_market_mentions = 0
+        my_total_mentions = 0
+        if not mentions_prov.empty:
+            total_market_mentions = mentions_prov['mention_count'].sum()
+            my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
+        
         sov_pct = (my_total_mentions / total_market_mentions * 100) if total_market_mentions > 0 else 0
         
-        # 2. Official Links
-        total_links = len(sources_prov)
-        official_links = len(sources_prov[sources_prov['is_official'] == True])
+        # Official Links
+        total_links = 0
+        official_links = 0
+        if not sources_prov.empty:
+            total_links = len(sources_prov)
+            official_links = len(sources_prov[sources_prov['is_official'] == True])
+        
         off_pct = (official_links / total_links * 100) if total_links > 0 else 0
         
-        # 3. Brand Coverage
-        scans_with_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
-        brand_cov_pct = (scans_with_brand / total_queries * 100) if total_queries > 0 else 0
+        # Brand Coverage
+        brand_cov_pct = 0
+        if not mentions_prov.empty:
+            scans_with_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
+            brand_cov_pct = (scans_with_brand / total_queries * 100) if total_queries > 0 else 0
         
-        # 4. Domain Coverage
-        scans_with_off_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
-        domain_cov_pct = (scans_with_off_link / total_queries * 100) if total_queries > 0 else 0
+        # Domain Coverage
+        domain_cov_pct = 0
+        if not sources_prov.empty:
+            scans_with_off_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
+            domain_cov_pct = (scans_with_off_link / total_queries * 100) if total_queries > 0 else 0
         
-        # 5. Position
-        my_ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
-        avg_pos = my_ranks.mean() if not my_ranks.empty else 0
+        # Avg Position
+        avg_pos = 0
+        if not mentions_prov.empty:
+            my_ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
+            avg_pos = my_ranks.mean() if not my_ranks.empty else 0
         
-        # 6. Sentiment
+        # Sentiment
         sent_label = "Нейтральна"
-        valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
-        if not valid_sent.empty:
-            mode = valid_sent['sentiment_score'].mode()
-            if not mode.empty: sent_label = mode[0]
+        if not mentions_prov.empty:
+            valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
+            if not valid_sent.empty:
+                mode = valid_sent['sentiment_score'].mode()
+                if not mode.empty: sent_label = mode[0]
 
-        # --- Tab HTML ---
+        # --- HTML Tab ---
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
             <div class="kpi-row">
@@ -1998,26 +2034,37 @@ __JS_BLOCK__
         for idx, row in df_p.reset_index(drop=True).iterrows():
             q_text = row.get('keyword', 'Запит')
             date_scan = row.get('created_at_dt').strftime('%d.%m.%Y') if pd.notnull(row.get('created_at_dt')) else ""
-            scan_id = row['id']
+            scan_id = str(row['id']) # Ensure String
             
-            # Local Data
-            loc_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
-            loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
+            # --- Local Data ---
+            loc_mentions = pd.DataFrame()
+            if not mentions_prov.empty:
+                loc_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
             
-            # Local Metrics
-            l_tot = loc_mentions['mention_count'].sum()
-            l_my_row = loc_mentions[loc_mentions['is_my_brand'] == True]
-            l_my = l_my_row['mention_count'].sum()
+            loc_sources = pd.DataFrame()
+            if not sources_prov.empty:
+                loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
-            l_sov = (l_my / l_tot * 100) if l_tot > 0 else 0
-            l_count = safe_int(l_my)
+            # --- Local Metrics ---
+            l_tot = 0
+            l_my = 0
+            l_sov = 0
+            l_count = 0
             l_sent = "Нейтральний"
             l_pos = "-"
-            
-            if not l_my_row.empty:
-                l_sent = l_my_row['sentiment_score'].iloc[0]
-                val = l_my_row[l_my_row['rank_position'] > 0]['rank_position'].min()
-                if pd.notnull(val): l_pos = f"#{safe_int(val)}"
+
+            if not loc_mentions.empty:
+                l_tot = loc_mentions['mention_count'].sum()
+                l_my_row = loc_mentions[loc_mentions['is_my_brand'] == True]
+                l_my = l_my_row['mention_count'].sum()
+                
+                l_sov = (l_my / l_tot * 100) if l_tot > 0 else 0
+                l_count = safe_int(l_my)
+                
+                if not l_my_row.empty:
+                    l_sent = l_my_row['sentiment_score'].iloc[0]
+                    val = l_my_row[l_my_row['rank_position'] > 0]['rank_position'].min()
+                    if pd.notnull(val): l_pos = f"#{safe_int(val)}"
 
             # Inner Tables
             brands_inner = ""
@@ -2045,7 +2092,7 @@ __JS_BLOCK__
 
             tabs_content_html += f'''
             <div class="item-box">
-                <div class="accordion-trigger" onclick="toggleAcc(this)">
+                <div class="item-header accordion-trigger" onclick="toggleAcc(this)">
                     <div class="item-number-wrapper"><span class="item-number">{idx+1}</span></div>
                     <div class="item-query">{q_text}</div>
                     <div class="accordion-arrow">▼</div>
@@ -2054,11 +2101,11 @@ __JS_BLOCK__
                     
                     <div class="cards-row">
                         <div class="metric-card">
-                            <div class="mc-label">SOV <span class="info-icon" title="Share of Voice">%</span></div>
+                            <div class="mc-label">SOV <span class="info-icon" title="Частка">%</span></div>
                             <div class="mc-val">{l_sov:.1f}%</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ЗГАДОК <span class="info-icon" title="Кількість згадок">#</span></div>
+                            <div class="mc-label">ЗГАДОК <span class="info-icon" title="Кількість">#</span></div>
                             <div class="mc-val">{l_count}</div>
                         </div>
                         <div class="metric-card">
@@ -2066,7 +2113,7 @@ __JS_BLOCK__
                             <div class="mc-val" style="font-size:18px;">{l_sent}</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ПОЗИЦІЯ <span class="info-icon" title="Ранг у списку">1</span></div>
+                            <div class="mc-label">ПОЗИЦІЯ <span class="info-icon" title="Ранг">1</span></div>
                             <div class="mc-val">{l_pos}</div>
                         </div>
                     </div>
@@ -2097,11 +2144,15 @@ __JS_BLOCK__
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov_pct}, '#4DD0E1');\n"
+        
+        # Sentiment Placeholder
         js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
+        
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
         js_charts_code += f"createDoughnut('chartPos_{prov_id}', {score_pos * 10}, '#00d18f');\n"
 
     final_js = js_block.replace("__JS_CHARTS_PLACEHOLDER__", js_charts_code)
+    
     final_html = html_template.replace("__CSS_PLACEHOLDER__", css_styles)\
         .replace("__PROJECT_NAME__", str(project_name))\
         .replace("__DATE__", str(current_date))\
@@ -2111,10 +2162,11 @@ __JS_BLOCK__
 
     return final_html
 
+
 def show_reports_page():
     """
     Сторінка Звітів.
-    Збирає дані з БД і передає 4 аргументи у функцію генерації HTML.
+    Збирає дані, приводить ID до рядків (str), передає в генератор.
     """
     import streamlit as st
     import pandas as pd
@@ -2140,24 +2192,22 @@ def show_reports_page():
     
     tabs = st.tabs(["📥 Замовити звіт", "📂 Готові звіти"] + (["⚙️ Адмінка"] if is_admin else []))
 
-    # --- ЗАМОВЛЕННЯ ---
+    # === ЗАМОВЛЕННЯ ===
     with tabs[0]:
         st.markdown("### Створення нового звіту")
-        st.info("Звіт формується на основі останніх актуальних сканувань по кожному запиту.")
+        st.info("Звіт формується на основі останніх актуальних сканувань.")
         
         rep_name = st.text_input("Назва звіту", value=f"Звіт {proj.get('brand_name')} - {datetime.now().strftime('%d.%m.%Y')}")
         
         if st.button("🚀 Згенерувати звіт", type="primary"):
-            with st.spinner("Збір даних та генерація HTML..."):
+            with st.spinner("Аналіз даних та генерація HTML..."):
                 try:
-                    # 1. Keywords Map
                     kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
                     kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
                     if not kw_map:
                         st.error("Немає запитів.")
                         st.stop()
 
-                    # 2. Get Scans (Snapshot)
                     scans_resp = supabase.table("scan_results")\
                         .select("id, created_at, provider, keyword_id, raw_response")\
                         .eq("project_id", proj["id"])\
@@ -2172,35 +2222,39 @@ def show_reports_page():
 
                     df_raw = pd.DataFrame(raw_scans)
                     df_raw = df_raw.sort_values('created_at', ascending=False)
-                    # Лишаємо тільки 1 запис для пари (keyword + provider)
                     df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first').copy()
                     
+                    # Convert IDs to string to match correctly
+                    df_latest['id'] = df_latest['id'].astype(str)
                     scan_ids = df_latest['id'].tolist()
                     
-                    # 3. Get Details (Mentions & Sources)
+                    # Details
                     m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
                     s_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
                     
                     mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
                     sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
 
-                    # 4. Enrich
+                    # Data Prep
                     df_latest['keyword'] = df_latest['keyword_id'].map(kw_map).fillna("Unknown")
                     try: df_latest['created_at_dt'] = pd.to_datetime(df_latest['created_at'])
                     except: pass
-
-                    # Ми не робимо тут глобальний merge метрик, бо функція генерації тепер сама рахує їх точно
-                    # на основі повних таблиць mentions_df та sources_df.
-                    # Єдине, що можна додати для зручності — базові лічильники, якщо треба
-                    # але основна математика перенесена в генератор.
                     
-                    df_latest = df_latest.fillna(0)
+                    # CLEANING & TYPE CASTING
+                    if not mentions_df.empty:
+                        mentions_df['scan_result_id'] = mentions_df['scan_result_id'].astype(str)
+                    else:
+                        mentions_df = pd.DataFrame(columns=['scan_result_id', 'brand_name', 'mention_count', 'is_my_brand'])
 
-                    # 5. 🔥 ВИКЛИК ГЕНЕРАТОРА (Передаємо ВСІ 4 аргументи)
-                    # Ось тут була помилка — ми виправили її, додавши mentions_df і sources_df
+                    if not sources_df.empty:
+                        sources_df['scan_result_id'] = sources_df['scan_result_id'].astype(str)
+                    else:
+                        sources_df = pd.DataFrame(columns=['scan_result_id', 'url', 'is_official'])
+
+                    # Call Generator
                     html_code = generate_html_report_content(proj.get('brand_name'), df_latest, mentions_df, sources_df)
 
-                    # 6. Save
+                    # Save
                     supabase.table("reports").insert({
                         "project_id": proj["id"],
                         "report_name": rep_name,
@@ -2208,30 +2262,36 @@ def show_reports_page():
                         "status": "pending"
                     }).execute()
                     
-                    st.success("Звіт успішно створено! Перевірте вкладку Адмінка.")
+                    st.success("✅ Звіт успішно сформовано! (Вкладка Адмінка)")
                     
                 except Exception as e:
                     st.error(f"Помилка: {e}")
 
-    # --- ГОТОВІ ---
+    # === ГОТОВІ ===
     with tabs[1]:
-        st.markdown("### Архів")
+        st.markdown("### 📂 Архів")
         try:
-            res = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "published").order("created_at", desc=True).execute()
-            if not res.data: st.info("Немає звітів.")
+            pub_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "published").order("created_at", desc=True).execute()
+            reports = pub_resp.data if pub_resp.data else []
+            
+            if not reports:
+                st.info("Немає опублікованих звітів.")
             else:
-                for r in res.data:
-                    with st.expander(f"📄 {r['report_name']}"):
-                        st.download_button("📥 Завантажити HTML", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
-                        if st.checkbox("Попередній перегляд", key=f"v_{r['id']}"):
-                            st.components.v1.html(r['html_content'], height=600, scrolling=True)
+                for r in reports:
+                    with st.expander(f"📄 {r['report_name']} ({r['created_at'][:10]})"):
+                        c1, c2 = st.columns([1, 2])
+                        with c1:
+                            st.download_button("📥 Завантажити HTML", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
+                        with c2:
+                            if st.checkbox("Показати", key=f"sh_{r['id']}"):
+                                st.components.v1.html(r['html_content'], height=800, scrolling=True)
         except Exception as e:
             st.error(f"Помилка: {e}")
 
-    # --- АДМІНКА ---
+    # === АДМІНКА ===
     if is_admin:
         with tabs[2]:
-            st.markdown("### Модерація (Pending)")
+            st.markdown("### ⚙️ Модерація (Pending)")
             try:
                 pend_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "pending").order("created_at", desc=True).execute()
                 pending = pend_resp.data if pend_resp.data else []
@@ -2241,17 +2301,19 @@ def show_reports_page():
                 else:
                     for pr in pending:
                         st.divider()
-                        st.subheader(pr['report_name'])
-                        new_html = st.text_area("HTML Код", pr['html_content'], height=200, key=f"e_{pr['id']}")
-                        c1, c2 = st.columns(2)
-                        if c1.button("✅ Опублікувати", key=f"p_{pr['id']}"):
+                        st.subheader(f"📝 {pr['report_name']}")
+                        new_html = st.text_area("Редактор HTML:", value=pr['html_content'], height=300, key=f"ed_{pr['id']}")
+                        c1, c2 = st.columns([1, 4])
+                        if c1.button("✅ Опублікувати", key=f"pub_{pr['id']}", type="primary"):
                             supabase.table("reports").update({"status": "published", "html_content": new_html}).eq("id", pr['id']).execute()
                             st.success("Опубліковано!"); st.rerun()
-                        if c2.button("❌ Видалити", key=f"d_{pr['id']}"):
+                        if c2.button("❌ Видалити", key=f"del_{pr['id']}"):
                             supabase.table("reports").delete().eq("id", pr['id']).execute()
                             st.rerun()
             except Exception as e:
                 st.error(f"Помилка: {e}")
+
+
 
 def show_dashboard():
     """
