@@ -1928,7 +1928,7 @@ def show_reports_page():
     
     st.title("📊 Звіти")
 
-    # --- 🔥 ВИПРАВЛЕНЕ ПІДКЛЮЧЕННЯ ДО БД (УНІВЕРСАЛЬНЕ) ---
+    # --- ПІДКЛЮЧЕННЯ ДО БД ---
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
     elif 'supabase' in globals():
@@ -1995,21 +1995,40 @@ def show_reports_page():
                     except:
                         pass
                     
+                    # 🔥 ВИПРАВЛЕННЯ ЗЛИТТЯ (MERGE FIX)
+                    # Робимо merge покроково і відразу видаляємо зайві колонки, щоб не було конфлікту імен
+                    
                     if not mentions_df.empty:
+                        # 1. Brands Count
                         bc = mentions_df.groupby('scan_result_id').size().reset_index(name='total_brands')
+                        df_scans = df_scans.merge(bc, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_scans.columns: 
+                            df_scans = df_scans.drop(columns=['scan_result_id'])
+                        
+                        # 2. My Mentions Count
                         my = mentions_df[mentions_df['is_my_brand']==True].groupby('scan_result_id')['mention_count'].sum().reset_index(name='my_mentions_count')
-                        df_scans = df_scans.merge(bc, left_on='id', right_on='scan_result_id', how='left').merge(my, left_on='id', right_on='scan_result_id', how='left')
-                        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
+                        df_scans = df_scans.merge(my, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_scans.columns: 
+                            df_scans = df_scans.drop(columns=['scan_result_id'])
                     else:
-                        df_scans['total_brands'] = 0; df_scans['my_mentions_count'] = 0
+                        df_scans['total_brands'] = 0
+                        df_scans['my_mentions_count'] = 0
                         
                     if not sources_df.empty:
+                        # 3. Links Count
                         lc = sources_df.groupby('scan_result_id').size().reset_index(name='total_links')
+                        df_scans = df_scans.merge(lc, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_scans.columns: 
+                            df_scans = df_scans.drop(columns=['scan_result_id'])
+                        
+                        # 4. Official Links Count
                         oc = sources_df[sources_df['is_official']==True].groupby('scan_result_id').size().reset_index(name='official_links')
-                        df_scans = df_scans.merge(lc, left_on='id', right_on='scan_result_id', how='left').merge(oc, left_on='id', right_on='scan_result_id', how='left')
-                        if 'scan_result_id' in df_scans.columns: df_scans = df_scans.drop(columns=['scan_result_id'])
+                        df_scans = df_scans.merge(oc, left_on='id', right_on='scan_result_id', how='left')
+                        if 'scan_result_id' in df_scans.columns: 
+                            df_scans = df_scans.drop(columns=['scan_result_id'])
                     else:
-                        df_scans['total_links'] = 0; df_scans['official_links'] = 0
+                        df_scans['total_links'] = 0
+                        df_scans['official_links'] = 0
                         
                     df_scans = df_scans.fillna(0)
                     
@@ -2062,7 +2081,10 @@ def show_reports_page():
                             if st.checkbox("Показати звіт", key=f"sh_{r['id']}"):
                                 st.components.v1.html(r['html_content'], height=800, scrolling=True)
         except Exception as e:
-            st.error(f"Помилка завантаження: {e}")
+            if "permission denied" in str(e):
+                st.error("⚠️ Немає прав доступу до таблиці 'reports'. Виконайте SQL-міграцію.")
+            else:
+                st.error(f"Помилка завантаження: {e}")
 
     # === TAB 3: АДМІНКА (ТІЛЬКИ ДЛЯ ADMIN) ===
     if is_admin:
@@ -2112,7 +2134,6 @@ def show_reports_page():
                                 
             except Exception as e:
                 st.error(f"Помилка адмінки: {e}")
-
 
 
 def show_dashboard():
