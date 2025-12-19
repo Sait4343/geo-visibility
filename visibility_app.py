@@ -1928,10 +1928,14 @@ def show_reports_page():
     
     st.title("📊 Звіти")
 
-    if 'supabase' not in st.session_state:
-        st.error("Помилка підключення до БД.")
+    # --- 🔥 ВИПРАВЛЕНЕ ПІДКЛЮЧЕННЯ ДО БД (УНІВЕРСАЛЬНЕ) ---
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
+    else:
+        st.error("🚨 Помилка підключення до БД: змінна 'supabase' не знайдена.")
         return
-    supabase = st.session_state['supabase']
     
     proj = st.session_state.get("current_project")
     if not proj:
@@ -1939,7 +1943,6 @@ def show_reports_page():
         return
 
     # --- ПЕРЕВІРКА ПРАВ АДМІНА ---
-    # Замініть на вашу логіку (наприклад, перевірка user_details['role'])
     user_role = st.session_state.get("role", "user")
     is_admin = (user_role in ["admin", "super_admin"])
     
@@ -1986,7 +1989,7 @@ def show_reports_page():
                     
                     # 3. Обробка (Merge)
                     df_scans['keyword'] = df_scans['keyword_id'].map(kw_map).fillna("Unknown")
-                    # Timezone fix for display
+                    # Timezone fix
                     try:
                         df_scans['created_at_dt'] = pd.to_datetime(df_scans['created_at'])
                     except:
@@ -2010,7 +2013,7 @@ def show_reports_page():
                         
                     df_scans = df_scans.fillna(0)
                     
-                    # 4. Генерація HTML
+                    # 4. Генерація HTML (Викликаємо функцію, яка має бути оголошена вище!)
                     html_code = generate_html_report_content(proj.get('brand_name'), df_scans)
                     
                     # 5. Запис у базу
@@ -2024,7 +2027,7 @@ def show_reports_page():
                     st.success("✅ Звіт успішно згенеровано! Очікуйте підтвердження адміністратора.")
                     
                 except Exception as e:
-                    st.error(f"Помилка: {e}")
+                    st.error(f"Помилка генерації: {e}")
 
     # === TAB 2: ГОТОВІ ЗВІТИ ===
     with tabs[1]:
