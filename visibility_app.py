@@ -1658,10 +1658,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ЗМІНИ:
-    1. Працює з вкладеною структурою (JSON), а не окремими таблицями -> Виправляє "нульові" метрики.
-    2. Розраховує % Офіційних джерел та Згадки домену, порівнюючи URL з whitelist_domains.
-    3. Використовує Smart Target (пошук за назвою бренду) для SOV.
+    ВИПРАВЛЕНО:
+    1. Приймає список whitelist_domains.
+    2. Динамічно перевіряє кожне джерело (URL) на належність до офіційних доменів.
+    3. Рахує метрики "Згадки домену" та "% Офіційних джерел" на основі цієї перевірки.
     """
     import pandas as pd
     from datetime import datetime
@@ -1675,22 +1675,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         try: return int(float(val))
         except: return 0
 
-    def get_domain_from_url(url):
-        try:
-            return urlparse(str(url)).netloc.lower().replace('www.', '')
-        except:
-            return ""
-
-    def is_official_link(url, whitelist):
-        if not url or not whitelist: return False
-        domain = get_domain_from_url(url)
-        # Перевіряємо, чи входить домен URL у whitelist (або навпаки, якщо whitelist це 'be-it.agency')
-        for wl in whitelist:
-            wl_clean = wl.lower().replace('www.', '').strip()
-            if wl_clean in domain:
-                return True
-        return False
-
     def format_llm_text(text):
         if not text: return "Текст відповіді відсутній."
         txt = str(text)
@@ -1701,6 +1685,21 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
              target_short = project_name.split(' ')[0]
              txt = re.sub(f"(?i){re.escape(target_short)}", f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{target_short}</span>", txt)
         return txt
+
+    # Функція перевірки URL на офіційність
+    def is_url_official(url, domains_list):
+        if not url or not domains_list: return False
+        try:
+            url_lower = str(url).lower()
+            # Перевіряємо, чи входить будь-який офіційний домен в цей URL
+            for domain in domains_list:
+                # Очищаємо домен від http/www для чистого порівняння
+                clean_d = domain.lower().replace('https://', '').replace('http://', '').replace('www.', '').strip()
+                if clean_d in url_lower:
+                    return True
+            return False
+        except:
+            return False
 
     # --- UI Mapping ---
     PROVIDER_MAPPING = {
@@ -1717,44 +1716,43 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             if k in p_str: return v
         return str(p).capitalize()
 
-    # --- 1. Grouping Data by Provider ---
+    # --- Group Data by Provider ---
     data_by_provider = {}
     
-    # Нормалізація назви проекту для пошуку (Smart Target)
+    # Нормалізація назви проекту для Smart Target
     target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
 
+    # Попередня обробка даних (розмітка is_real_target та is_official_dynamic)
     for scan in scans_data:
         prov_ui = get_ui_provider(scan.get('provider', 'Other'))
         if prov_ui not in data_by_provider:
             data_by_provider[prov_ui] = []
         
-        # --- PRE-PROCESS NESTED DATA FOR EACH SCAN ---
-        # 1. Mentions Logic
+        # 1. Mentions Logic (Smart Target)
         mentions = scan.get('brand_mentions', [])
         processed_mentions = []
         for m in mentions:
             b_name = str(m.get('brand_name', '')).lower().strip()
-            is_db_flag = str(m.get('is_my_brand', '')).lower() in ['true', '1', 't', 'yes']
-            # Smart Target: Або галочка в базі, або назва схожа
-            is_target = is_db_flag or (target_norm in b_name if target_norm else False)
+            # Check DB flag
+            is_db_flag = str(m.get('is_my_brand', '')).lower() in ['true', '1', 't', 'yes', 'on']
+            # Check Text match
+            is_text_match = (target_norm in b_name) if target_norm else False
             
-            m['is_real_target'] = is_target
+            m['is_real_target'] = is_db_flag or is_text_match
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             processed_mentions.append(m)
-        
         scan['brand_mentions'] = processed_mentions
 
-        # 2. Sources Logic (WHITELIST CHECK)
+        # 2. Sources Logic (Whitelist Check)
         sources = scan.get('extracted_sources', [])
         processed_sources = []
         for s in sources:
             url = s.get('url', '')
-            # Перевіряємо через whitelist
-            is_off = is_official_link(url, whitelist_domains)
-            s['is_official_calc'] = is_off # Нове поле
+            # Динамічна перевірка через whitelist
+            is_off = is_url_official(url, whitelist_domains)
+            s['is_official_dynamic'] = is_off
             processed_sources.append(s)
-            
         scan['extracted_sources'] = processed_sources
         
         data_by_provider[prov_ui].append(scan)
@@ -1818,6 +1816,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
+    # JS
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1884,14 +1883,14 @@ __JS_BLOCK__
     js_charts_code = ""
 
     # Text Literals
-    tt_sov = "Частка видимості вашого бренду у відповідях ШІ."
+    tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
     tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси."
-    tt_sent = "Тональність згадок."
-    tt_pos = "Середня позиція бренду."
-    tt_brand_cov = "Присутність у відповідях."
-    tt_domain_cov = "Наявність посилань на домен."
+    tt_sent = "Тональність, у якій ШІ описує бренд."
+    tt_pos = "Середня позиція вашого бренду у відповідях ШІ"
+    tt_brand_cov = "Відсоток запитів, у яких бренд був згаданий хоча б один раз."
+    tt_domain_cov = "Відсоток запитів, у яких ШІ надав клікабельне посилання на ваш домен."
 
-    # --- MAIN TAB LOOP ---
+    # --- MAIN LOOP PER PROVIDER ---
     for i, prov_ui in enumerate(providers_ui):
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
@@ -1899,7 +1898,7 @@ __JS_BLOCK__
         provider_scans = data_by_provider[prov_ui]
         
         # --- GLOBAL AGGREGATION FOR TOP CARDS ---
-        # Збираємо всі згадки і джерела для цього провайдера
+        # 1. Mentions Aggregation
         all_mentions = []
         all_sources = []
         for s in provider_scans:
@@ -1913,51 +1912,50 @@ __JS_BLOCK__
         total_queries = len(provider_scans)
         
         # SOV Global
+        sov_pct = 0
         if not df_m_all.empty:
             total_market = df_m_all['mention_count'].sum()
             my_total = df_m_all[df_m_all['is_real_target'] == True]['mention_count'].sum()
-            sov_pct = (my_total / total_market * 100) if total_market > 0 else 0
-        else:
-            sov_pct = 0
+            if total_market > 0:
+                sov_pct = (my_total / total_market * 100)
             
         # Official Links Global
+        off_pct = 0
         if not df_s_all.empty:
             total_lnk = len(df_s_all)
-            off_lnk = len(df_s_all[df_s_all['is_official_calc'] == True])
-            off_pct = (off_lnk / total_lnk * 100) if total_lnk > 0 else 0
-        else:
-            off_pct = 0
+            # Тут використовуємо динамічну перевірку, яку ми зробили вище
+            off_lnk = len(df_s_all[df_s_all['is_official_dynamic'] == True])
+            if total_lnk > 0:
+                off_pct = (off_lnk / total_lnk * 100)
             
         # Brand Coverage
         brand_cov = 0
         if not df_m_all.empty:
-            # Треба порахувати у скількох скан-об'єктах ми є
-            # Оскільки df_m_all це збірний список, ми можемо мати дублі скан_ід, але тут важливо не це.
-            # Нам важливо, у скількох унікальних сканах був мій бренд
-            # Але у нас тут немає ID скану в цьому списку (бо ми просто об'єднали списки mentions).
-            # Тому порахуємо циклом:
+            # Треба порахувати у скількох скан-об'єктах ми є. У списку df_m_all немає прив'язки до скан_ід (вона втратилася при extend)
+            # Тому рахуємо ітеративно
             count_scans_present = 0
             for s in provider_scans:
-                # чи є в цьому скані "мій бренд"?
                 found = any(m['is_real_target'] and m['mention_count'] > 0 for m in s['brand_mentions'])
                 if found: count_scans_present += 1
-            brand_cov = (count_scans_present / total_queries * 100) if total_queries > 0 else 0
+            if total_queries > 0:
+                brand_cov = (count_scans_present / total_queries * 100)
 
-        # Domain Mentions Coverage (Global)
+        # Domain Coverage (Links)
         domain_cov = 0
         count_scans_link = 0
         for s in provider_scans:
-             found_link = any(src['is_official_calc'] for src in s['extracted_sources'])
+             found_link = any(src['is_official_dynamic'] for src in s['extracted_sources'])
              if found_link: count_scans_link += 1
-        domain_cov = (count_scans_link / total_queries * 100) if total_queries > 0 else 0
+        if total_queries > 0:
+             domain_cov = (count_scans_link / total_queries * 100)
 
         # Avg Position
         avg_pos = 0
         if not df_m_all.empty:
             my_ranks = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
-
-        # Sentiment %
+        
+        # Sentiment Breakdown
         sent_html = "<span style='font-size:16px; color:#999'>Немає даних</span>"
         if not df_m_all.empty:
             valid_sent = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['sentiment_score'] != 'Не згадано')]
@@ -1993,9 +1991,16 @@ __JS_BLOCK__
         for idx, scan_row in enumerate(provider_scans):
             q_text = scan_row.get('keyword_text', 'Запит')
             
-            # --- Local Data (Already Prepared) ---
+            # --- Local Data ---
             loc_mentions = pd.DataFrame(scan_row['brand_mentions'])
             loc_sources = pd.DataFrame(scan_row['extracted_sources'])
+            
+            # --- LOCAL MATH ---
+            l_tot_mentions = loc_mentions['mention_count'].sum() if not loc_mentions.empty else 0
+            
+            # Smart Target already applied above
+            my_row = loc_mentions[loc_mentions['is_real_target'] == True] if not loc_mentions.empty else pd.DataFrame()
+            l_my_count = my_row['mention_count'].sum() if not my_row.empty else 0
             
             l_sov = 0.0
             l_count = 0
@@ -2003,28 +2008,21 @@ __JS_BLOCK__
             l_pos = "0"
             l_sent_color = "#333"
             
-            # 1. SOV & Count
-            if not loc_mentions.empty:
-                l_tot = loc_mentions['mention_count'].sum()
-                my_row = loc_mentions[loc_mentions['is_real_target'] == True]
-                l_my = my_row['mention_count'].sum()
+            if not my_row.empty and l_my_count > 0:
+                if l_tot_mentions > 0: l_sov = (l_my_count / l_tot_mentions * 100)
+                l_count = safe_int(l_my_count)
                 
-                if l_tot > 0: l_sov = (l_my / l_tot * 100)
-                l_count = safe_int(l_my)
+                main_brand_row = my_row.sort_values('mention_count', ascending=False).iloc[0]
+                if 'sentiment_score' in main_brand_row: l_sent = main_brand_row['sentiment_score']
                 
-                if not my_row.empty and l_my > 0:
-                    # Sentiment & Rank only if we exist
-                    best_row = my_row.sort_values('mention_count', ascending=False).iloc[0]
-                    l_sent = best_row.get('sentiment_score', 'Не знайдено')
-                    
-                    vr = my_row[my_row['rank_position'] > 0]['rank_position']
-                    val = vr.min() if not vr.empty else None
-                    if pd.notnull(val) and val > 0: l_pos = f"#{safe_int(val)}"
+                valid_ranks = my_row[my_row['rank_position'] > 0]['rank_position']
+                val = valid_ranks.min() if not valid_ranks.empty else None
+                if pd.notnull(val) and val > 0: l_pos = f"#{safe_int(val)}"
             
             if l_sent == "Позитивний": l_sent_color = "#00C896"
             elif l_sent == "Негативний": l_sent_color = "#FF4B4B"
 
-            # 2. Tables HTML
+            # Tables
             details_html = ""
             has_brands = not loc_mentions.empty
             has_sources = not loc_sources.empty
@@ -2034,18 +2032,17 @@ __JS_BLOCK__
                 
                 if has_brands:
                     rows_b = ""
-                    # Sort logic
                     loc_mentions['target_int'] = loc_mentions['is_real_target'].astype(int)
                     sort_b = loc_mentions.sort_values(['target_int', 'mention_count'], ascending=[False, False])
                     
-                    found_brand = False
+                    found_any = False
                     for _, b in sort_b.iterrows():
                         if b['mention_count'] > 0:
-                            found_brand = True
+                            found_any = True
                             bg = "style='background:#e6fffa; font-weight:bold;'" if b['is_real_target'] else ""
-                            rows_b += f"<tr {bg}><td>{b.get('brand_name','?')}</td><td>{safe_int(b['mention_count'])}</td><td>{b.get('sentiment_score','-')}</td><td>{safe_int(b.get('rank_position',0))}</td></tr>"
+                            rows_b += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{b.get('sentiment_score','-')}</td><td>{safe_int(b.get('rank_position',0))}</td></tr>"
                     
-                    if found_brand:
+                    if found_any:
                         details_html += f'<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{rows_b}</tbody></table></div></div>'
                     else:
                         details_html += f'<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div style="font-size:12px; color:#999; padding:10px;">Брендів не знайдено</div></div>'
@@ -2053,7 +2050,7 @@ __JS_BLOCK__
                 if has_sources:
                     rows_s = ""
                     for _, s in loc_sources.iterrows():
-                        is_of = s.get('is_official_calc', False)
+                        is_of = s.get('is_official_dynamic', False)
                         icon = "✅" if is_of else "🔗"
                         url = str(s.get('url', ''))
                         rows_s += f"<tr><td style='word-break:break-all;'><a href='{url}' target='_blank' style='color:#00d18f; text-decoration:none;'>{url}</a></td><td>{icon}</td></tr>"
@@ -2109,9 +2106,9 @@ __JS_BLOCK__
 def show_reports_page():
     """
     Сторінка Звітів (Фінальна Версія).
-    1. Завантажує Whitelist.
-    2. Використовує Relational Query для отримання сканувань РАЗОМ із згадками.
-    3. Передає готову структуру в генератор.
+    1. Завантажує official_assets (whitelist).
+    2. Завантажує скани РАЗОМ із даними через join.
+    3. Передає в генератор.
     """
     import streamlit as st
     import pandas as pd
@@ -2137,6 +2134,7 @@ def show_reports_page():
     
     tabs = st.tabs(["📥 Замовити звіт", "📂 Готові звіти"] + (["⚙️ Адмінка"] if is_admin else []))
 
+    # --- ЗАМОВЛЕННЯ ---
     with tabs[0]:
         st.markdown("### Створення нового звіту")
         st.info("Звіт формується на основі останніх актуальних сканувань.")
@@ -2146,19 +2144,21 @@ def show_reports_page():
         if st.button("🚀 Згенерувати звіт", type="primary"):
             with st.spinner("Аналіз даних та генерація HTML..."):
                 try:
-                    # 1. Fetch Keywords Map
+                    # 1. Keywords Map
                     kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
                     kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
+                    
                     if not kw_map:
-                        st.error("Немає запитів.")
+                        st.error("Немає запитів у проекті.")
                         st.stop()
 
-                    # 2. Fetch Whitelist
-                    wl_resp = supabase.table("whitelist").select("domain").eq("project_id", proj["id"]).execute()
-                    whitelist_domains = [w['domain'] for w in wl_resp.data] if wl_resp.data else []
+                    # 2. Whitelist (official_assets)
+                    # Назва таблиці виправлена на 'official_assets'
+                    wl_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", proj["id"]).execute()
+                    whitelist_domains = [w['domain_or_url'] for w in wl_resp.data] if wl_resp.data else []
 
-                    # 3. Fetch Scans with Relations
-                    # Це найважливіший крок: беремо все одним пакетом
+                    # 3. Scans + Relations
+                    # Отримуємо сканування разом із вкладеними таблицями
                     scans_resp = supabase.table("scan_results")\
                         .select("*, brand_mentions(*), extracted_sources(*)")\
                         .eq("project_id", proj["id"])\
@@ -2168,31 +2168,36 @@ def show_reports_page():
                     
                     raw_scans = scans_resp.data if scans_resp.data else []
                     if not raw_scans:
-                        st.error("Історія пуста.")
+                        st.error("Історія сканувань пуста.")
                         st.stop()
 
-                    # 4. Prepare Data (Snapshot logic)
+                    # 4. Filter Latest (Snapshot)
+                    # Додаємо текст запиту
                     processed_scans = []
                     for s in raw_scans:
-                        # Додаємо текст запиту
                         s['keyword_text'] = kw_map.get(s['keyword_id'], "Unknown Query")
                         processed_scans.append(s)
                     
-                    # Convert to DF to filter latest per provider/keyword
+                    # Convert to DF for convenient sorting/filtering
                     df_raw = pd.DataFrame(processed_scans)
                     if not df_raw.empty:
                         df_raw = df_raw.sort_values('created_at', ascending=False)
+                        # Залишаємо тільки останнє сканування для пари (keyword, provider)
                         df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first')
                         
-                        # Convert back to list of dicts for the generator
+                        # Convert back to list of dicts (JSON-like structure)
                         final_scans_data = df_latest.to_dict('records')
                     else:
                         final_scans_data = []
 
-                    # 5. Generate
-                    html_code = generate_html_report_content(proj.get('brand_name'), final_scans_data, whitelist_domains)
+                    # 5. Generate Report
+                    html_code = generate_html_report_content(
+                        proj.get('brand_name'), 
+                        final_scans_data, 
+                        whitelist_domains
+                    )
 
-                    # 6. Save
+                    # 6. Save Report
                     supabase.table("reports").insert({
                         "project_id": proj["id"],
                         "report_name": rep_name,
@@ -2203,22 +2208,24 @@ def show_reports_page():
                     st.success("✅ Звіт успішно сформовано!")
                     
                 except Exception as e:
-                    st.error(f"Помилка: {e}")
-                    import traceback
-                    st.text(traceback.format_exc())
+                    st.error(f"Помилка при генерації: {e}")
+                    # Для налагодження можна вивести деталі в консоль, якщо є доступ
+                    print(e)
 
+    # --- АРХІВ ---
     with tabs[1]:
         st.markdown("### 📂 Архів")
         try:
             pub_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "published").order("created_at", desc=True).execute()
             reports = pub_resp.data if pub_resp.data else []
-            if not reports: st.info("Немає звітів.")
+            if not reports: st.info("Немає опублікованих звітів.")
             else:
                 for r in reports:
                     with st.expander(f"📄 {r['report_name']}"):
                         st.download_button("📥 Завантажити HTML", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
         except Exception as e: st.error(f"Помилка: {e}")
 
+    # --- АДМІНКА ---
     if is_admin:
         with tabs[2]:
             st.markdown("### ⚙️ Модерація")
