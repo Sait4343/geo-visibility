@@ -1658,7 +1658,7 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    Логіка розрахунку метрик (Smart Merge) повністю синхронізована з Live Dashboard.
+    АЛГОРИТМ: Повна копія логіки з show_keyword_details (Live Dashboard).
     """
     import pandas as pd
     from datetime import datetime
@@ -1668,40 +1668,38 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     current_date = datetime.now().strftime('%d.%m.%Y')
     
     # ==========================================
-    # 0. ПІДГОТОВКА ДАНИХ (SYNC WITH DASHBOARD LOGIC)
+    # 1. ПІДГОТОВКА ДАНИХ (SMART TARGET LOGIC)
     # ==========================================
     
-    # 1. Приводимо ID до чистого рядка (щоб уникнути помилок з'єднання)
+    # Приводимо ID до рядків
     df_scans['id'] = df_scans['id'].astype(str).str.strip()
     
     if not df_mentions.empty:
         df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str).str.strip()
         
-        # --- ЛОГІКА "SMART TARGET" (Як на дашборді) ---
-        # 1. Очищаємо назву бренду в базі
+        # --- ЛОГІКА З DASHBOARD ---
+        # 1. Нормалізуємо назву бренду в базі
         df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
         
-        # 2. Очищаємо назву вашого проекту (беремо перше слово, наприклад "Be-it" з "Be-it Agency")
+        # 2. Беремо перше слово з назви проекту для пошуку (наприклад "Be-it" з "Be-it Agency")
         target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
         
-        # 3. Шукаємо співпадіння
+        # 3. Шукаємо текстове співпадіння
         if target_norm:
-            # regex=False щоб спецсимволи не ламали пошук
             mask_match = df_mentions['brand_clean'].str.contains(target_norm, na=False, regex=False)
         else:
             mask_match = False
             
-        # 4. Перевіряємо галочку is_my_brand (враховуємо різні формати true/1/yes)
+        # 4. Перевіряємо галочку в базі
         is_my_col = df_mentions['is_my_brand'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
         
-        # 5. Фінальний прапорець: АБО співпала назва, АБО стоїть галочка
+        # 5. ФІНАЛЬНИЙ ПРАПОРЕЦЬ (Або текст співпав, Або галочка стоїть)
         df_mentions['is_real_target'] = mask_match | is_my_col
         
         # Числа
         df_mentions['mention_count'] = pd.to_numeric(df_mentions['mention_count'], errors='coerce').fillna(0)
         df_mentions['rank_position'] = pd.to_numeric(df_mentions['rank_position'], errors='coerce').fillna(0)
     else:
-        # Пустий DF з потрібними колонками
         df_mentions = pd.DataFrame(columns=['scan_result_id', 'mention_count', 'rank_position', 'is_my_brand', 'sentiment_score', 'brand_name', 'is_real_target'])
 
     if not df_sources.empty:
@@ -1721,7 +1719,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
         txt = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', txt)
         txt = txt.replace('* ', '<br>• ')
         txt = txt.replace('\n', '<br>')
-        # Підсвітка бренду
+        # Підсвітка бренду у тексті
         if project_name:
              txt = re.sub(f"(?i){re.escape(project_name)}", f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{project_name}</span>", txt)
         return txt
@@ -1869,6 +1867,7 @@ __JS_BLOCK__
     tabs_content_html = ""
     js_charts_code = ""
 
+    # TOOLTIPS
     tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
     tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси."
     tt_sent = "Тональність, у якій ШІ описує бренд."
@@ -1880,26 +1879,31 @@ __JS_BLOCK__
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
-        # 1. Filter Data
+        # 1. Фільтруємо сканування для поточної моделі
         df_p = df_scans[df_scans['provider_ui'] == prov_ui].copy()
         if df_p.empty: continue
         
-        scan_ids_in_prov = df_p['id'].tolist()
+        scan_ids_in_prov = [str(x) for x in df_p['id'].tolist()]
         
-        # 2. Filter Details using String IDs
+        # 2. Фільтруємо деталі
         mentions_prov = pd.DataFrame()
         if not df_mentions.empty:
-            mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
+            temp_m = df_mentions.copy()
+            temp_m['scan_result_id'] = temp_m['scan_result_id'].astype(str)
+            mentions_prov = temp_m[temp_m['scan_result_id'].isin(scan_ids_in_prov)]
             
         sources_prov = pd.DataFrame()
         if not df_sources.empty:
-            sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
+            temp_s = df_sources.copy()
+            temp_s['scan_result_id'] = temp_s['scan_result_id'].astype(str)
+            sources_prov = temp_s[temp_s['scan_result_id'].isin(scan_ids_in_prov)]
         
         total_queries = len(df_p)
         
-        # --- GLOBAL MATH (Використовуємо is_real_target) ---
+        # --- GLOBAL MATH (ВИКОРИСТОВУЄМО is_real_target) ---
         
         total_market = mentions_prov['mention_count'].sum() if not mentions_prov.empty else 0
+        # ВИПРАВЛЕНО: Використовуємо is_real_target замість is_my_brand
         my_total = mentions_prov[mentions_prov['is_real_target'] == True]['mention_count'].sum() if not mentions_prov.empty else 0
         sov_pct = (my_total / total_market * 100) if total_market > 0 else 0
         
@@ -1909,6 +1913,7 @@ __JS_BLOCK__
         
         brand_cov = 0
         if not mentions_prov.empty:
+            # ВИПРАВЛЕНО: is_real_target
             scans_brand = mentions_prov[(mentions_prov['is_real_target'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
             brand_cov = (scans_brand / total_queries * 100) if total_queries > 0 else 0
         
@@ -1919,11 +1924,13 @@ __JS_BLOCK__
         
         avg_pos = 0
         if not mentions_prov.empty:
+            # ВИПРАВЛЕНО: is_real_target
             my_ranks = mentions_prov[(mentions_prov['is_real_target'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
         sent_label = "Нейтральна"
         if not mentions_prov.empty:
+            # ВИПРАВЛЕНО: is_real_target
             valid_sent = mentions_prov[(mentions_prov['is_real_target'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
             if not valid_sent.empty: sent_label = valid_sent['sentiment_score'].mode()[0]
 
@@ -1944,7 +1951,7 @@ __JS_BLOCK__
             <div class="accordion-wrapper">
         '''
 
-        # --- QUERY LOOP (Accordion) ---
+        # --- LOOPS (Accordion) ---
         for idx, row in df_p.reset_index(drop=True).iterrows():
             q_text = row.get('keyword', 'Запит')
             scan_id = str(row['id']).strip()
@@ -1958,31 +1965,34 @@ __JS_BLOCK__
             if not sources_prov.empty:
                 loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
-            # 2. LOCAL MATH (Використовуємо is_real_target)
+            # 2. LOCAL MATH (ВИПРАВЛЕНО: ВИКОРИСТОВУЄМО is_real_target)
             l_tot_mentions = loc_mentions['mention_count'].sum()
+            
+            # Шукаємо "мій бренд" через розширену логіку
             my_row = loc_mentions[loc_mentions['is_real_target'] == True]
             l_my_count = my_row['mention_count'].sum()
             
-            # SOV
             l_sov = (l_my_count / l_tot_mentions * 100) if l_tot_mentions > 0 else 0.0
             l_count = safe_int(l_my_count)
-            l_sent = "Не знайдено" # За замовчуванням
-            l_pos = "0" # За замовчуванням 0
+            l_sent = "Не знайдено" 
+            l_pos = "0"
             l_sent_color = "#333"
             
             if not my_row.empty:
-                # Тональність
-                if 'sentiment_score' in my_row.columns:
-                    l_sent = my_row['sentiment_score'].iloc[0]
-                # Позиція
-                val = my_row[my_row['rank_position'] > 0]['rank_position'].min()
+                # Беремо запис з найбільшою кількістю згадок
+                main_brand_row = my_row.sort_values('mention_count', ascending=False).iloc[0]
+                if 'sentiment_score' in main_brand_row:
+                    l_sent = main_brand_row['sentiment_score']
+                
+                # Найкраща позиція
+                valid_ranks = my_row[my_row['rank_position'] > 0]['rank_position']
+                val = valid_ranks.min() if not valid_ranks.empty else None
                 if pd.notnull(val) and val > 0: l_pos = f"#{safe_int(val)}"
             
-            # Кольори
             if l_sent == "Позитивний": l_sent_color = "#00C896"
             elif l_sent == "Негативний": l_sent_color = "#FF4B4B"
 
-            # 3. Tables HTML (Приховуємо якщо пусті)
+            # 3. Tables HTML
             details_html = ""
             has_brands = not loc_mentions.empty
             has_sources = not loc_sources.empty
@@ -1992,7 +2002,7 @@ __JS_BLOCK__
                 
                 if has_brands:
                     rows_b = ""
-                    # Сортуємо: Знайдені цільові - зверху
+                    # Сортуємо: Цільові бренди зверху
                     loc_mentions['target_int'] = loc_mentions['is_real_target'].astype(int)
                     sort_b = loc_mentions.sort_values(['target_int', 'mention_count'], ascending=[False, False])
                     
@@ -2055,7 +2065,6 @@ __JS_BLOCK__
         .replace("__JS_BLOCK__", final_js)
 
     return final_html
-
     
 
 def show_reports_page():
