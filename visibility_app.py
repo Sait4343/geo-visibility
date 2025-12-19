@@ -1658,8 +1658,8 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    Логіка метрик адаптована під JS-алгоритм.
-    Детальні дані (бренди/джерела) відображаються ПІСЛЯ відповіді LLM.
+    - Дизайн: Вкладки, KPI (2 ряди), Акордеон з картками метрик.
+    - Дані: Реальні відповіді, бренди та джерела з БД.
     """
     import pandas as pd
     from datetime import datetime
@@ -1667,10 +1667,10 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
 
     current_date = datetime.now().strftime('%d.%m.%Y')
     
-    # 0. Helper для безпечних чисел
+    # 0. Helper для безпечного перетворення в int
     def safe_int(val):
         try:
-            if pd.isna(val) or val == "": return 0
+            if pd.isna(val) or val == "" or str(val).lower() == 'nan': return 0
             return int(float(val))
         except: return 0
 
@@ -1687,8 +1687,9 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
         p_str = str(p).lower()
         for k, v in PROVIDER_MAPPING.items():
             if k in p_str: return v
-        return p
+        return str(p).capitalize()
 
+    # Створюємо колонку для групування
     df_scans['provider_ui'] = df_scans['provider'].apply(get_pretty_name)
     providers_ui = sorted(df_scans['provider_ui'].unique().tolist())
 
@@ -1718,9 +1719,9 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     /* KPI GLOBAL */
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
     .kpi-box { 
-        flex: 1 1 300px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; 
+        flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; 
         text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-        position: relative; min-height: 200px; 
+        position: relative; min-height: 200px; cursor: help;
     }
     .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; }
     .kpi-big-num { font-size: 28px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
@@ -1734,6 +1735,11 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .kpi-tooltip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #2c3e50 transparent transparent transparent; }
     .kpi-box:hover .kpi-tooltip { visibility: visible; opacity: 1; }
 
+    /* LEGEND */
+    .custom-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 10px; font-size: 11px; font-weight: bold; color: #555; }
+    .legend-item { display: flex; align-items: center; }
+    .legend-dot { width: 12px; height: 8px; margin-right: 5px; border-radius: 2px; display: inline-block; }
+
     h3 { font-size: 20px; color: #2c3e50; margin-top: 40px; margin-bottom: 20px; padding-left: 15px; border-left: 5px solid #00d18f; font-weight: 800; }
 
     /* ACCORDION */
@@ -1746,22 +1752,25 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     
     /* ITEM METRICS (CARDS) */
     .cards-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; border-bottom: 1px solid #eee; }
-    .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; }
-    .mc-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px; }
+    .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.03); }
+    .mc-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px; display:flex; align-items:center; justify-content:center; gap:5px; }
     .mc-val { font-size: 20px; font-weight: 800; color: #333; }
+    .info-icon { display:inline-block; width:14px; height:14px; background:#3b82f6; color:white; border-radius:50%; font-size:10px; line-height:14px; text-align:center; cursor:help; }
 
     /* RESPONSE & TABLES */
     .item-response { background-color: #f9fafb; color: #1d192b; padding: 25px; font-size: 14px; text-align: left; line-height: 1.6; }
-    .response-label { font-weight: bold; color: #5e35b1; margin-bottom: 10px; display: block; font-size: 16px; }
+    .response-label { font-weight: bold; color: #5e35b1; margin-bottom: 10px; display: block; font-size: 16px; border-bottom: 1px dashed #5e35b1; padding-bottom: 5px; width: fit-content; }
 
     .detail-charts-wrapper { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; }
     .detail-chart-block { flex: 1 1 400px; min-width: 0; }
+    .detail-title { font-weight: bold; font-size: 14px; margin-bottom: 10px; color: #2c3e50; border-left: 3px solid #00d18f; padding-left: 10px; }
     
     table.inner-table { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #eee; }
     table.inner-table th { background: #f1f3f5; padding: 8px; text-align: left; color: #555; font-weight: 600; border-bottom: 1px solid #ddd; }
     table.inner-table td { padding: 8px; border-bottom: 1px solid #eee; color: #333; }
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
+    
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
@@ -1878,7 +1887,7 @@ __JS_BLOCK__
     tabs_content_html = ""
     js_charts_code = ""
 
-    # TOOLTIPS (З вашого запиту)
+    # TOOLTIPS
     tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
     tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси, серед усіх посилань про ваш бренд."
     tt_sent = "Тональність, у якій ШІ описує бренд (Позитивна, Нейтральна або Негативна)."
@@ -1898,16 +1907,17 @@ __JS_BLOCK__
         mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
         sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
         
-        # --- GLOBAL MATH (За JS логікою) ---
         total_queries = len(df_p)
         
-        # 1. SOV
+        # --- GLOBAL MATH ---
         mentions_prov['mention_count'] = mentions_prov['mention_count'].fillna(0)
+        
+        # 1. SOV
         total_market_mentions = mentions_prov['mention_count'].sum()
         my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
         sov_pct = (my_total_mentions / total_market_mentions * 100) if total_market_mentions > 0 else 0
         
-        # 2. Official Links Share
+        # 2. Official Links
         total_links = len(sources_prov)
         official_links = len(sources_prov[sources_prov['is_official'] == True])
         off_pct = (official_links / total_links * 100) if total_links > 0 else 0
@@ -1916,32 +1926,34 @@ __JS_BLOCK__
         scans_with_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
         brand_cov_pct = (scans_with_brand / total_queries * 100) if total_queries > 0 else 0
         
-        # 4. Domain Coverage (% запитів з офіційним лінком)
+        # 4. Domain Coverage
         scans_with_off_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
         domain_cov_pct = (scans_with_off_link / total_queries * 100) if total_queries > 0 else 0
         
-        # 5. Avg Position
+        # 5. Position
         my_ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
         avg_pos = my_ranks.mean() if not my_ranks.empty else 0
         
         # 6. Sentiment
-        # База: тільки ті, де сентимент != "Не згадано"
-        valid_sent_rows = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
         sent_label = "Нейтральна"
-        if not valid_sent_rows.empty:
-            mode = valid_sent_rows['sentiment_score'].mode()
+        valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
+        if not valid_sent.empty:
+            mode = valid_sent['sentiment_score'].mode()
             if not mode.empty: sent_label = mode[0]
 
-        # Tab Start
+        # --- Tab HTML ---
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
-            
             <div class="kpi-row">
                 <div class="kpi-box">
                     <div class="kpi-tooltip">{tt_sov}</div>
                     <div class="kpi-title">Частка голосу (SOV)</div>
                     <div class="kpi-big-num">{sov_pct:.2f}%</div>
                     <div class="chart-container"><canvas id="chartSOV_{prov_id}"></canvas></div>
+                    <div class="custom-legend">
+                        <div class="legend-item"><span class="legend-dot" style="background:#00d18f;"></span>{project_name}</div>
+                        <div class="legend-item"><span class="legend-dot" style="background:#ffcdd2;"></span>Інші</div>
+                    </div>
                 </div>
                 <div class="kpi-box">
                     <div class="kpi-tooltip">{tt_off}</div>
@@ -2033,7 +2045,7 @@ __JS_BLOCK__
 
             tabs_content_html += f'''
             <div class="item-box">
-                <div class="item-header accordion-trigger" onclick="toggleAcc(this)">
+                <div class="accordion-trigger" onclick="toggleAcc(this)">
                     <div class="item-number-wrapper"><span class="item-number">{idx+1}</span></div>
                     <div class="item-query">{q_text}</div>
                     <div class="accordion-arrow">▼</div>
@@ -2042,19 +2054,19 @@ __JS_BLOCK__
                     
                     <div class="cards-row">
                         <div class="metric-card">
-                            <div class="mc-label">ЧАСТКА ГОЛОСУ (SOV)</div>
+                            <div class="mc-label">SOV <span class="info-icon" title="Share of Voice">%</span></div>
                             <div class="mc-val">{l_sov:.1f}%</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ЗГАДОК БРЕНДУ</div>
+                            <div class="mc-label">ЗГАДОК <span class="info-icon" title="Кількість згадок">#</span></div>
                             <div class="mc-val">{l_count}</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ТОНАЛЬНІСТЬ</div>
+                            <div class="mc-label">ТОНАЛЬНІСТЬ <span class="info-icon" title="Настрій">☺</span></div>
                             <div class="mc-val" style="font-size:18px;">{l_sent}</div>
                         </div>
                         <div class="metric-card">
-                            <div class="mc-label">ПОЗИЦІЯ У СПИСКУ</div>
+                            <div class="mc-label">ПОЗИЦІЯ <span class="info-icon" title="Ранг у списку">1</span></div>
                             <div class="mc-val">{l_pos}</div>
                         </div>
                     </div>
@@ -2065,11 +2077,11 @@ __JS_BLOCK__
                         
                         <div class="detail-charts-wrapper">
                             <div class="detail-chart-block">
-                                <h4 style="color:#2c3e50;">Знайдені бренди</h4>
+                                <div class="detail-title">Знайдені бренди</div>
                                 <div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{brands_inner}</tbody></table></div>
                             </div>
                             <div class="detail-chart-block">
-                                <h4 style="color:#2c3e50;">Цитовані джерела</h4>
+                                <div class="detail-title">Цитовані джерела</div>
                                 <div class="table-responsive"><table class="inner-table"><thead><tr><th>URL</th><th>Тип</th></tr></thead><tbody>{sources_inner}</tbody></table></div>
                             </div>
                         </div>
@@ -2085,23 +2097,16 @@ __JS_BLOCK__
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov_pct}, '#4DD0E1');\n"
-        
-        # Placeholder for sentiment
         js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
-        
-        # Position (reversed scale)
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
         js_charts_code += f"createDoughnut('chartPos_{prov_id}', {score_pos * 10}, '#00d18f');\n"
 
-    # 5. Final
     final_js = js_block.replace("__JS_CHARTS_PLACEHOLDER__", js_charts_code)
-    
-    final_html = html_template \
-        .replace("__CSS_PLACEHOLDER__", css_styles) \
-        .replace("__PROJECT_NAME__", str(project_name)) \
-        .replace("__DATE__", str(current_date)) \
-        .replace("__TABS_BUTTONS__", tabs_buttons_html) \
-        .replace("__TABS_CONTENT__", tabs_content_html) \
+    final_html = html_template.replace("__CSS_PLACEHOLDER__", css_styles)\
+        .replace("__PROJECT_NAME__", str(project_name))\
+        .replace("__DATE__", str(current_date))\
+        .replace("__TABS_BUTTONS__", tabs_buttons_html)\
+        .replace("__TABS_CONTENT__", tabs_content_html)\
         .replace("__JS_BLOCK__", final_js)
 
     return final_html
