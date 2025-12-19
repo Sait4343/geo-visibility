@@ -1658,10 +1658,8 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    ВИПРАВЛЕНО:
-    1. Глобальний 'Smart Target' перед циклами (виправляє нулі).
-    2. Тональність у шапці виводиться у % (Позитив/Нейтраль/Негатив).
-    3. Офіційні джерела рахуються коректно.
+    АЛГОРИТМ: 100% копія логіки з show_keyword_details (Live Dashboard).
+    Включає Smart Merge (пошук за назвою) та коректну фільтрацію.
     """
     import pandas as pd
     from datetime import datetime
@@ -1671,39 +1669,42 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     current_date = datetime.now().strftime('%d.%m.%Y')
     
     # ==========================================
-    # 1. ГЛОБАЛЬНА ПІДГОТОВКА ДАНИХ
+    # 1. ПІДГОТОВКА ДАНИХ (SMART TARGET LOGIC)
     # ==========================================
     
-    # Нормалізація ID
+    # Приводимо ID до рядків для надійності
     df_scans['id'] = df_scans['id'].astype(str).str.strip()
     
-    # --- MENTIONS ---
     if not df_mentions.empty:
         df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str).str.strip()
         
-        # 1. Текстовий пошук (Smart Target)
+        # --- ЛОГІКА З DASHBOARD (Smart Merge) ---
+        # 1. Нормалізуємо назву бренду в згадках
         df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
+        
+        # 2. Беремо перше слово з назви проекту для пошуку (наприклад "Be-it" з "Be-it Agency")
         target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
         
+        # 3. Шукаємо текстове співпадіння
         if target_norm:
-            # Шукаємо входження (наприклад, "be-it" в "be-it agency")
-            mask_text = df_mentions['brand_clean'].str.contains(target_norm, na=False, regex=False)
+            # regex=False, щоб спецсимволи не ламали пошук
+            mask_match = df_mentions['brand_clean'].str.contains(target_norm, na=False, regex=False)
         else:
-            mask_text = False
+            mask_match = False
             
-        # 2. Галочка з бази
-        mask_db = df_mentions['is_my_brand'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
+        # 4. Перевіряємо галочку is_my_brand (враховуємо різні формати з бази)
+        is_my_col = df_mentions['is_my_brand'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
         
-        # 3. Фінальний прапорець "Це мій бренд"
-        df_mentions['is_real_target'] = mask_text | mask_db
+        # 5. ФІНАЛЬНИЙ ПРАПОРЕЦЬ (Або текст співпав, Або галочка стоїть)
+        df_mentions['is_real_target'] = mask_match | is_my_col
         
         # Числа
         df_mentions['mention_count'] = pd.to_numeric(df_mentions['mention_count'], errors='coerce').fillna(0)
         df_mentions['rank_position'] = pd.to_numeric(df_mentions['rank_position'], errors='coerce').fillna(0)
     else:
+        # Пустий DF з потрібними колонками
         df_mentions = pd.DataFrame(columns=['scan_result_id', 'mention_count', 'rank_position', 'is_my_brand', 'sentiment_score', 'brand_name', 'is_real_target'])
 
-    # --- SOURCES ---
     if not df_sources.empty:
         df_sources['scan_result_id'] = df_sources['scan_result_id'].astype(str).str.strip()
         df_sources['is_official'] = df_sources['is_official'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
@@ -1718,15 +1719,17 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     def format_llm_text(text):
         if pd.isna(text) or not text: return "Текст відповіді відсутній."
         txt = str(text)
+        # Жирний текст
         txt = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', txt)
+        # Списки
         txt = txt.replace('* ', '<br>• ')
         txt = txt.replace('\n', '<br>')
+        # Підсвітка бренду (якщо є)
         if project_name:
-             # Підсвітка без regex спецсимволів
              txt = re.sub(f"(?i){re.escape(project_name)}", f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{project_name}</span>", txt)
         return txt
 
-    # UI Mapping
+    # Мапінг провайдерів
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
         "gpt-4o": "OpenAI GPT",
@@ -1885,7 +1888,7 @@ __JS_BLOCK__
         df_p = df_scans[df_scans['provider_ui'] == prov_ui].copy()
         if df_p.empty: continue
         
-        scan_ids_in_prov = df_p['id'].tolist()
+        scan_ids_in_prov = [str(x) for x in df_p['id'].tolist()]
         
         # 2. Деталі (фільтруємо з уже підготовлених глобальних DF)
         mentions_prov = pd.DataFrame()
@@ -1901,7 +1904,7 @@ __JS_BLOCK__
         # ---------------------------
         total_queries = len(df_p)
         
-        # SOV
+        # SOV (базується на is_real_target)
         total_market = mentions_prov['mention_count'].sum() if not mentions_prov.empty else 0
         my_total = mentions_prov[mentions_prov['is_real_target'] == True]['mention_count'].sum() if not mentions_prov.empty else 0
         sov_pct = (my_total / total_market * 100) if total_market > 0 else 0
@@ -1978,6 +1981,8 @@ __JS_BLOCK__
             
             # 2. LOCAL MATH (Only if my_brand found)
             l_tot_mentions = loc_mentions['mention_count'].sum() if not loc_mentions.empty else 0
+            
+            # Використовуємо глобально розрахований is_real_target
             my_row = loc_mentions[loc_mentions['is_real_target'] == True] if not loc_mentions.empty else pd.DataFrame()
             l_my_count = my_row['mention_count'].sum() if not my_row.empty else 0
             
@@ -2066,10 +2071,7 @@ __JS_BLOCK__
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov}, '#4DD0E1');\n"
-        # Sentiment Chart is not needed as donut if we show percentages, but kept for layout consistency
-        # Or remove it from CSS grid if needed. Keeping it simple.
-        # js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
-        
+        js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
         js_charts_code += f"createDoughnut('chartPos_{prov_id}', {score_pos * 10}, '#00d18f');\n"
 
