@@ -1657,11 +1657,9 @@ def show_faq_page():
 
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
-    Генерує HTML код звіту.
-    Фінальна версія:
-    - Бренди та джерела ПІСЛЯ відповіді.
-    - Заголовок 'Відповідь LLM'.
-    - Tooltips з вашого глосарію.
+    Генерує HTML-звіт.
+    Логіка метрик адаптована під JS-алгоритм.
+    Детальні дані (бренди/джерела) відображаються ПІСЛЯ відповіді LLM.
     """
     import pandas as pd
     from datetime import datetime
@@ -1669,7 +1667,14 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
 
     current_date = datetime.now().strftime('%d.%m.%Y')
     
-    # Мапінг для вкладок
+    # 0. Helper для безпечних чисел
+    def safe_int(val):
+        try:
+            if pd.isna(val) or val == "": return 0
+            return int(float(val))
+        except: return 0
+
+    # 1. Мапінг назв (Технічні -> Красиві) ТІЛЬКИ для вкладок
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
         "gpt-4o": "OpenAI GPT",
@@ -1677,7 +1682,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
         "gemini-1.5-pro": "Google Gemini",
         "gemini": "Google Gemini"
     }
-
+    
     def get_pretty_name(p):
         p_str = str(p).lower()
         for k, v in PROVIDER_MAPPING.items():
@@ -1687,14 +1692,9 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     df_scans['provider_ui'] = df_scans['provider'].apply(get_pretty_name)
     providers_ui = sorted(df_scans['provider_ui'].unique().tolist())
 
-    # Helper
-    def safe_int(val):
-        try:
-            if pd.isna(val) or val == "": return 0
-            return int(float(val))
-        except: return 0
-
-    # 1. CSS
+    # ---------------------------------------------------------
+    # 2. CSS СТИЛІ (Дизайн "Сервус")
+    # ---------------------------------------------------------
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
     * { box-sizing: border-box; }
@@ -1715,16 +1715,16 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* KPI BOXES */
+    /* KPI GLOBAL */
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
     .kpi-box { 
         flex: 1 1 300px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; 
         text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-        position: relative; min-height: 220px; 
+        position: relative; min-height: 200px; 
     }
     .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; }
     .kpi-big-num { font-size: 28px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
-    .chart-container { position: relative; width: 140px; height: 140px; margin: auto; }
+    .chart-container { position: relative; width: 130px; height: 130px; margin: auto; }
     
     /* TOOLTIP */
     .kpi-tooltip { 
@@ -1734,6 +1734,8 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .kpi-tooltip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px; border-width: 5px; border-style: solid; border-color: #2c3e50 transparent transparent transparent; }
     .kpi-box:hover .kpi-tooltip { visibility: visible; opacity: 1; }
 
+    h3 { font-size: 20px; color: #2c3e50; margin-top: 40px; margin-bottom: 20px; padding-left: 15px; border-left: 5px solid #00d18f; font-weight: 800; }
+
     /* ACCORDION */
     .item-box { border: 2px solid #4DD0E1; border-radius: 15px; margin-bottom: 20px; overflow: hidden; background: #fff; }
     .accordion-trigger { background: #fff; padding: 15px 20px; display: flex; align-items: center; gap: 15px; cursor: pointer; transition: 0.3s; justify-content: space-between; }
@@ -1742,26 +1744,28 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     .item-number-wrapper { width: 36px; height: 36px; background: #00d18f; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 14px; flex-shrink: 0; }
     .item-query { font-size: 15px; font-weight: bold; color: #333; flex-grow: 1; margin-left: 15px;}
     
-    /* ITEM METRICS */
-    .item-metrics-container { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; }
-    .metric-cell { flex: 1 1 calc(25% - 10px); border: 2px solid #00d18f; border-radius: 10px; padding: 15px 10px; text-align: center; }
-    .m-label { display: block; font-size: 10px; text-transform: uppercase; color: #888; margin-bottom: 5px; }
-    .m-val { display: block; font-size: 16px; font-weight: 800; color: #222; }
+    /* ITEM METRICS (CARDS) */
+    .cards-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 20px; background: #fff; border-bottom: 1px solid #eee; }
+    .metric-card { flex: 1 1 200px; background: #ffffff; border: 1px solid #e0e0e0; border-top: 4px solid #00d18f; border-radius: 8px; padding: 15px; text-align: center; }
+    .mc-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: #888; margin-bottom: 5px; }
+    .mc-val { font-size: 20px; font-weight: 800; color: #333; }
 
     /* RESPONSE & TABLES */
-    .item-response { background-color: #e8def8; color: #1d192b; padding: 20px; font-size: 14px; text-align: left; }
-    .detail-charts-wrapper { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 30px; border-top: 1px solid #ccc; padding-top: 20px; }
-    .detail-chart-block { flex: 1 1 300px; min-width: 0; }
+    .item-response { background-color: #f9fafb; color: #1d192b; padding: 25px; font-size: 14px; text-align: left; line-height: 1.6; }
+    .response-label { font-weight: bold; color: #5e35b1; margin-bottom: 10px; display: block; font-size: 16px; }
+
+    .detail-charts-wrapper { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; }
+    .detail-chart-block { flex: 1 1 400px; min-width: 0; }
     
-    table.inner-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    table.inner-table th { background: #eee; padding: 8px; text-align: left; color: #333; border-bottom: 1px solid #ddd; }
+    table.inner-table { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #eee; }
+    table.inner-table th { background: #f1f3f5; padding: 8px; text-align: left; color: #555; font-weight: 600; border-bottom: 1px solid #ddd; }
     table.inner-table td { padding: 8px; border-bottom: 1px solid #eee; color: #333; }
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
-    # 2. JS
+    # 3. JS
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1824,7 +1828,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     </script>
     '''
 
-    # 3. HTML HEADER
+    # 4. HTML HEADER
     html_template = '''<!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -1855,7 +1859,8 @@ __CSS_PLACEHOLDER__
     __TABS_CONTENT__
     
     <div class="cta-block">
-        <p>Згенеровано автоматично платформою VIRSHI.ai</p>
+        <p>Повний аудит Al Visibility включає моніторинг згадок вашого бренду в різних LLM.</p>
+        <p>Напишіть нам: <a href="mailto:hi@virshi.ai">hi@virshi.ai</a></p>
     </div>
 </div>
 __JS_BLOCK__
@@ -1863,7 +1868,7 @@ __JS_BLOCK__
 </html>
 '''
 
-    # 4. DATA LOGIC
+    # 5. ЛОГІКА НАПОВНЕННЯ
     tabs_buttons_html = ""
     for i, prov in enumerate(providers_ui):
         active_cls = "active" if i == 0 else ""
@@ -1873,11 +1878,19 @@ __JS_BLOCK__
     tabs_content_html = ""
     js_charts_code = ""
 
+    # TOOLTIPS (З вашого запиту)
+    tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
+    tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси, серед усіх посилань про ваш бренд."
+    tt_sent = "Тональність, у якій ШІ описує бренд (Позитивна, Нейтральна або Негативна)."
+    tt_pos = "Середня позиція вашого бренду у відповідях ШІ"
+    tt_brand_cov = "Відсоток запитів, у яких бренд був згаданий хоча б один раз."
+    tt_domain_cov = "Відсоток запитів, у яких ШІ надав клікабельне посилання саме на ваш домен."
+
     for i, prov_ui in enumerate(providers_ui):
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
-        # Filter
+        # Filter Data
         df_p = df_scans[df_scans['provider_ui'] == prov_ui].copy()
         if df_p.empty: continue
         
@@ -1885,54 +1898,59 @@ __JS_BLOCK__
         mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
         sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
         
-        total_scans = len(df_p)
+        # --- GLOBAL MATH (За JS логікою) ---
+        total_queries = len(df_p)
         
-        # Metrics
+        # 1. SOV
         mentions_prov['mention_count'] = mentions_prov['mention_count'].fillna(0)
+        total_market_mentions = mentions_prov['mention_count'].sum()
+        my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
+        sov_pct = (my_total_mentions / total_market_mentions * 100) if total_market_mentions > 0 else 0
         
-        # SOV
-        total_market = mentions_prov['mention_count'].sum()
-        my_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
-        sov_pct = (my_mentions / total_market * 100) if total_market > 0 else 0
+        # 2. Official Links Share
+        total_links = len(sources_prov)
+        official_links = len(sources_prov[sources_prov['is_official'] == True])
+        off_pct = (official_links / total_links * 100) if total_links > 0 else 0
         
-        # Official Links
-        total_lnk = len(sources_prov)
-        off_lnk = len(sources_prov[sources_prov['is_official'] == True])
-        off_pct = (off_lnk / total_lnk * 100) if total_lnk > 0 else 0
+        # 3. Brand Coverage
+        scans_with_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
+        brand_cov_pct = (scans_with_brand / total_queries * 100) if total_queries > 0 else 0
         
-        # Brand Coverage
-        scans_with_me = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
-        pres_pct = (scans_with_me / total_scans * 100) if total_scans > 0 else 0
+        # 4. Domain Coverage (% запитів з офіційним лінком)
+        scans_with_off_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
+        domain_cov_pct = (scans_with_off_link / total_queries * 100) if total_queries > 0 else 0
         
-        # Domain Coverage (спрощено: % сканів де є офіц лінки)
-        scans_with_off = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
-        domain_cov = (scans_with_off / total_scans * 100) if total_scans > 0 else 0
+        # 5. Avg Position
+        my_ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
+        avg_pos = my_ranks.mean() if not my_ranks.empty else 0
         
-        # Position
-        ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
-        avg_pos = ranks.mean() if not ranks.empty else 0
-        
-        # Sentiment
+        # 6. Sentiment
+        # База: тільки ті, де сентимент != "Не згадано"
+        valid_sent_rows = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
         sent_label = "Нейтральна"
+        if not valid_sent_rows.empty:
+            mode = valid_sent_rows['sentiment_score'].mode()
+            if not mode.empty: sent_label = mode[0]
 
-        # Tab HTML
+        # Tab Start
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
+            
             <div class="kpi-row">
                 <div class="kpi-box">
-                    <div class="kpi-tooltip">Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами.</div>
-                    <div class="kpi-title">Частка голосу</div>
+                    <div class="kpi-tooltip">{tt_sov}</div>
+                    <div class="kpi-title">Частка голосу (SOV)</div>
                     <div class="kpi-big-num">{sov_pct:.2f}%</div>
                     <div class="chart-container"><canvas id="chartSOV_{prov_id}"></canvas></div>
                 </div>
                 <div class="kpi-box">
-                    <div class="kpi-tooltip">Частка посилань, які ведуть на ваші офіційні ресурси, серед усіх посилань про ваш бренд.</div>
+                    <div class="kpi-tooltip">{tt_off}</div>
                     <div class="kpi-title">% Офіційних джерел</div>
                     <div class="kpi-big-num">{off_pct:.2f}%</div>
                     <div class="chart-container"><canvas id="chartOfficial_{prov_id}"></canvas></div>
                 </div>
                 <div class="kpi-box">
-                    <div class="kpi-tooltip">Тональність, у якій ШІ описує бренд (Позитивна, Нейтральна або Негативна).</div>
+                    <div class="kpi-tooltip">{tt_sent}</div>
                     <div class="kpi-title">Загальна тональність</div>
                     <div class="kpi-big-num" style="font-size:20px;">{sent_label}</div>
                     <div class="chart-container"><canvas id="chartSentiment_{prov_id}"></canvas></div>
@@ -1941,21 +1959,21 @@ __JS_BLOCK__
 
             <div class="kpi-row">
                 <div class="kpi-box">
-                    <div class="kpi-tooltip">Середня позиція вашого бренду у відповідях ШІ</div>
+                    <div class="kpi-tooltip">{tt_pos}</div>
                     <div class="kpi-title">Позиція бренду</div>
                     <div class="kpi-big-num">{avg_pos:.1f}</div>
                     <div class="chart-container"><canvas id="chartPos_{prov_id}"></canvas></div>
                 </div>
                 <div class="kpi-box">
-                    <div class="kpi-tooltip">Відсоток запитів, у яких бренд був згаданий хоча б один раз.</div>
+                    <div class="kpi-tooltip">{tt_brand_cov}</div>
                     <div class="kpi-title">Присутність бренду</div>
-                    <div class="kpi-big-num">{pres_pct:.1f}%</div>
+                    <div class="kpi-big-num">{brand_cov_pct:.1f}%</div>
                     <div class="chart-container"><canvas id="chartBrandCov_{prov_id}"></canvas></div>
                 </div>
                 <div class="kpi-box">
-                    <div class="kpi-tooltip">Відсоток запитів, у яких ШІ надав клікабельне посилання саме на ваш домен.</div>
+                    <div class="kpi-tooltip">{tt_domain_cov}</div>
                     <div class="kpi-title">Згадки домену</div>
-                    <div class="kpi-big-num">{domain_cov:.1f}%</div>
+                    <div class="kpi-big-num">{domain_cov_pct:.1f}%</div>
                     <div class="chart-container"><canvas id="chartDomainCov_{prov_id}"></canvas></div>
                 </div>
             </div>
@@ -1964,16 +1982,17 @@ __JS_BLOCK__
             <div class="accordion-wrapper">
         '''
 
-        # Accordion
+        # Loop Queries
         for idx, row in df_p.reset_index(drop=True).iterrows():
             q_text = row.get('keyword', 'Запит')
+            date_scan = row.get('created_at_dt').strftime('%d.%m.%Y') if pd.notnull(row.get('created_at_dt')) else ""
             scan_id = row['id']
             
-            # Local
+            # Local Data
             loc_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
             loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
-            # Local metrics
+            # Local Metrics
             l_tot = loc_mentions['mention_count'].sum()
             l_my_row = loc_mentions[loc_mentions['is_my_brand'] == True]
             l_my = l_my_row['mention_count'].sum()
@@ -1986,28 +2005,28 @@ __JS_BLOCK__
             if not l_my_row.empty:
                 l_sent = l_my_row['sentiment_score'].iloc[0]
                 val = l_my_row[l_my_row['rank_position'] > 0]['rank_position'].min()
-                if pd.notnull(val): l_pos = f"{val}"
-            
-            # Inner tables
-            brands_html = ""
+                if pd.notnull(val): l_pos = f"#{safe_int(val)}"
+
+            # Inner Tables
+            brands_inner = ""
             if not loc_mentions.empty:
                 sort_b = loc_mentions.sort_values(['is_my_brand', 'mention_count'], ascending=[False, False])
                 for _, b in sort_b.iterrows():
                     bg = "style='background:#e6fffa; font-weight:bold;'" if b['is_my_brand'] else ""
-                    brands_html += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{b.get('sentiment_score','-')}</td><td>{safe_int(b.get('rank_position',0))}</td></tr>"
+                    brands_inner += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{b.get('sentiment_score','-')}</td><td>{safe_int(b.get('rank_position',0))}</td></tr>"
             else:
-                 brands_html = "<tr><td colspan='4'>Брендів не знайдено</td></tr>"
+                 brands_inner = "<tr><td colspan='4'>Брендів не знайдено</td></tr>"
 
-            sources_html = ""
+            sources_inner = ""
             if not loc_sources.empty:
                 for _, s in loc_sources.iterrows():
                     icon = "✅" if s['is_official'] else "🔗"
                     url = str(s['url'])
-                    sources_html += f"<tr><td style='word-break:break-all;'>{url}</td><td align='center'>{icon}</td></tr>"
+                    sources_inner += f"<tr><td style='word-break:break-all;'><a href='{url}' target='_blank' style='color:#00d18f; text-decoration:none;'>{url}</a></td><td>{icon}</td></tr>"
             else:
-                sources_html = "<tr><td colspan='2'>Джерел не знайдено</td></tr>"
+                sources_inner = "<tr><td colspan='2'>Джерел не знайдено</td></tr>"
 
-            # Response
+            # Response Text
             raw_t = row.get('raw_response', '')
             if pd.isna(raw_t): raw_t = "Текст не збережено."
             fmt_t = str(raw_t).replace('\n', '<br>')
@@ -2020,27 +2039,38 @@ __JS_BLOCK__
                     <div class="accordion-arrow">▼</div>
                 </div>
                 <div class="accordion-content" style="display: none;">
-                    <div class="item-metrics-container">
-                        <div class="metric-cell"><span class="m-label">Кількість згадок</span><span class="m-val">{l_count}</span></div>
-                        <div class="metric-cell"><span class="m-label">Тональність</span><span class="m-val">{l_sent}</span></div>
-                        <div class="metric-cell"><span class="m-label">Позиція</span><span class="m-val">{l_pos}</span></div>
-                        <div class="metric-cell"><span class="m-label">Частка голосу</span><span class="m-val">{l_sov:.1f}%</span></div>
-                    </div>
                     
+                    <div class="cards-row">
+                        <div class="metric-card">
+                            <div class="mc-label">ЧАСТКА ГОЛОСУ (SOV)</div>
+                            <div class="mc-val">{l_sov:.1f}%</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="mc-label">ЗГАДОК БРЕНДУ</div>
+                            <div class="mc-val">{l_count}</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="mc-label">ТОНАЛЬНІСТЬ</div>
+                            <div class="mc-val" style="font-size:18px;">{l_sent}</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="mc-label">ПОЗИЦІЯ У СПИСКУ</div>
+                            <div class="mc-val">{l_pos}</div>
+                        </div>
+                    </div>
+
                     <div class="item-response">
-                        <div style="font-weight:bold; margin-bottom:10px; color:#5e35b1;">Відповідь LLM:</div>
+                        <div class="response-label">Відповідь LLM:</div>
                         {fmt_t}
                         
-                        <div style="margin-top: 30px; border-top: 1px solid #ccc; padding-top: 20px;">
-                            <div class="detail-charts-wrapper">
-                                <div class="detail-chart-block">
-                                    <h4 style="color:#2c3e50;">Бренди</h4>
-                                    <div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{brands_html}</tbody></table></div>
-                                </div>
-                                <div class="detail-chart-block">
-                                    <h4 style="color:#2c3e50;">Джерела</h4>
-                                    <div class="table-responsive"><table class="inner-table"><thead><tr><th>URL</th><th>Тип</th></tr></thead><tbody>{sources_html}</tbody></table></div>
-                                </div>
+                        <div class="detail-charts-wrapper">
+                            <div class="detail-chart-block">
+                                <h4 style="color:#2c3e50;">Знайдені бренди</h4>
+                                <div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{brands_inner}</tbody></table></div>
+                            </div>
+                            <div class="detail-chart-block">
+                                <h4 style="color:#2c3e50;">Цитовані джерела</h4>
+                                <div class="table-responsive"><table class="inner-table"><thead><tr><th>URL</th><th>Тип</th></tr></thead><tbody>{sources_inner}</tbody></table></div>
                             </div>
                         </div>
                     </div>
@@ -2050,167 +2080,31 @@ __JS_BLOCK__
         
         tabs_content_html += "</div></div>"
 
-        # Charts
+        # JS Charts
         js_charts_code += f"createDoughnut('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
-        js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {pres_pct}, '#00d18f');\n"
-        js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov}, '#4DD0E1');\n"
+        js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov_pct}, '#00d18f');\n"
+        js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov_pct}, '#4DD0E1');\n"
+        
+        # Placeholder for sentiment
         js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
+        
+        # Position (reversed scale)
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
         js_charts_code += f"createDoughnut('chartPos_{prov_id}', {score_pos * 10}, '#00d18f');\n"
 
-    # 5. Assemble
+    # 5. Final
     final_js = js_block.replace("__JS_CHARTS_PLACEHOLDER__", js_charts_code)
-    final_html = html_template.replace("__CSS_PLACEHOLDER__", css_styles)\
-        .replace("__PROJECT_NAME__", str(project_name))\
-        .replace("__DATE__", str(current_date))\
-        .replace("__TABS_BUTTONS__", tabs_buttons_html)\
-        .replace("__TABS_CONTENT__", tabs_content_html)\
+    
+    final_html = html_template \
+        .replace("__CSS_PLACEHOLDER__", css_styles) \
+        .replace("__PROJECT_NAME__", str(project_name)) \
+        .replace("__DATE__", str(current_date)) \
+        .replace("__TABS_BUTTONS__", tabs_buttons_html) \
+        .replace("__TABS_CONTENT__", tabs_content_html) \
         .replace("__JS_BLOCK__", final_js)
 
     return final_html
-
-def show_reports_page():
-    """
-    Сторінка Звітів.
-    Збирає дані з БД і передає 4 аргументи у функцію генерації HTML.
-    """
-    import streamlit as st
-    import pandas as pd
-    from datetime import datetime
-    
-    st.title("📊 Звіти")
-
-    if 'supabase' in st.session_state:
-        supabase = st.session_state['supabase']
-    elif 'supabase' in globals():
-        supabase = globals()['supabase']
-    else:
-        st.error("🚨 Помилка підключення до БД.")
-        return
-    
-    proj = st.session_state.get("current_project")
-    if not proj:
-        st.info("Оберіть проект.")
-        return
-
-    user_role = st.session_state.get("role", "user")
-    is_admin = (user_role in ["admin", "super_admin"])
-    
-    tabs = st.tabs(["📥 Замовити звіт", "📂 Готові звіти"] + (["⚙️ Адмінка"] if is_admin else []))
-
-    # --- ЗАМОВЛЕННЯ ---
-    with tabs[0]:
-        st.markdown("### Створення нового звіту")
-        st.info("Звіт формується на основі останніх актуальних сканувань по кожному запиту.")
-        
-        rep_name = st.text_input("Назва звіту", value=f"Звіт {proj.get('brand_name')} - {datetime.now().strftime('%d.%m.%Y')}")
-        
-        if st.button("🚀 Згенерувати звіт", type="primary"):
-            with st.spinner("Збір даних та генерація HTML..."):
-                try:
-                    # 1. Keywords Map
-                    kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
-                    kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
-                    if not kw_map:
-                        st.error("Немає запитів.")
-                        st.stop()
-
-                    # 2. Get Scans (Snapshot)
-                    scans_resp = supabase.table("scan_results")\
-                        .select("id, created_at, provider, keyword_id, raw_response")\
-                        .eq("project_id", proj["id"])\
-                        .order("created_at", desc=True)\
-                        .limit(3000)\
-                        .execute()
-                    
-                    raw_scans = scans_resp.data if scans_resp.data else []
-                    if not raw_scans:
-                        st.error("Історія пуста.")
-                        st.stop()
-
-                    df_raw = pd.DataFrame(raw_scans)
-                    df_raw = df_raw.sort_values('created_at', ascending=False)
-                    # Лишаємо тільки 1 запис для пари (keyword + provider)
-                    df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first').copy()
-                    
-                    scan_ids = df_latest['id'].tolist()
-                    
-                    # 3. Get Details (Mentions & Sources)
-                    m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
-                    s_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
-                    
-                    mentions_df = pd.DataFrame(m_resp.data) if m_resp.data else pd.DataFrame()
-                    sources_df = pd.DataFrame(s_resp.data) if s_resp.data else pd.DataFrame()
-
-                    # 4. Enrich
-                    df_latest['keyword'] = df_latest['keyword_id'].map(kw_map).fillna("Unknown")
-                    try: df_latest['created_at_dt'] = pd.to_datetime(df_latest['created_at'])
-                    except: pass
-
-                    # Ми не робимо тут глобальний merge метрик, бо функція генерації тепер сама рахує їх точно
-                    # на основі повних таблиць mentions_df та sources_df.
-                    # Єдине, що можна додати для зручності — базові лічильники, якщо треба
-                    # але основна математика перенесена в генератор.
-                    
-                    df_latest = df_latest.fillna(0)
-
-                    # 5. 🔥 ВИКЛИК ГЕНЕРАТОРА (Передаємо ВСІ 4 аргументи)
-                    # Ось тут була помилка — ми виправили її, додавши mentions_df і sources_df
-                    html_code = generate_html_report_content(proj.get('brand_name'), df_latest, mentions_df, sources_df)
-
-                    # 6. Save
-                    supabase.table("reports").insert({
-                        "project_id": proj["id"],
-                        "report_name": rep_name,
-                        "html_content": html_code,
-                        "status": "pending"
-                    }).execute()
-                    
-                    st.success("Звіт успішно створено! Перевірте вкладку Адмінка.")
-                    
-                except Exception as e:
-                    st.error(f"Помилка: {e}")
-
-    # --- ГОТОВІ ---
-    with tabs[1]:
-        st.markdown("### Архів")
-        try:
-            res = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "published").order("created_at", desc=True).execute()
-            if not res.data: st.info("Немає звітів.")
-            else:
-                for r in res.data:
-                    with st.expander(f"📄 {r['report_name']}"):
-                        st.download_button("📥 Завантажити HTML", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
-                        if st.checkbox("Попередній перегляд", key=f"v_{r['id']}"):
-                            st.components.v1.html(r['html_content'], height=600, scrolling=True)
-        except Exception as e:
-            st.error(f"Помилка: {e}")
-
-    # --- АДМІНКА ---
-    if is_admin:
-        with tabs[2]:
-            st.markdown("### Модерація (Pending)")
-            try:
-                pend_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "pending").order("created_at", desc=True).execute()
-                pending = pend_resp.data if pend_resp.data else []
-                
-                if not pending:
-                    st.info("Черга пуста.")
-                else:
-                    for pr in pending:
-                        st.divider()
-                        st.subheader(pr['report_name'])
-                        new_html = st.text_area("HTML Код", pr['html_content'], height=200, key=f"e_{pr['id']}")
-                        c1, c2 = st.columns(2)
-                        if c1.button("✅ Опублікувати", key=f"p_{pr['id']}"):
-                            supabase.table("reports").update({"status": "published", "html_content": new_html}).eq("id", pr['id']).execute()
-                            st.success("Опубліковано!"); st.rerun()
-                        if c2.button("❌ Видалити", key=f"d_{pr['id']}"):
-                            supabase.table("reports").delete().eq("id", pr['id']).execute()
-                            st.rerun()
-            except Exception as e:
-                st.error(f"Помилка: {e}")
                 
 
 def show_dashboard():
