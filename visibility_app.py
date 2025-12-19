@@ -1658,49 +1658,71 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    ВИПРАВЛЕНО: 
-    1. Повна ізоляція даних у циклі (вирішує проблему пустих метрик для 2+ запитів).
-    2. Логіка Smart Target застосовується локально для кожного запиту.
+    ВИПРАВЛЕНО:
+    1. Глобальний 'Smart Target' перед циклами (виправляє нулі).
+    2. Тональність у шапці виводиться у % (Позитив/Нейтраль/Негатив).
+    3. Офіційні джерела рахуються коректно.
     """
     import pandas as pd
     from datetime import datetime
+    import numpy as np
     import re
 
     current_date = datetime.now().strftime('%d.%m.%Y')
     
-    # --- 0. ГЛОБАЛЬНА ОЧИСТКА ---
-    # Гарантуємо, що ID всюди рядкові і без пробілів
+    # ==========================================
+    # 1. ГЛОБАЛЬНА ПІДГОТОВКА ДАНИХ
+    # ==========================================
+    
+    # Нормалізація ID
     df_scans['id'] = df_scans['id'].astype(str).str.strip()
     
+    # --- MENTIONS ---
     if not df_mentions.empty:
         df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str).str.strip()
+        
+        # 1. Текстовий пошук (Smart Target)
+        df_mentions['brand_clean'] = df_mentions['brand_name'].astype(str).str.lower().str.strip()
+        target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
+        
+        if target_norm:
+            # Шукаємо входження (наприклад, "be-it" в "be-it agency")
+            mask_text = df_mentions['brand_clean'].str.contains(target_norm, na=False, regex=False)
+        else:
+            mask_text = False
+            
+        # 2. Галочка з бази
+        mask_db = df_mentions['is_my_brand'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
+        
+        # 3. Фінальний прапорець "Це мій бренд"
+        df_mentions['is_real_target'] = mask_text | mask_db
+        
+        # Числа
         df_mentions['mention_count'] = pd.to_numeric(df_mentions['mention_count'], errors='coerce').fillna(0)
         df_mentions['rank_position'] = pd.to_numeric(df_mentions['rank_position'], errors='coerce').fillna(0)
-        # Приводимо is_my_brand до універсального вигляду, але основну логіку робимо в циклі
-        df_mentions['is_my_brand_bool'] = df_mentions['is_my_brand'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
     else:
-        df_mentions = pd.DataFrame(columns=['scan_result_id', 'mention_count', 'rank_position', 'is_my_brand_bool', 'sentiment_score', 'brand_name'])
+        df_mentions = pd.DataFrame(columns=['scan_result_id', 'mention_count', 'rank_position', 'is_my_brand', 'sentiment_score', 'brand_name', 'is_real_target'])
 
+    # --- SOURCES ---
     if not df_sources.empty:
         df_sources['scan_result_id'] = df_sources['scan_result_id'].astype(str).str.strip()
         df_sources['is_official'] = df_sources['is_official'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
     else:
         df_sources = pd.DataFrame(columns=['scan_result_id', 'url', 'is_official'])
 
-    # Helper: Safe Int
+    # Helper functions
     def safe_int(val):
         try: return int(float(val))
         except: return 0
 
-    # Helper: Text Format
     def format_llm_text(text):
         if pd.isna(text) or not text: return "Текст відповіді відсутній."
         txt = str(text)
         txt = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', txt)
         txt = txt.replace('* ', '<br>• ')
         txt = txt.replace('\n', '<br>')
-        # Підсвітка
         if project_name:
+             # Підсвітка без regex спецсимволів
              txt = re.sub(f"(?i){re.escape(project_name)}", f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{project_name}</span>", txt)
         return txt
 
@@ -1781,6 +1803,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
+    # JS
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1846,7 +1869,6 @@ __JS_BLOCK__
     tabs_content_html = ""
     js_charts_code = ""
 
-    # TOOLTIPS
     tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
     tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси."
     tt_sent = "Тональність, у якій ШІ описує бренд."
@@ -1854,67 +1876,82 @@ __JS_BLOCK__
     tt_brand_cov = "Відсоток запитів, у яких бренд був згаданий хоча б один раз."
     tt_domain_cov = "Відсоток запитів, у яких ШІ надав клікабельне посилання на ваш домен."
 
+    # --- ГОЛОВНИЙ ЦИКЛ ПО ВКЛАДКАМ ---
     for i, prov_ui in enumerate(providers_ui):
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
-        # 1. Фільтруємо сканування для поточної моделі
+        # 1. Сканування
         df_p = df_scans[df_scans['provider_ui'] == prov_ui].copy()
         if df_p.empty: continue
         
-        # 2. Розрахунок ГЛОБАЛЬНИХ метрик (Тільки для шапки)
-        #    Ми тимчасово робимо копію і рахуємо, щоб заповнити верхні плашки
-        #    Але в циклі будемо робити це заново для надійності
-        
         scan_ids_in_prov = df_p['id'].tolist()
-        mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy() if not df_mentions.empty else pd.DataFrame()
-        sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy() if not df_sources.empty else pd.DataFrame()
         
-        if not mentions_prov.empty:
-            mentions_prov['brand_clean'] = mentions_prov['brand_name'].astype(str).str.lower().str.strip()
-            target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
-            mask_match = mentions_prov['brand_clean'].str.contains(target_norm, na=False, regex=False) if target_norm else False
-            is_my = mentions_prov['is_my_brand_bool']
-            mentions_prov['is_real_target'] = mask_match | is_my
-        else:
-            if not mentions_prov.empty: mentions_prov['is_real_target'] = False
-
+        # 2. Деталі (фільтруємо з уже підготовлених глобальних DF)
+        mentions_prov = pd.DataFrame()
+        if not df_mentions.empty:
+            mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
+            
+        sources_prov = pd.DataFrame()
+        if not df_sources.empty:
+            sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
+        
+        # ---------------------------
+        # GLOBAL METRICS (Top Cards)
+        # ---------------------------
         total_queries = len(df_p)
+        
+        # SOV
         total_market = mentions_prov['mention_count'].sum() if not mentions_prov.empty else 0
         my_total = mentions_prov[mentions_prov['is_real_target'] == True]['mention_count'].sum() if not mentions_prov.empty else 0
         sov_pct = (my_total / total_market * 100) if total_market > 0 else 0
         
+        # Official Links (%)
         total_lnk = len(sources_prov)
         off_lnk = len(sources_prov[sources_prov['is_official'] == True]) if not sources_prov.empty else 0
         off_pct = (off_lnk / total_lnk * 100) if total_lnk > 0 else 0
         
+        # Brand Coverage
         brand_cov = 0
         if not mentions_prov.empty:
             scans_brand = mentions_prov[(mentions_prov['is_real_target'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
             brand_cov = (scans_brand / total_queries * 100) if total_queries > 0 else 0
         
+        # Domain Coverage
         domain_cov = 0
         if not sources_prov.empty:
             scans_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
             domain_cov = (scans_link / total_queries * 100) if total_queries > 0 else 0
         
+        # Avg Position
         avg_pos = 0
         if not mentions_prov.empty:
             my_ranks = mentions_prov[(mentions_prov['is_real_target'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        sent_label = "Нейтральна"
+        # Sentiment Breakdown (Percentages)
+        sent_html = "<span style='font-size:16px; color:#999'>Немає даних</span>"
         if not mentions_prov.empty:
             valid_sent = mentions_prov[(mentions_prov['is_real_target'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
-            if not valid_sent.empty: sent_label = valid_sent['sentiment_score'].mode()[0]
+            if not valid_sent.empty:
+                counts = valid_sent['sentiment_score'].value_counts(normalize=True) * 100
+                pos = counts.get('Позитивний', 0)
+                neu = counts.get('Нейтральний', 0)
+                neg = counts.get('Негативний', 0)
+                
+                sent_html = f"""
+                <span style='color:#00C896'>😊 {pos:.0f}%</span> &nbsp;
+                <span style='color:#FFCE56'>😐 {neu:.0f}%</span> &nbsp;
+                <span style='color:#FF4B4B'>😡 {neg:.0f}%</span>
+                """
 
-        # Tab HTML
+        # TAB HTML START
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_sov}</div><div class="kpi-title">Частка голосу (SOV)</div><div class="kpi-big-num">{sov_pct:.2f}%</div><div class="chart-container"><canvas id="chartSOV_{prov_id}"></canvas></div></div>
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_off}</div><div class="kpi-title">% Офіційних джерел</div><div class="kpi-big-num">{off_pct:.2f}%</div><div class="chart-container"><canvas id="chartOfficial_{prov_id}"></canvas></div></div>
-                <div class="kpi-box"><div class="kpi-tooltip">{tt_sent}</div><div class="kpi-title">Загальна тональність</div><div class="kpi-big-num" style="font-size:20px;">{sent_label}</div><div class="chart-container"><canvas id="chartSentiment_{prov_id}"></canvas></div></div>
+                <div class="kpi-box"><div class="kpi-tooltip">{tt_sent}</div><div class="kpi-title">Загальна тональність</div><div style="margin-top:15px; font-weight:bold;">{sent_html}</div></div>
             </div>
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_pos}</div><div class="kpi-title">Позиція бренду</div><div class="kpi-big-num">{avg_pos:.1f}</div><div class="chart-container"><canvas id="chartPos_{prov_id}"></canvas></div></div>
@@ -1926,51 +1963,37 @@ __JS_BLOCK__
         '''
 
         # --- LOOPS (Accordion) ---
-        # Тут ми гарантуємо, що дані не змішуються
-        
         for idx, row in df_p.reset_index(drop=True).iterrows():
             q_text = row.get('keyword', 'Запит')
             scan_id = str(row['id']).strip()
             
-            # 1. Фільтруємо згадки тільки для ЦЬОГО scan_id
+            # 1. Filter Local Data
             loc_mentions = pd.DataFrame()
-            if not df_mentions.empty:
-                # Беремо з оригінального, повного df_mentions
-                loc_mentions = df_mentions[df_mentions['scan_result_id'] == scan_id].copy()
+            if not mentions_prov.empty:
+                loc_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
             
             loc_sources = pd.DataFrame()
-            if not df_sources.empty:
-                loc_sources = df_sources[df_sources['scan_result_id'] == scan_id].copy()
+            if not sources_prov.empty:
+                loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
-            # 2. ЗАСТОСОВУЄМО SMART TARGET ЛОКАЛЬНО
-            if not loc_mentions.empty:
-                loc_mentions['brand_clean'] = loc_mentions['brand_name'].astype(str).str.lower().str.strip()
-                target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
-                
-                if target_norm:
-                    mask_match = loc_mentions['brand_clean'].str.contains(target_norm, na=False, regex=False)
-                else:
-                    mask_match = False
-                
-                is_my = loc_mentions['is_my_brand_bool']
-                loc_mentions['is_real_target'] = mask_match | is_my
-            
-            # 3. LOCAL MATH
+            # 2. LOCAL MATH (Only if my_brand found)
             l_tot_mentions = loc_mentions['mention_count'].sum() if not loc_mentions.empty else 0
-            
-            my_row = pd.DataFrame()
-            if not loc_mentions.empty:
-                my_row = loc_mentions[loc_mentions['is_real_target'] == True]
-            
+            my_row = loc_mentions[loc_mentions['is_real_target'] == True] if not loc_mentions.empty else pd.DataFrame()
             l_my_count = my_row['mention_count'].sum() if not my_row.empty else 0
             
-            l_sov = (l_my_count / l_tot_mentions * 100) if l_tot_mentions > 0 else 0.0
-            l_count = safe_int(l_my_count)
-            l_sent = "Не знайдено" 
+            l_sov = 0.0
+            l_count = 0
+            l_sent = "Не знайдено"
             l_pos = "0"
             l_sent_color = "#333"
             
-            if not my_row.empty:
+            # !!! КЛЮЧОВЕ ВИПРАВЛЕННЯ: Нулі залишаються нулями, якщо бренд не знайдено
+            if not my_row.empty and l_my_count > 0:
+                if l_tot_mentions > 0:
+                    l_sov = (l_my_count / l_tot_mentions * 100)
+                
+                l_count = safe_int(l_my_count)
+                
                 # Сортуємо: найбільше згадок -> головний
                 main_brand_row = my_row.sort_values('mention_count', ascending=False).iloc[0]
                 if 'sentiment_score' in main_brand_row:
@@ -1983,7 +2006,7 @@ __JS_BLOCK__
             if l_sent == "Позитивний": l_sent_color = "#00C896"
             elif l_sent == "Негативний": l_sent_color = "#FF4B4B"
 
-            # 4. Tables HTML
+            # 3. Tables HTML
             details_html = ""
             has_brands = not loc_mentions.empty
             has_sources = not loc_sources.empty
@@ -2043,7 +2066,10 @@ __JS_BLOCK__
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov}, '#4DD0E1');\n"
-        js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
+        # Sentiment Chart is not needed as donut if we show percentages, but kept for layout consistency
+        # Or remove it from CSS grid if needed. Keeping it simple.
+        # js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
+        
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
         js_charts_code += f"createDoughnut('chartPos_{prov_id}', {score_pos * 10}, '#00d18f');\n"
 
