@@ -1658,7 +1658,7 @@ def show_faq_page():
 def generate_html_report_content(project_name, df_scans, df_mentions, df_sources):
     """
     Генерує HTML-звіт.
-    ВИПРАВЛЕНО: Розрахунок метрик для кожного запиту (жовта рамка).
+    ВИПРАВЛЕНО: Нормалізація ID (UUID -> str) для коректного розрахунку метрик.
     """
     import pandas as pd
     from datetime import datetime
@@ -1668,28 +1668,32 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     current_date = datetime.now().strftime('%d.%m.%Y')
     
     # ==========================================
-    # 0. ПІДГОТОВКА ДАНИХ (FIXED)
+    # 🔥 0. DATA NORMALIZATION (FIXING ZEROS)
     # ==========================================
     
-    # 1. Приводимо всі ID до рядків (щоб UUID та str збігалися)
+    # 1. Приводимо всі ID до рядків і чистимо пробіли
+    # Це гарантує, що UUID з бази і об'єкти Pandas будуть ідентичними
     df_scans['id'] = df_scans['id'].astype(str).str.strip()
     
+    # 2. Обробка таблиці згадок
     if not df_mentions.empty:
         df_mentions['scan_result_id'] = df_mentions['scan_result_id'].astype(str).str.strip()
         
-        # Гарантуємо числа
+        # Конвертуємо числові поля (захист від помилок)
         df_mentions['mention_count'] = pd.to_numeric(df_mentions['mention_count'], errors='coerce').fillna(0)
         df_mentions['rank_position'] = pd.to_numeric(df_mentions['rank_position'], errors='coerce').fillna(0)
         
-        # Гарантуємо Boolean для is_my_brand (обробляємо 1, 'true', True)
-        df_mentions['is_my_brand'] = df_mentions['is_my_brand'].astype(str).str.lower().isin(['true', '1', 't', 'yes'])
+        # Нормалізація 'is_my_brand' (обробляє True, 'true', '1', 1)
+        # Перетворюємо в string, потім в нижній регістр, перевіряємо входження
+        df_mentions['is_my_brand'] = df_mentions['is_my_brand'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
     else:
-        # Створюємо пустий, щоб не впало
+        # Створюємо пустий DataFrame з потрібними колонками, щоб код не впав
         df_mentions = pd.DataFrame(columns=['scan_result_id', 'mention_count', 'rank_position', 'is_my_brand', 'sentiment_score', 'brand_name'])
 
+    # 3. Обробка таблиці джерел
     if not df_sources.empty:
         df_sources['scan_result_id'] = df_sources['scan_result_id'].astype(str).str.strip()
-        df_sources['is_official'] = df_sources['is_official'].astype(str).str.lower().isin(['true', '1', 't', 'yes'])
+        df_sources['is_official'] = df_sources['is_official'].astype(str).str.lower().isin(['true', '1', 't', 'yes', 'on'])
     else:
         df_sources = pd.DataFrame(columns=['scan_result_id', 'url', 'is_official'])
 
@@ -1706,7 +1710,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
         try: return int(float(val))
         except: return 0
 
-    # Provider UI Names
+    # Provider Mapping
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
         "gpt-4o": "OpenAI GPT",
@@ -1725,7 +1729,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     providers_ui = sorted(df_scans['provider_ui'].unique().tolist())
 
     # ---------------------------------------------------------
-    # CSS STYLES
+    # CSS
     # ---------------------------------------------------------
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
@@ -1786,6 +1790,7 @@ def generate_html_report_content(project_name, df_scans, df_mentions, df_sources
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
+    # JS
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1868,35 +1873,43 @@ __JS_BLOCK__
         if df_p.empty: continue
         
         scan_ids_in_prov = df_p['id'].tolist()
+        
+        # Filter Details (By ID List)
         mentions_prov = df_mentions[df_mentions['scan_result_id'].isin(scan_ids_in_prov)].copy()
         sources_prov = df_sources[df_sources['scan_result_id'].isin(scan_ids_in_prov)].copy()
         
         total_queries = len(df_p)
         
-        # --- GLOBAL MATH (TOP OF PAGE) ---
+        # --- GLOBAL MATH ---
+        mentions_prov['mention_count'] = mentions_prov['mention_count'].fillna(0)
+        
         total_market_mentions = mentions_prov['mention_count'].sum()
         my_total_mentions = mentions_prov[mentions_prov['is_my_brand'] == True]['mention_count'].sum()
         sov_pct = (my_total_mentions / total_market_mentions * 100) if total_market_mentions > 0 else 0
         
-        total_lnk = len(sources_prov)
-        off_lnk = len(sources_prov[sources_prov['is_official'] == True])
-        off_pct = (off_lnk / total_lnk * 100) if total_lnk > 0 else 0
+        total_links = len(sources_prov)
+        official_links = len(sources_prov[sources_prov['is_official'] == True])
+        off_pct = (official_links / total_links * 100) if total_links > 0 else 0
         
-        scans_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
-        brand_cov = (scans_brand / total_queries * 100) if total_queries > 0 else 0
+        scans_with_brand = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['mention_count'] > 0)]['scan_result_id'].nunique()
+        brand_cov_pct = (scans_with_brand / total_queries * 100) if total_queries > 0 else 0
         
-        scans_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
-        domain_cov = (scans_link / total_queries * 100) if total_queries > 0 else 0
+        scans_with_off_link = sources_prov[sources_prov['is_official'] == True]['scan_result_id'].nunique()
+        domain_cov_pct = (scans_with_off_link / total_queries * 100) if total_queries > 0 else 0
         
         avg_pos = 0
-        my_ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
-        if not my_ranks.empty: avg_pos = my_ranks.mean()
+        if not mentions_prov.empty:
+            my_ranks = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['rank_position'] > 0)]['rank_position']
+            avg_pos = my_ranks.mean() if not my_ranks.empty else 0
         
         sent_label = "Нейтральна"
-        valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
-        if not valid_sent.empty: sent_label = valid_sent['sentiment_score'].mode()[0]
+        if not mentions_prov.empty:
+            valid_sent = mentions_prov[(mentions_prov['is_my_brand'] == True) & (mentions_prov['sentiment_score'] != 'Не згадано')]
+            if not valid_sent.empty:
+                mode = valid_sent['sentiment_score'].mode()
+                if not mode.empty: sent_label = mode[0]
 
-        # TAB HTML START
+        # --- HTML TAB ---
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
             <div class="kpi-row">
@@ -1906,47 +1919,41 @@ __JS_BLOCK__
             </div>
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_pos}</div><div class="kpi-title">Позиція бренду</div><div class="kpi-big-num">{avg_pos:.1f}</div><div class="chart-container"><canvas id="chartPos_{prov_id}"></canvas></div></div>
-                <div class="kpi-box"><div class="kpi-tooltip">{tt_brand_cov}</div><div class="kpi-title">Присутність бренду</div><div class="kpi-big-num">{brand_cov:.1f}%</div><div class="chart-container"><canvas id="chartBrandCov_{prov_id}"></canvas></div></div>
-                <div class="kpi-box"><div class="kpi-tooltip">{tt_domain_cov}</div><div class="kpi-title">Згадки домену</div><div class="kpi-big-num">{domain_cov:.1f}%</div><div class="chart-container"><canvas id="chartDomainCov_{prov_id}"></canvas></div></div>
+                <div class="kpi-box"><div class="kpi-tooltip">{tt_brand_cov}</div><div class="kpi-title">Присутність бренду</div><div class="kpi-big-num">{brand_cov_pct:.1f}%</div><div class="chart-container"><canvas id="chartBrandCov_{prov_id}"></canvas></div></div>
+                <div class="kpi-box"><div class="kpi-tooltip">{tt_domain_cov}</div><div class="kpi-title">Згадки домену</div><div class="kpi-big-num">{domain_cov_pct:.1f}%</div><div class="chart-container"><canvas id="chartDomainCov_{prov_id}"></canvas></div></div>
             </div>
             <h3 style="page-break-before: always;">Детальний аналіз запитів</h3>
             <div class="accordion-wrapper">
         '''
 
-        # --- QUERY LOOP (ACCORDION) ---
+        # Loop Queries
         for idx, row in df_p.reset_index(drop=True).iterrows():
             q_text = row.get('keyword', 'Запит')
-            scan_id = str(row['id']) # ID for filtering
+            scan_id = str(row['id']).strip() # ВАЖЛИВО: Очистка ID
             
-            # 1. Filter Local Data
+            # --- LOCAL METRICS ---
+            # Використовуємо .loc для точної фільтрації по строковому ID
             loc_mentions = mentions_prov[mentions_prov['scan_result_id'] == scan_id]
             loc_sources = sources_prov[sources_prov['scan_result_id'] == scan_id]
             
-            # 2. LOCAL MATH (ДЛЯ ЖОВТОЇ РАМКИ)
+            # Local SOV
+            l_tot = loc_mentions['mention_count'].sum()
+            l_my_row = loc_mentions[loc_mentions['is_my_brand'] == True]
+            l_my = l_my_row['mention_count'].sum()
             
-            # Всього згадок (всіх брендів) в цьому запиті
-            l_tot_mentions = loc_mentions['mention_count'].sum()
+            l_sov = (l_my / l_tot * 100) if l_tot > 0 else 0.0
             
-            # Згадки ТІЛЬКИ мого бренду
-            my_row = loc_mentions[loc_mentions['is_my_brand'] == True]
-            l_my_count = my_row['mention_count'].sum()
-            
-            # SOV = (Мої / Всі) * 100
-            l_sov = (l_my_count / l_tot_mentions * 100) if l_tot_mentions > 0 else 0.0
-            
-            l_count = safe_int(l_my_count)
-            l_sent = "Нейтральний"
+            # Metrics for Card
+            l_count = safe_int(l_my)
+            l_sent = "Нейтральна"
             l_pos = "-"
             
-            if not my_row.empty:
-                # Беремо перший знайдений сентимент
-                if 'sentiment_score' in my_row.columns:
-                    l_sent = my_row['sentiment_score'].iloc[0]
-                # Беремо найкращу позицію
-                val = my_row[my_row['rank_position'] > 0]['rank_position'].min()
+            if not l_my_row.empty:
+                l_sent = l_my_row['sentiment_score'].iloc[0]
+                val = l_my_row[l_my_row['rank_position'] > 0]['rank_position'].min()
                 if pd.notnull(val) and val > 0: l_pos = f"#{safe_int(val)}"
 
-            # 3. Inner Tables
+            # --- TABLES ---
             details_html = ""
             has_brands = not loc_mentions.empty
             has_sources = not loc_sources.empty
@@ -1972,7 +1979,7 @@ __JS_BLOCK__
                 
                 details_html += '</div>'
 
-            # 4. Response Text
+            # Response
             raw_t = row.get('raw_response', '')
             fmt_t = format_llm_text(raw_t)
 
@@ -1984,14 +1991,12 @@ __JS_BLOCK__
                     <div class="accordion-arrow">▼</div>
                 </div>
                 <div class="accordion-content" style="display: none;">
-                    
                     <div class="cards-row">
                         <div class="metric-card"><div class="mc-label">SOV <span class="info-icon" title="Частка">%</span></div><div class="mc-val">{l_sov:.1f}%</div></div>
                         <div class="metric-card"><div class="mc-label">ЗГАДОК <span class="info-icon" title="Кількість">#</span></div><div class="mc-val">{l_count}</div></div>
                         <div class="metric-card"><div class="mc-label">ТОНАЛЬНІСТЬ <span class="info-icon" title="Настрій">☺</span></div><div class="mc-val" style="font-size:18px;">{l_sent}</div></div>
                         <div class="metric-card"><div class="mc-label">ПОЗИЦІЯ <span class="info-icon" title="Ранг">1</span></div><div class="mc-val">{l_pos}</div></div>
                     </div>
-
                     <div class="item-response">
                         <div class="response-label">Відповідь LLM:</div>
                         {fmt_t}
@@ -2002,11 +2007,11 @@ __JS_BLOCK__
         
         tabs_content_html += "</div></div>"
 
-        # JS Charts
+        # JS Charts Logic
         js_charts_code += f"createDoughnut('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
-        js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov}, '#00d18f');\n"
-        js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov}, '#4DD0E1');\n"
+        js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov_pct}, '#00d18f');\n"
+        js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov_pct}, '#4DD0E1');\n"
         js_charts_code += f"createDoughnut('chartSentiment_{prov_id}', 100, '#adb5bd');\n"
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
         js_charts_code += f"createDoughnut('chartPos_{prov_id}', {score_pos * 10}, '#00d18f');\n"
