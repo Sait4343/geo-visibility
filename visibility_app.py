@@ -2108,9 +2108,10 @@ __JS_BLOCK__
 
 def show_reports_page():
     """
-    Сторінка Звітів.
-    Збирає дані останнього сканування для кожного запиту та моделі.
-    Використовує Relational Query для гарантованої цілісності даних.
+    Сторінка Звітів (Фінальна Версія).
+    1. Завантажує Whitelist.
+    2. Використовує Relational Query для отримання сканувань РАЗОМ із згадками.
+    3. Передає готову структуру в генератор.
     """
     import streamlit as st
     import pandas as pd
@@ -2136,7 +2137,6 @@ def show_reports_page():
     
     tabs = st.tabs(["📥 Замовити звіт", "📂 Готові звіти"] + (["⚙️ Адмінка"] if is_admin else []))
 
-    # === ЗАМОВЛЕННЯ ===
     with tabs[0]:
         st.markdown("### Створення нового звіту")
         st.info("Звіт формується на основі останніх актуальних сканувань.")
@@ -2146,15 +2146,19 @@ def show_reports_page():
         if st.button("🚀 Згенерувати звіт", type="primary"):
             with st.spinner("Аналіз даних та генерація HTML..."):
                 try:
-                    # 1. Keywords (для мапінгу тексту)
+                    # 1. Fetch Keywords Map
                     kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
                     kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
                     if not kw_map:
                         st.error("Немає запитів.")
                         st.stop()
 
-                    # 2. Scans WITH Relations (Ключовий момент)
-                    # Ми беремо скани разом зі згадками, щоб не втратити зв'язок
+                    # 2. Fetch Whitelist
+                    wl_resp = supabase.table("whitelist").select("domain").eq("project_id", proj["id"]).execute()
+                    whitelist_domains = [w['domain'] for w in wl_resp.data] if wl_resp.data else []
+
+                    # 3. Fetch Scans with Relations
+                    # Це найважливіший крок: беремо все одним пакетом
                     scans_resp = supabase.table("scan_results")\
                         .select("*, brand_mentions(*), extracted_sources(*)")\
                         .eq("project_id", proj["id"])\
@@ -2167,31 +2171,28 @@ def show_reports_page():
                         st.error("Історія пуста.")
                         st.stop()
 
-                    # 3. Snapshot: Latest per Keyword/Provider
-                    # Сортуємо в Python, щоб взяти найсвіжіші
-                    # Додаємо текст запиту прямо в структуру
+                    # 4. Prepare Data (Snapshot logic)
                     processed_scans = []
                     for s in raw_scans:
+                        # Додаємо текст запиту
                         s['keyword_text'] = kw_map.get(s['keyword_id'], "Unknown Query")
                         processed_scans.append(s)
-                        
-                    # Перетворюємо на DF для зручного групування і сортування
+                    
+                    # Convert to DF to filter latest per provider/keyword
                     df_raw = pd.DataFrame(processed_scans)
                     if not df_raw.empty:
                         df_raw = df_raw.sort_values('created_at', ascending=False)
-                        # Залишаємо тільки унікальні (останні) для пари (keyword_id, provider)
                         df_latest = df_raw.drop_duplicates(subset=['keyword_id', 'provider'], keep='first')
                         
-                        # Перетворюємо назад у список словників для генератора
+                        # Convert back to list of dicts for the generator
                         final_scans_data = df_latest.to_dict('records')
                     else:
                         final_scans_data = []
 
-                    # 4. Generate
-                    # Передаємо вже готовий список словників, де всередині є 'brand_mentions'
-                    html_code = generate_html_report_content(proj.get('brand_name'), final_scans_data)
+                    # 5. Generate
+                    html_code = generate_html_report_content(proj.get('brand_name'), final_scans_data, whitelist_domains)
 
-                    # 5. Save
+                    # 6. Save
                     supabase.table("reports").insert({
                         "project_id": proj["id"],
                         "report_name": rep_name,
@@ -2215,7 +2216,7 @@ def show_reports_page():
             else:
                 for r in reports:
                     with st.expander(f"📄 {r['report_name']}"):
-                        st.download_button("📥 Завантажити", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
+                        st.download_button("📥 Завантажити HTML", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
         except Exception as e: st.error(f"Помилка: {e}")
 
     if is_admin:
@@ -2238,7 +2239,6 @@ def show_reports_page():
                             supabase.table("reports").delete().eq("id", pr['id']).execute()
                             st.rerun()
             except Exception as e: st.error(f"Помилка: {e}")
-
 
 
 def show_dashboard():
