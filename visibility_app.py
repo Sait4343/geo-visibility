@@ -2257,11 +2257,12 @@ __JS_BLOCK__
 
 def show_reports_page():
     """
-    Сторінка Звітів.
-    ВИПРАВЛЕНО:
-    1. Помилка підключення до БД (тепер шукає і в session_state, і в globals).
-    2. Назва вкладки змінена на "🛡️ Модерація звітів".
-    3. Унікальні ID для кнопок (виправляє Duplicate Widget ID).
+    Сторінка Звітів (Фінальна версія).
+    Виправлено:
+    - Прибрано запис в неіснуючу колонку 'created_by'.
+    - Виправлено логіку підключення до БД.
+    - Видалення доступне тільки в Модерації (для адмінів).
+    - Оновлено дизайн кнопок та текстів.
     """
     import streamlit as st
     import pandas as pd
@@ -2273,7 +2274,7 @@ def show_reports_page():
 
     st.title("📊 Звіти")
 
-    # --- ВИПРАВЛЕННЯ ПІДКЛЮЧЕННЯ ДО БД ---
+    # 1. Надійна ініціалізація Supabase
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
     elif 'supabase' in globals():
@@ -2281,7 +2282,6 @@ def show_reports_page():
     else:
         st.error("🚨 Помилка: відсутнє підключення до БД (змінна supabase не знайдена).")
         return
-    # --------------------------------------
     
     proj = st.session_state.get("current_project")
     if not proj:
@@ -2291,7 +2291,7 @@ def show_reports_page():
     user_role = st.session_state.get("role", "user")
     is_admin = (user_role in ["admin", "super_admin"])
     
-    # --- ВКЛАДКИ (Перейменовано адмінку) ---
+    # Вкладки
     tab_names = ["📥 Замовити звіт", "📂 Готові звіти"]
     if is_admin:
         tab_names.append("🛡️ Модерація звітів")
@@ -2370,14 +2370,12 @@ def show_reports_page():
                         whitelist_domains
                     )
 
-                    # 6. Save
-                    user_id = st.session_state.get("user", {}).id
+                    # 6. Save (БЕЗ created_by, бо його немає в схемі)
                     supabase.table("reports").insert({
                         "project_id": proj["id"],
                         "report_name": rep_name,
                         "html_content": html_code,
-                        "status": "pending",
-                        "created_by": user_id
+                        "status": "pending"
                     }).execute()
                     
                     st.balloons()
@@ -2387,7 +2385,7 @@ def show_reports_page():
                     st.error(f"Помилка генерації: {e}")
 
     # =========================================================
-    # ТАБ 2: ГОТОВІ ЗВІТИ
+    # ТАБ 2: ГОТОВІ ЗВІТИ (Перегляд)
     # =========================================================
     with tabs[1]:
         try:
@@ -2399,17 +2397,19 @@ def show_reports_page():
             else:
                 for r in reports:
                     with st.expander(f"📄 {r['report_name']}", expanded=False):
-                        # Кнопка справа
+                        # Кнопка завантаження (справа)
                         c_info, c_btn = st.columns([4, 1])
                         with c_btn:
                             st.download_button(
-                                label="📥 Завантажити HTML",
+                                label="📥 Завантажити",
                                 data=r['html_content'],
                                 file_name=f"{r['report_name']}.html",
                                 mime="text/html",
-                                key=f"dl_btn_{r['id']}", # Унікальний ключ
+                                key=f"dl_btn_{r['id']}",
                                 use_container_width=True
                             )
+                        
+                        # Відображення звіту
                         st.markdown("---")
                         components.html(r['html_content'], height=800, scrolling=True)
                         
@@ -2417,7 +2417,7 @@ def show_reports_page():
             st.error(f"Помилка завантаження: {e}")
 
     # =========================================================
-    # ТАБ 3: МОДЕРАЦІЯ (ADMIN ONLY)
+    # ТАБ 3: МОДЕРАЦІЯ (Тільки Адмін)
     # =========================================================
     if is_admin:
         with tabs[2]:
@@ -2440,29 +2440,16 @@ def show_reports_page():
                                 st.markdown(f"Статус: :{status_color}[{status_text}]")
                             
                             with c_meta:
-                                # Час (Київ)
+                                # Час
                                 try:
                                     dt_utc = datetime.fromisoformat(pr['created_at'].replace('Z', '+00:00'))
                                     dt_kyiv = dt_utc.astimezone(kyiv_tz)
                                     fmt_time = dt_kyiv.strftime('%d.%m.%Y %H:%M')
                                 except:
                                     fmt_time = pr['created_at']
-
-                                # Автор
-                                author_name = "Невідомий"
-                                if pr.get('created_by'):
-                                    try:
-                                        usr_resp = supabase.table("profiles").select("first_name, last_name, email").eq("id", pr['created_by']).execute()
-                                        if usr_resp.data:
-                                            u = usr_resp.data[0]
-                                            fn = u.get('first_name', '')
-                                            ln = u.get('last_name', '')
-                                            email = u.get('email', '')
-                                            author_name = f"{fn} {ln} ({email})".strip() or email
-                                    except: pass
                                 
                                 st.caption(f"📅 {fmt_time}")
-                                st.caption(f"👤 {author_name}")
+                                # Автор - прибрано, бо немає колонки created_by
 
                             # Редактор
                             with st.expander("✏️ Редагувати код"):
@@ -2495,12 +2482,14 @@ def show_reports_page():
                                     st.button("Вже опубліковано", disabled=True, key=f"dis_{pr['id']}")
                             
                             with ac3:
-                                if st.button("🗑️ Видалити", key=f"del_{pr['id']}", type="secondary"):
+                                # Кнопка видалення з унікальним ключем
+                                if st.button("🗑️ Видалити", key=f"del_adm_{pr['id']}", type="secondary"):
                                     supabase.table("reports").delete().eq("id", pr['id']).execute()
-                                    st.rerun()
+                                    st.warning("Видалено.")
+                                    st.rerun() # Оновлюємо сторінку одразу
             except Exception as e:
                 st.error(f"Помилка адмінки: {e}")
-
+                
 def show_dashboard():
     """
     Сторінка Дашборд.
