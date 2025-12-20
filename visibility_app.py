@@ -2257,19 +2257,26 @@ __JS_BLOCK__
 
 def show_reports_page():
     """
-    Сторінка Звітів (Фінальна Версія).
-    Завантажує official_assets, отримує дані через join, передає в генератор.
+    Сторінка Звітів.
+    Оновлено:
+    1. Інформаційний блок про цінність звіту.
+    2. Виправлено помилку 'Duplicate Widget ID'.
+    3. Адмінка: Модерація, час (Kyiv), автор, прев'ю HTML.
+    4. Готові звіти: Повний перегляд, зручне завантаження.
     """
     import streamlit as st
     import pandas as pd
     from datetime import datetime
-    
+    import streamlit.components.v1 as components
+    import pytz # Для часу по Києву
+
+    # Часова зона Києва
+    kyiv_tz = pytz.timezone('Europe/Kyiv')
+
     st.title("📊 Звіти")
 
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
-    elif 'supabase' in globals():
-        supabase = globals()['supabase']
     else:
         st.error("🚨 Помилка підключення до БД.")
         return
@@ -2282,26 +2289,51 @@ def show_reports_page():
     user_role = st.session_state.get("role", "user")
     is_admin = (user_role in ["admin", "super_admin"])
     
-    tabs = st.tabs(["📥 Замовити звіт", "📂 Готові звіти"] + (["⚙️ Адмінка"] if is_admin else []))
+    # Визначаємо вкладки (адмінка перейменована)
+    tabs = st.tabs(["📥 Замовити звіт", "📂 Готові звіти"] + (["🛡️ Модерація звітів"] if is_admin else []))
 
+    # =========================================================
+    # ТАБ 1: ЗАМОВЛЕННЯ
+    # =========================================================
     with tabs[0]:
-        st.markdown("### Створення нового звіту")
-        st.info("Звіт формується на основі останніх актуальних сканувань.")
+        st.markdown("### 🚀 Генерація професійного AI-звіту")
+        
+        # --- Блок цінності (новий) ---
+        st.info("""
+        **Що ви отримаєте у цьому звіті?**
+        
+        Цей документ — це комплексний аудит видимості вашого бренду в генеративних моделях (ChatGPT, Gemini, Perplexity). 
+        Ми аналізуємо, як ШІ сприймає ваш бренд, порівнюючи його з конкурентами.
+
+        **Ключові метрики звіту:**
+        - **Share of Voice (SOV):** Яку частку уваги ШІ приділяє саме вам у порівнянні з конкурентами.
+        - **Тональність:** Емоційне забарвлення згадок (позитив, негатив, нейтрально) у відсотках.
+        - **Офіційні джерела:** Чи використовує ШІ ваші перевірені сайти (Whitelist) як першоджерело.
+        - **Згадки домену:** Як часто ШІ дає прямі клікабельні посилання на ваш сайт.
+        - **Позиція:** На якому місці у списках рекомендацій з'являється ваш бренд.
+        
+        *Звіт формується на основі останніх актуальних сканувань у вашому проєкті.*
+        """)
+        # -----------------------------
         
         rep_name = st.text_input("Назва звіту", value=f"Звіт {proj.get('brand_name')} - {datetime.now().strftime('%d.%m.%Y')}")
         
-        if st.button("🚀 Згенерувати звіт", type="primary"):
-            with st.spinner("Аналіз даних та генерація HTML..."):
+        if st.button("✨ Сформувати звіт", type="primary"):
+            with st.spinner("Аналіз даних, розрахунок метрик та генерація HTML..."):
                 try:
-                    kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
-                    kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
-                    if not kw_map:
-                        st.error("Немає запитів.")
-                        st.stop()
-
+                    # 1. Отримуємо Whitelist
                     wl_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", proj["id"]).execute()
                     whitelist_domains = [w['domain_or_url'] for w in wl_resp.data] if wl_resp.data else []
 
+                    # 2. Отримуємо Keywords
+                    kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
+                    kw_map = {k['id']: k['keyword_text'] for k in kw_resp.data} if kw_resp.data else {}
+                    
+                    if not kw_map:
+                        st.error("У проекті немає ключових слів. Спочатку додайте запити.")
+                        st.stop()
+
+                    # 3. Отримуємо Скани + Згадки + Джерела (Relational Query)
                     scans_resp = supabase.table("scan_results")\
                         .select("*, brand_mentions(*), extracted_sources(*)")\
                         .eq("project_id", proj["id"])\
@@ -2311,9 +2343,10 @@ def show_reports_page():
                     
                     raw_scans = scans_resp.data if scans_resp.data else []
                     if not raw_scans:
-                        st.error("Історія пуста.")
+                        st.error("Історія сканувань пуста. Запустіть сканування перед створенням звіту.")
                         st.stop()
 
+                    # 4. Snapshot Logic (Лишаємо тільки свіжі)
                     processed_scans = []
                     for s in raw_scans:
                         s['keyword_text'] = kw_map.get(s['keyword_id'], "Unknown Query")
@@ -2327,56 +2360,144 @@ def show_reports_page():
                     else:
                         final_scans_data = []
 
+                    # 5. Генеруємо HTML (використовуємо вашу функцію generate_html_report_content)
                     html_code = generate_html_report_content(
                         proj.get('brand_name'), 
                         final_scans_data, 
                         whitelist_domains
                     )
 
+                    # 6. Зберігаємо в БД (Status: Pending)
+                    # Додаємо user_id, щоб знати, хто замовив
+                    user_id = st.session_state.get("user", {}).id
+                    
                     supabase.table("reports").insert({
                         "project_id": proj["id"],
                         "report_name": rep_name,
                         "html_content": html_code,
-                        "status": "pending"
+                        "status": "pending",
+                        "created_by": user_id 
                     }).execute()
                     
-                    st.success("✅ Звіт успішно сформовано!")
+                    # Нове повідомлення успіху
+                    st.success("✅ Звіт успішно сформовано! Він з'явиться у вкладці 'Готові звіти' після перевірки адміністратором.")
                     
                 except Exception as e:
-                    st.error(f"Помилка: {e}")
+                    st.error(f"Виникла помилка: {e}")
 
+    # =========================================================
+    # ТАБ 2: ГОТОВІ ЗВІТИ (User View)
+    # =========================================================
     with tabs[1]:
-        st.markdown("### 📂 Архів")
         try:
+            # Тільки опубліковані
             pub_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "published").order("created_at", desc=True).execute()
             reports = pub_resp.data if pub_resp.data else []
-            if not reports: st.info("Немає звітів.")
+            
+            if not reports:
+                st.info("Поки що немає готових звітів.")
             else:
                 for r in reports:
+                    # Унікальний ключ для експандера
                     with st.expander(f"📄 {r['report_name']}"):
-                        st.download_button("📥 Завантажити", r['html_content'], file_name=f"{r['report_name']}.html", mime="text/html")
-        except Exception as e: st.error(f"Помилка: {e}")
+                        # Колонка для кнопки (справа)
+                        c_info, c_btn = st.columns([3, 1])
+                        
+                        with c_btn:
+                            # !!!!!!! FIX: Унікальний KEY для кнопки !!!!!!!
+                            st.download_button(
+                                label="📥 Завантажити HTML",
+                                data=r['html_content'],
+                                file_name=f"{r['report_name']}.html",
+                                mime="text/html",
+                                key=f"dl_btn_{r['id']}"  # Унікальний ID
+                            )
+                        
+                        # Відображення звіту прямо в акордеоні
+                        st.markdown("---")
+                        components.html(r['html_content'], height=800, scrolling=True)
+                        
+        except Exception as e:
+            st.error(f"Помилка завантаження архіву: {e}")
 
+    # =========================================================
+    # ТАБ 3: МОДЕРАЦІЯ (Admin View)
+    # =========================================================
     if is_admin:
         with tabs[2]:
-            st.markdown("### ⚙️ Модерація")
+            st.markdown("### 🛡️ Панель модератора")
             try:
-                pend_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).eq("status", "pending").order("created_at", desc=True).execute()
-                pending = pend_resp.data if pend_resp.data else []
-                if not pending: st.info("Черга пуста.")
+                # Беремо всі звіти (і pending, і published), щоб адмін міг редагувати все
+                admin_resp = supabase.table("reports").select("*").eq("project_id", proj["id"]).order("created_at", desc=True).execute()
+                all_reports = admin_resp.data if admin_resp.data else []
+                
+                if not all_reports:
+                    st.info("Звітів немає.")
                 else:
-                    for pr in pending:
-                        st.divider()
-                        st.subheader(f"📝 {pr['report_name']}")
-                        new_html = st.text_area("HTML", value=pr['html_content'], height=200, key=f"ed_{pr['id']}")
-                        c1, c2 = st.columns([1, 4])
-                        if c1.button("✅ Опублікувати", key=f"pub_{pr['id']}", type="primary"):
-                            supabase.table("reports").update({"status": "published", "html_content": new_html}).eq("id", pr['id']).execute()
-                            st.success("Опубліковано!"); st.rerun()
-                        if c2.button("❌ Видалити", key=f"del_{pr['id']}"):
-                            supabase.table("reports").delete().eq("id", pr['id']).execute()
-                            st.rerun()
-            except Exception as e: st.error(f"Помилка: {e}")
+                    for pr in all_reports:
+                        # Стилізація статусу
+                        status_color = "orange" if pr['status'] == 'pending' else "green"
+                        status_text = "ОЧІКУЄ" if pr['status'] == 'pending' else "ОПУБЛІКОВАНО"
+                        
+                        with st.container(border=True):
+                            c_head, c_meta = st.columns([2, 1])
+                            
+                            with c_head:
+                                st.markdown(f"### {pr['report_name']}")
+                                st.markdown(f"Статус: :{status_color}[{status_text}]")
+                            
+                            with c_meta:
+                                # Час та Автор
+                                created_at_utc = datetime.fromisoformat(pr['created_at'].replace('Z', '+00:00'))
+                                created_at_kyiv = created_at_utc.astimezone(kyiv_tz)
+                                fmt_time = created_at_kyiv.strftime('%d.%m.%Y %H:%M')
+                                
+                                # Пробуємо дістати ім'я автора (якщо є created_by)
+                                author_name = "Невідомий"
+                                if pr.get('created_by'):
+                                    try:
+                                        usr_resp = supabase.table("profiles").select("first_name, last_name, email").eq("id", pr['created_by']).execute()
+                                        if usr_resp.data:
+                                            u = usr_resp.data[0]
+                                            author_name = f"{u.get('first_name','')} {u.get('last_name','')}"
+                                            if len(author_name.strip()) < 2: author_name = u.get('email')
+                                    except:
+                                        pass
+                                
+                                st.caption(f"📅 **{fmt_time}** (Київ)")
+                                st.caption(f"👤 **{author_name}**")
+
+                            # Редагування HTML
+                            with st.expander("✏️ Редагувати HTML код"):
+                                st.info("Ви можете скопіювати цей код, відредагувати його в зовнішньому редакторі і вставити назад.")
+                                new_html = st.text_area("HTML Source", value=pr['html_content'], height=300, key=f"edit_area_{pr['id']}")
+                            
+                            # Попередній перегляд (Preview)
+                            if st.checkbox("👁️ Попередній перегляд звіту", key=f"preview_chk_{pr['id']}"):
+                                components.html(new_html, height=600, scrolling=True)
+
+                            # Дії
+                            col_actions = st.columns(4)
+                            with col_actions[0]:
+                                if st.button("✅ Опублікувати", key=f"pub_{pr['id']}", type="primary"):
+                                    supabase.table("reports").update({"status": "published", "html_content": new_html}).eq("id", pr['id']).execute()
+                                    st.success("Опубліковано!")
+                                    st.rerun()
+                            
+                            with col_actions[1]:
+                                if st.button("💾 Зберегти зміни", key=f"save_{pr['id']}"):
+                                    supabase.table("reports").update({"html_content": new_html}).eq("id", pr['id']).execute()
+                                    st.success("Збережено!")
+                                    st.rerun()
+                            
+                            with col_actions[3]:
+                                if st.button("🗑️ Видалити", key=f"del_{pr['id']}", type="secondary"):
+                                    supabase.table("reports").delete().eq("id", pr['id']).execute()
+                                    st.warning("Видалено.")
+                                    st.rerun()
+
+            except Exception as e:
+                st.error(f"Помилка в адмінці: {e}")
 
 def show_dashboard():
     """
