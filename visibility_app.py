@@ -1658,14 +1658,17 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    - ЛОГІКА: Вкладена структура (JSON), Smart Target, Whitelist check.
-    - ДИЗАЙН: Повернуто фірмовий стиль (зелений фон, кольорові рамки, Golca/Montserrat).
-    - ТАБЛИЦІ: Повні списки конкурентів та джерел.
+    ФІНАЛЬНА ВЕРСІЯ:
+    1. Логіка розрахунку метрик повністю ізольована для кожного запиту.
+    2. Smart Target (пошук за назвою) працює для кожного рядка.
+    3. Прибрана підсвітка бренду в тексті.
+    4. Таблиці та метрики відображаються коректно (без нулів там, де є дані).
     """
     import pandas as pd
     from datetime import datetime
     import re
     from urllib.parse import urlparse
+    from collections import Counter
 
     current_date = datetime.now().strftime('%d.%m.%Y')
 
@@ -1698,9 +1701,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         txt = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', txt)
         txt = txt.replace('* ', '<br>• ')
         txt = txt.replace('\n', '<br>')
-        if project_name:
-             target_short = project_name.split(' ')[0]
-             txt = re.sub(f"(?i){re.escape(target_short)}", f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{target_short}</span>", txt)
+        # Підсвітка бренду ВИДАЛЕНА за вашим запитом
         return txt
 
     # --- UI Mapping ---
@@ -1722,7 +1723,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     data_by_provider = {}
     target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
 
-    # Pre-process loop
+    # Pre-process loop (GLOBAL PREP)
     for scan in scans_data:
         prov_ui = get_ui_provider(scan.get('provider', 'Other'))
         if prov_ui not in data_by_provider:
@@ -1733,10 +1734,12 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         processed_mentions = []
         for m in mentions:
             b_name = str(m.get('brand_name', '')).lower().strip()
+            # Check DB flag
             is_db_flag = str(m.get('is_my_brand', '')).lower() in ['true', '1', 't', 'yes', 'on']
-            is_target = is_db_flag or (target_norm in b_name if target_norm else False)
+            # Check Text match (Smart Target)
+            is_text_match = (target_norm in b_name) if target_norm else False
             
-            m['is_real_target'] = is_target
+            m['is_real_target'] = is_db_flag or is_text_match
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             processed_mentions.append(m)
@@ -1756,7 +1759,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
 
     providers_ui = sorted(data_by_provider.keys())
 
-    # --- CSS (ПОВЕРНУЛИ ОРИГІНАЛЬНИЙ СТИЛЬ) ---
+    # --- CSS ---
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
     * { box-sizing: border-box; }
@@ -1821,7 +1824,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
-    # JS
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1887,7 +1889,7 @@ __JS_BLOCK__
     tabs_content_html = ""
     js_charts_code = ""
 
-    # Text Literals
+    # Tooltips
     tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
     tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси."
     tt_sent = "Тональність, у якій ШІ описує бренд."
@@ -1928,7 +1930,7 @@ __JS_BLOCK__
             off_lnk = len(df_s_all[df_s_all['is_official_calc'] == True])
             if total_lnk > 0: off_pct = (off_lnk / total_lnk * 100)
             
-        # 3. Brand Coverage
+        # 3. Brand Cov
         brand_cov = 0
         scans_present = 0
         for s in provider_scans:
@@ -1944,7 +1946,7 @@ __JS_BLOCK__
              if found_link: scans_link += 1
         if total_queries > 0: domain_cov = (scans_link / total_queries * 100)
 
-        # 5. Avg Position
+        # 5. Avg Pos
         avg_pos = 0
         if not df_m_all.empty:
             my_ranks = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['rank_position'] > 0)]['rank_position']
@@ -1966,8 +1968,6 @@ __JS_BLOCK__
                 """
 
         # --- SUMMARY TABLES (FULL) ---
-        
-        # A. Competitors (Full)
         summary_competitors_html = ""
         if not df_m_all.empty:
             comp_grp = df_m_all.groupby('brand_name').agg(
@@ -1975,7 +1975,6 @@ __JS_BLOCK__
                 avg_pos=('rank_position', lambda x: x[x>0].mean() if not x[x>0].empty else 0),
                 sentiment=('sentiment_score', lambda x: x.mode()[0] if not x.empty else 'Не згадано')
             ).reset_index()
-            # Sort by count
             comp_grp = comp_grp[comp_grp['total_mentions'] > 0].sort_values('total_mentions', ascending=False)
             
             rows = ""
@@ -1987,10 +1986,9 @@ __JS_BLOCK__
                 summary_competitors_html = f'''
                 <div class="summary-section">
                     <div class="summary-header">🏆 Конкурентний аналіз</div>
-                    <div class="table-responsive"><table class="summary-table"><thead><tr><th>Бренд</th><th>Згадок</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{rows}</tbody></table></div>
+                    <div class="table-responsive"><table class="summary-table"><thead><tr><th>Бренд</th><th>Згадок</th><th>Настрій</th><th>Позиція</th></tr></thead><tbody>{rows}</tbody></table></div>
                 </div>'''
             
-        # B. Official Links (Full)
         summary_links_html = ""
         if not df_s_all.empty:
             off_links = df_s_all[df_s_all['is_official_calc'] == True]
@@ -2006,7 +2004,6 @@ __JS_BLOCK__
                     <div class="table-responsive"><table class="summary-table"><thead><tr><th>URL</th><th>Кількість</th></tr></thead><tbody>{rows}</tbody></table></div>
                 </div>'''
 
-        # C. Domain Ranking (Full)
         summary_domains_html = ""
         if not df_s_all.empty:
             dom_grp = df_s_all.groupby('domain_clean').size().reset_index(name='count').sort_values('count', ascending=False)
@@ -2075,7 +2072,6 @@ __JS_BLOCK__
             if not loc_mentions.empty or not loc_sources.empty:
                 details_html += '<div class="detail-charts-wrapper">'
                 
-                # Brands
                 if not loc_mentions.empty:
                     rows_b = ""
                     loc_mentions['t_int'] = loc_mentions['is_real_target'].astype(int)
@@ -2092,7 +2088,6 @@ __JS_BLOCK__
                     else:
                         details_html += '<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div style="font-size:12px; color:#999; padding:5px;">Брендів не знайдено</div></div>'
 
-                # Sources
                 if not loc_sources.empty:
                     rows_s = ""
                     for _, s in loc_sources.iterrows():
