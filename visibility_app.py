@@ -1658,10 +1658,9 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    - Використовує Smart Target (пошук за назвою + прапорець).
-    - Перевіряє URL на належність до Whitelist (official_assets).
-    - Рахує метрики глобально для кожної вкладки.
-    - Відтворює дизайн зі скріншотів.
+    - ЛОГІКА: Вкладена структура (JSON), Smart Target, Whitelist check.
+    - ДИЗАЙН: Повернуто фірмовий стиль (зелений фон, кольорові рамки, Golca/Montserrat).
+    - ТАБЛИЦІ: Повні списки конкурентів та джерел.
     """
     import pandas as pd
     from datetime import datetime
@@ -1670,7 +1669,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
 
     current_date = datetime.now().strftime('%d.%m.%Y')
 
-    # --- HELPERS ---
+    # --- Helpers ---
     def safe_int(val):
         try: return int(float(val))
         except: return 0
@@ -1686,7 +1685,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         try:
             url_lower = str(url).lower()
             for domain in domains_list:
-                # Очищаємо домен від http/www
                 clean_d = str(domain).lower().replace('https://', '').replace('http://', '').replace('www.', '').strip()
                 if clean_d and clean_d in url_lower:
                     return True
@@ -1702,9 +1700,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         txt = txt.replace('\n', '<br>')
         if project_name:
              target_short = project_name.split(' ')[0]
-             # Case-insensitive highlight
-             pattern = re.compile(re.escape(target_short), re.IGNORECASE)
-             txt = pattern.sub(f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{target_short}</span>", txt)
+             txt = re.sub(f"(?i){re.escape(target_short)}", f"<span style='background-color:#dcfce7; color:#166534; font-weight:bold; padding:0 4px; border-radius:4px;'>{target_short}</span>", txt)
         return txt
 
     # --- UI Mapping ---
@@ -1722,33 +1718,31 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             if k in p_str: return v
         return str(p).capitalize()
 
-    # --- PRE-PROCESS DATA ---
+    # --- Group Data ---
     data_by_provider = {}
     target_norm = str(project_name).lower().strip().split(' ')[0] if project_name else ""
 
+    # Pre-process loop
     for scan in scans_data:
         prov_ui = get_ui_provider(scan.get('provider', 'Other'))
         if prov_ui not in data_by_provider:
             data_by_provider[prov_ui] = []
         
-        # 1. Mentions Processing (Smart Target Logic)
+        # 1. Mentions Logic
         mentions = scan.get('brand_mentions', [])
         processed_mentions = []
         for m in mentions:
             b_name = str(m.get('brand_name', '')).lower().strip()
-            
-            # Check DB Flag
             is_db_flag = str(m.get('is_my_brand', '')).lower() in ['true', '1', 't', 'yes', 'on']
-            # Check Name Match
-            is_text_match = (target_norm in b_name) if target_norm else False
+            is_target = is_db_flag or (target_norm in b_name if target_norm else False)
             
-            m['is_real_target'] = is_db_flag or is_text_match
+            m['is_real_target'] = is_target
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             processed_mentions.append(m)
         scan['brand_mentions'] = processed_mentions
 
-        # 2. Sources Processing (Whitelist Check)
+        # 2. Sources Logic
         sources = scan.get('extracted_sources', [])
         processed_sources = []
         for s in sources:
@@ -1762,12 +1756,12 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
 
     providers_ui = sorted(data_by_provider.keys())
 
-    # --- CSS ---
+    # --- CSS (ПОВЕРНУЛИ ОРИГІНАЛЬНИЙ СТИЛЬ) ---
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 20px; background-color: #f8f9fa; font-family: 'Golca', 'Montserrat', sans-serif; color: #333; line-height: 1.6; }
-    .content-card { background: #ffffff; border-radius: 20px; padding: 40px; max-width: 1000px; margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+    body { margin: 0; padding: 20px; background-color: #00d18f; font-family: 'Golca', 'Montserrat', sans-serif; color: #333; line-height: 1.6; }
+    .content-card { background: #ffffff; border-radius: 20px; padding: 40px; max-width: 1000px; margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.15); }
     .virshi-logo-container { text-align: center; margin: 0 auto 20px auto; }
     .logo-img-real { max-width: 150px; height: auto; }
     .report-header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; }
@@ -1781,16 +1775,15 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* KPI CARDS (Global) */
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
     .kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; position: relative; min-height: 200px; }
-    .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; justify-content: center; width: 100%; text-align:center; }
+    .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; justify-content: center; width: 100%; }
     .kpi-big-num { font-size: 28px; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
-    .chart-container { position: relative; width: 120px; height: 120px; margin: auto; }
+    .chart-container { position: relative; width: 130px; height: 130px; margin: auto; }
     .kpi-tooltip { visibility: hidden; opacity: 0; width: 220px; background-color: #2c3e50; color: #fff; text-align: center; border-radius: 8px; padding: 10px; position: absolute; z-index: 100; bottom: 105%; left: 50%; transform: translateX(-50%); font-size: 11px; transition: opacity 0.3s; pointer-events: none; }
     .kpi-box:hover .kpi-tooltip { visibility: visible; opacity: 1; }
 
-    /* SUMMARY TABLES */
+    /* SUMMARY TABLES STYLE */
     .summary-section { margin-top: 40px; margin-bottom: 30px; }
     .summary-header { font-size: 18px; font-weight: 800; color: #2c3e50; border-left: 5px solid #00d18f; padding-left: 15px; margin-bottom: 15px; }
     table.summary-table { width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #eee; }
@@ -1800,7 +1793,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
 
     h3 { font-size: 20px; color: #2c3e50; margin-top: 40px; margin-bottom: 20px; padding-left: 15px; border-left: 5px solid #00d18f; font-weight: 800; }
 
-    /* ACCORDION ITEMS */
     .item-box { border: 2px solid #4DD0E1; border-radius: 15px; margin-bottom: 20px; overflow: hidden; background: #fff; }
     .accordion-trigger { background: #fff; padding: 15px 20px; display: flex; align-items: center; gap: 15px; cursor: pointer; transition: 0.3s; justify-content: space-between; }
     .accordion-trigger:hover { background-color: #f9f9f9; }
@@ -1829,6 +1821,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
+    # JS
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1894,7 +1887,7 @@ __JS_BLOCK__
     tabs_content_html = ""
     js_charts_code = ""
 
-    # Tooltips
+    # Text Literals
     tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
     tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси."
     tt_sent = "Тональність, у якій ШІ описує бренд."
@@ -1902,13 +1895,14 @@ __JS_BLOCK__
     tt_brand_cov = "Відсоток запитів, у яких бренд був згаданий хоча б один раз."
     tt_domain_cov = "Відсоток запитів, у яких ШІ надав клікабельне посилання на ваш домен."
 
+    # --- MAIN LOOP ---
     for i, prov_ui in enumerate(providers_ui):
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
         provider_scans = data_by_provider[prov_ui]
         
-        # --- GLOBAL CALCS ---
+        # --- GLOBAL DATA ---
         all_mentions = []
         all_sources = []
         for s in provider_scans:
@@ -1934,23 +1928,23 @@ __JS_BLOCK__
             off_lnk = len(df_s_all[df_s_all['is_official_calc'] == True])
             if total_lnk > 0: off_pct = (off_lnk / total_lnk * 100)
             
-        # 3. Brand Cov
+        # 3. Brand Coverage
         brand_cov = 0
-        scans_present_count = 0
+        scans_present = 0
         for s in provider_scans:
             found = any(m['is_real_target'] and m['mention_count'] > 0 for m in s['brand_mentions'])
-            if found: scans_present_count += 1
-        if total_queries > 0: brand_cov = (scans_present_count / total_queries * 100)
+            if found: scans_present += 1
+        if total_queries > 0: brand_cov = (scans_present / total_queries * 100)
 
-        # 4. Domain Cov
+        # 4. Domain Coverage
         domain_cov = 0
-        scans_link_count = 0
+        scans_link = 0
         for s in provider_scans:
              found_link = any(src['is_official_calc'] for src in s['extracted_sources'])
-             if found_link: scans_link_count += 1
-        if total_queries > 0: domain_cov = (scans_link_count / total_queries * 100)
+             if found_link: scans_link += 1
+        if total_queries > 0: domain_cov = (scans_link / total_queries * 100)
 
-        # 5. Avg Pos
+        # 5. Avg Position
         avg_pos = 0
         if not df_m_all.empty:
             my_ranks = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['rank_position'] > 0)]['rank_position']
@@ -1973,7 +1967,7 @@ __JS_BLOCK__
 
         # --- SUMMARY TABLES (FULL) ---
         
-        # A. Competitors
+        # A. Competitors (Full)
         summary_competitors_html = ""
         if not df_m_all.empty:
             comp_grp = df_m_all.groupby('brand_name').agg(
@@ -1981,7 +1975,7 @@ __JS_BLOCK__
                 avg_pos=('rank_position', lambda x: x[x>0].mean() if not x[x>0].empty else 0),
                 sentiment=('sentiment_score', lambda x: x.mode()[0] if not x.empty else 'Не згадано')
             ).reset_index()
-            # Сортуємо по кількості
+            # Sort by count
             comp_grp = comp_grp[comp_grp['total_mentions'] > 0].sort_values('total_mentions', ascending=False)
             
             rows = ""
@@ -1993,10 +1987,10 @@ __JS_BLOCK__
                 summary_competitors_html = f'''
                 <div class="summary-section">
                     <div class="summary-header">🏆 Конкурентний аналіз</div>
-                    <div class="table-responsive"><table class="summary-table"><thead><tr><th>Бренд</th><th>Згадок</th><th>Настрій</th><th>Позиція</th></tr></thead><tbody>{rows}</tbody></table></div>
+                    <div class="table-responsive"><table class="summary-table"><thead><tr><th>Бренд</th><th>Згадок</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{rows}</tbody></table></div>
                 </div>'''
             
-        # B. Official Links
+        # B. Official Links (Full)
         summary_links_html = ""
         if not df_s_all.empty:
             off_links = df_s_all[df_s_all['is_official_calc'] == True]
@@ -2012,7 +2006,7 @@ __JS_BLOCK__
                     <div class="table-responsive"><table class="summary-table"><thead><tr><th>URL</th><th>Кількість</th></tr></thead><tbody>{rows}</tbody></table></div>
                 </div>'''
 
-        # C. Domain Ranking
+        # C. Domain Ranking (Full)
         summary_domains_html = ""
         if not df_s_all.empty:
             dom_grp = df_s_all.groupby('domain_clean').size().reset_index(name='count').sort_values('count', ascending=False)
@@ -2050,14 +2044,14 @@ __JS_BLOCK__
             <div class="accordion-wrapper">
         '''
 
-        # --- QUERY LOOP ---
+        # --- LOOPS (Accordion) ---
         for idx, scan_row in enumerate(provider_scans):
             q_text = scan_row.get('keyword_text', 'Запит')
             
             loc_mentions = pd.DataFrame(scan_row['brand_mentions'])
             loc_sources = pd.DataFrame(scan_row['extracted_sources'])
             
-            # Local Math
+            # --- Local Metrics ---
             l_tot = loc_mentions['mention_count'].sum() if not loc_mentions.empty else 0
             my_row = loc_mentions[loc_mentions['is_real_target'] == True] if not loc_mentions.empty else pd.DataFrame()
             l_my = my_row['mention_count'].sum() if not my_row.empty else 0
