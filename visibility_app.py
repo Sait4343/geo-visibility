@@ -845,7 +845,112 @@ def onboarding_wizard():
                             st.error(f"Помилка створення проекту: {e}")
                     else:
                         st.warning("Оберіть хоча б один запит.")
-                    
+
+
+# =========================
+# 6. render_sidebar
+# =========================
+def render_sidebar():
+    with st.sidebar:
+        # --- ЛОГОТИП ---
+        # Замініть на ваш реальний шлях до лого або URL
+        st.image("https://raw.githubusercontent.com/virshi-ai/image/39ba460ec649893b9495427aa102420beb1fa48d/virshi-op_logo-main.png", width=150)
+        
+        st.markdown("---")
+        
+        # --- ІНФО ПРО КОРИСТУВАЧА ---
+        user_email = st.session_state.get("user", {}).get("email", "User")
+        user_role = st.session_state.get("role", "user")
+        
+        st.caption(f"Ви авторизовані як:\n**{user_role.capitalize()}**")
+        st.caption(user_email)
+        
+        st.markdown("---")
+
+        # --- ВИБІР ПРОЕКТУ (Критично важливо для меню) ---
+        # Перевіряємо, чи завантажені проекти. Якщо ні - пробуємо завантажити.
+        if "projects" not in st.session_state or not st.session_state["projects"]:
+            try:
+                # Тут ваш запит до Supabase
+                response = st.session_state['supabase'].table("projects").select("*").execute()
+                st.session_state["projects"] = response.data
+            except:
+                st.session_state["projects"] = []
+
+        projects = st.session_state["projects"]
+        
+        # Якщо проектів немає
+        if not projects:
+            st.warning("Проекти не знайдені")
+        else:
+            # Знаходимо індекс поточного проекту
+            project_names = [p['brand_name'] for p in projects]
+            current_p = st.session_state.get("current_project", {})
+            default_index = 0
+            
+            if current_p:
+                try:
+                    default_index = project_names.index(current_p['brand_name'])
+                except ValueError:
+                    default_index = 0
+
+            selected_project_name = st.selectbox(
+                "Оберіть проект:", 
+                project_names, 
+                index=default_index,
+                key="sidebar_project_select"
+            )
+            
+            # Оновлюємо поточний проект в сесії, якщо він змінився
+            new_project = next((p for p in projects if p['brand_name'] == selected_project_name), None)
+            if new_project and (not current_p or current_p['id'] != new_project['id']):
+                st.session_state["current_project"] = new_project
+                st.rerun() # Перезавантажуємо, щоб оновити основну частину
+
+        st.markdown("### 🖥 Меню")
+        
+        # --- НАВІГАЦІЯ (КНОПКИ) ---
+        # Використовуємо callback, щоб уникнути затримок
+        
+        def set_page(page_name):
+            st.session_state["current_page"] = page_name
+            
+        # Стиль кнопок меню (щоб виглядали як на скріншоті, використовуємо звичайні кнопки, але логічно розбиті)
+        
+        if st.button("🚀 Дашборд", use_container_width=True):
+            set_page("Дашборд")
+            st.rerun()
+            
+        if st.button("📝 Перелік запитів", use_container_width=True):
+            set_page("Перелік запитів")
+            st.rerun()
+            
+        if st.button("🔗 Джерела", use_container_width=True):
+            set_page("Джерела")
+            st.rerun()
+            
+        if st.button("👥 Конкуренти", use_container_width=True):
+            set_page("Конкуренти")
+            st.rerun()
+
+        # Активна кнопка (підсвітка - зелена)
+        curr = st.session_state.get("current_page", "Дашборд")
+        if curr == "Звіти":
+            st.markdown(f"""<style>div[data-testid="stButton"] button {{ background-color: transparent; border: none; }} </style>""", unsafe_allow_html=True) 
+
+        if st.button("📊 Звіти", use_container_width=True, type="primary" if curr == "Звіти" else "secondary"):
+            set_page("Звіти")
+            st.rerun()
+
+        st.markdown("---")
+        
+        # --- ФУТЕР ---
+        st.caption("Потрібна допомога?")
+        st.markdown("📧 [hi@virshi.ai](mailto:hi@virshi.ai)")
+        
+        if st.button("🚪 Вийти з акаунту"):
+            st.session_state.clear()
+            st.rerun()
 # =========================
 # 6. DASHBOARD
 # =========================
@@ -4917,17 +5022,18 @@ def sidebar_menu():
 
 def show_auth_page():
     """
-    Renders the centered authentication card (Login / Register) with Virshi styling.
+    Відображає сторінку входу/реєстрації з дизайном Virshi.
+    Викликає глобальні функції login_user та register_user.
     """
-    # Apply custom CSS for the auth page
+    # Стилізація сторінки
     st.markdown("""
     <style>
-        /* General Page Background */
+        /* Фон сторінки */
         .stApp {
             background-color: #F4F7F6;
         }
         
-        /* Center the form container */
+        /* Центрування контейнера форми */
         [data-testid="stForm"] {
             background-color: #ffffff;
             padding: 40px;
@@ -4936,14 +5042,14 @@ def show_auth_page():
             border: 1px solid #EAEAEA;
         }
 
-        /* Input fields styling */
+        /* Стилізація полів вводу */
         .stTextInput > div > div > input {
             border-radius: 8px;
             border: 1px solid #e0e0e0;
             padding: 10px;
         }
 
-        /* Primary Button (Virshi Green) */
+        /* Основна кнопка (Virshi Green) */
         .stButton > button {
             width: 100%;
             background-color: #00C896 !important;
@@ -4958,7 +5064,7 @@ def show_auth_page():
             background-color: #00a87e !important;
         }
         
-        /* Tabs Styling */
+        /* Стилізація вкладок */
         .stTabs [data-baseweb="tab-list"] {
             gap: 20px;
             justify-content: center;
@@ -4974,12 +5080,11 @@ def show_auth_page():
     </style>
     """, unsafe_allow_html=True)
 
-    # Centering Layout using Columns
-    # [Empty Left] [Center Card] [Empty Right]
+    # Розмітка колонок для центрування
     col_l, col_center, col_r = st.columns([1, 1.5, 1])
 
     with col_center:
-        # Logo Section
+        # Логотип
         st.markdown(
             '<div style="text-align: center; margin-bottom: 20px;">'
             '<img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="180">'
@@ -4990,49 +5095,56 @@ def show_auth_page():
         st.markdown("<h3 style='text-align: center; color: #333; margin-bottom: 5px;'>Welcome to Virshi</h3>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: #666; margin-bottom: 30px;'>Sign in to manage your AI visibility</p>", unsafe_allow_html=True)
 
-        # Tabs for Login / Register
-        tab_login, tab_register = st.tabs(["🔑 Sign In", "📝 Sign Up"])
+        # Вкладки Вхід / Реєстрація
+        tab_login, tab_register = st.tabs(["🔑 Вхід", "📝 Реєстрація"])
 
-        # --- LOGIN TAB ---
+        # --- ВКЛАДКА ВХОДУ ---
         with tab_login:
             with st.form("login_form"):
                 email = st.text_input("Email", placeholder="name@company.com")
-                password = st.text_input("Password", type="password", placeholder="••••••••")
+                password = st.text_input("Пароль", type="password", placeholder="••••••••")
                 
-                st.write("") # Spacer
+                st.write("") # Відступ
                 
-                submit = st.form_submit_button("Sign In", use_container_width=True)
+                submit = st.form_submit_button("Увійти", use_container_width=True)
                 
                 if submit:
                     if not email or not password:
-                        st.warning("Please fill in all fields.")
+                        st.warning("Будь ласка, заповніть всі поля.")
                     else:
-                        login_user(email, password)
+                        # Виклик вашої реальної функції
+                        if 'login_user' in globals():
+                            login_user(email, password)
+                        else:
+                            st.error("Функція входу не знайдена.")
 
-        # --- REGISTER TAB ---
+        # --- ВКЛАДКА РЕЄСТРАЦІЇ ---
         with tab_register:
             with st.form("register_form"):
                 c1, c2 = st.columns(2)
                 with c1:
-                    first_name = st.text_input("First Name", placeholder="Ivan")
+                    first_name = st.text_input("Ім'я", placeholder="Іван")
                 with c2:
-                    last_name = st.text_input("Last Name", placeholder="Petrenko")
+                    last_name = st.text_input("Прізвище", placeholder="Петренко")
                 
                 new_email = st.text_input("Email", placeholder="name@company.com")
-                new_password = st.text_input("Password", type="password", placeholder="••••••••", help="Min 6 chars")
+                new_password = st.text_input("Пароль", type="password", placeholder="••••••••", help="Мін. 6 символів")
                 
-                st.write("") # Spacer
+                st.write("") # Відступ
                 
-                submit_reg = st.form_submit_button("Create Account", use_container_width=True)
+                submit_reg = st.form_submit_button("Створити акаунт", use_container_width=True)
                 
                 if submit_reg:
                     if not new_email or not new_password or not first_name:
-                        st.warning("Please fill in required fields.")
+                        st.warning("Будь ласка, заповніть обов'язкові поля.")
                     elif len(new_password) < 6:
-                        st.warning("Password must be at least 6 characters.")
+                        st.warning("Пароль має містити щонайменше 6 символів.")
                     else:
-                        register_user(new_email, new_password, first_name, last_name)
-
+                        # Виклик вашої реальної функції
+                        if 'register_user' in globals():
+                            register_user(new_email, new_password, first_name, last_name)
+                        else:
+                            st.error("Функція реєстрації не знайдена.")
 
 
 def show_admin_page():
@@ -5831,90 +5943,101 @@ def show_chat_page():
         
             
 def main():
-    # 1. Session Check
+    # 1. Ініціалізація та перевірка сесії
     if 'check_session' in globals():
         check_session()
 
-    # 2. If not logged in -> Show Auth Page
+    # 2. ПЕРЕВІРКА АВТОРИЗАЦІЇ
+    # Якщо користувача немає в сесії - показуємо вхід і зупиняємо виконання
     if not st.session_state.get("user"):
-        # Переконайтеся, що show_auth_page визначена
         if 'show_auth_page' in globals():
             show_auth_page()
         else:
             st.error("Функція авторизації не знайдена.")
-        return
+        return  # <--- ВАЖЛИВО: Зупиняємо скрипт, щоб не малювати зайвого
 
-    # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ
+    # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ (якщо їх ще немає)
     if not st.session_state.get("current_project"):
         try:
             user_id = st.session_state["user"].id
-            resp = supabase.table("projects").select("*").eq("user_id", user_id).execute()
-            if resp.data:
-                # Беремо перший знайдений проект
-                st.session_state["current_project"] = resp.data[0]
-                st.rerun()
-        except Exception:
+            # Використовуємо глобальний supabase об'єкт
+            if 'supabase' in globals() or 'supabase' in st.session_state:
+                sb_client = globals().get('supabase') or st.session_state.get('supabase')
+                resp = sb_client.table("projects").select("*").eq("user_id", user_id).execute()
+                
+                if resp.data:
+                    # Беремо перший знайдений проект і зберігаємо
+                    st.session_state["current_project"] = resp.data[0]
+                    st.rerun()  # <--- Перезавантажуємо, щоб меню одразу побачило проект
+        except Exception as e:
+            # Можна розкоментувати для дебагу: st.error(f"Error fetching project: {e}")
             pass
 
-    # 4. ЛОГІКА ONBOARDING
-    # Якщо проекту немає і це не адмін
+    # 4. ЛОГІКА ONBOARDING (Якщо проекту все ще немає)
     user_role = st.session_state.get("role", "user")
     
     if st.session_state.get("current_project") is None and user_role not in ["admin", "super_admin"]:
+        # Сайдбар для онбордингу (спрощений)
         with st.sidebar:
-            # Логотип
             st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150)
-            if st.button("Вийти"):
-                logout()
-        
-        # Запуск майстра
+            st.markdown("---")
+            if st.button("Вийти", use_container_width=True):
+                # Припускаємо, що logout() чистить сесію
+                if 'logout' in globals(): logout()
+                
+        # Тіло онбордингу
         if 'onboarding_wizard' in globals():
             onboarding_wizard()
         else:
-            st.error("Onboarding Wizard not found.")
+            st.info("Вітаємо! Створіть свій перший проект.")
+        
+        return # <--- Зупиняємо скрипт, далі не йдемо
+
+    # =========================================================
+    # 5. ОСНОВНИЙ ДОДАТОК (Тільки якщо є User і Project)
+    # =========================================================
     
-    # 5. ОСНОВНИЙ ДОДАТОК
-    else:
-        # Виклик меню
+    # 1. Спочатку малюємо меню (щоб воно було завжди)
+    if 'sidebar_menu' in globals():
         page = sidebar_menu()
+    else:
+        st.error("Помилка: Функція sidebar_menu не знайдена")
+        page = "Дашборд"
 
-        # Роутинг сторінок
-        if page == "Дашборд":
-            show_dashboard()
-        elif page == "Перелік запитів":
-            show_keywords_page()
-        elif page == "Джерела":
-            show_sources_page()
-        elif page == "Конкуренти":
-            # Якщо окремої сторінки немає, можна використати частину дашборду або заглушку
-            if 'show_competitors_page' in globals():
-                show_competitors_page()
-            else:
-                st.info("Розділ у розробці (див. Дашборд).")
-        elif page == "Рекомендації":
-            show_recommendations_page()
+    # 2. Роутинг сторінок
+    if page == "Дашборд":
+        if 'show_dashboard' in globals(): show_dashboard()
+        
+    elif page == "Перелік запитів":
+        if 'show_keywords_page' in globals(): show_keywords_page()
+        
+    elif page == "Джерела":
+        if 'show_sources_page' in globals(): show_sources_page()
+        
+    elif page == "Конкуренти":
+        if 'show_competitors_page' in globals(): show_competitors_page()
+        else: st.info("Розділ 'Конкуренти' в розробці.")
             
-        # --- НОВІ СТОРІНКИ ---
-        elif page == "Історія сканувань":
-            if 'show_history_page' in globals(): show_history_page()
-            else: st.warning("Функція show_history_page не знайдена.")
-            
-        elif page == "Звіти":
-            show_reports_page()
-            
-        elif page == "FAQ":
-            if 'show_faq_page' in globals(): show_faq_page()
-            else: st.warning("Функція show_faq_page не знайдена.")
-        # ---------------------
+    elif page == "Рекомендації":
+        if 'show_recommendations_page' in globals(): show_recommendations_page()
 
-        elif page == "GPT-Visibility":
-            show_chat_page()
-            
-        elif page == "Адмін":
-            if user_role in ["admin", "super_admin"]:
-                show_admin_page()
-            else:
-                st.error("Доступ заборонено.")
+    elif page == "Історія сканувань":
+        if 'show_history_page' in globals(): show_history_page()
+        
+    elif page == "Звіти":
+        if 'show_reports_page' in globals(): show_reports_page()
+        
+    elif page == "FAQ":
+        if 'show_faq_page' in globals(): show_faq_page()
+
+    elif page == "GPT-Visibility":
+        if 'show_chat_page' in globals(): show_chat_page()
+        
+    elif page == "Адмін":
+        if user_role in ["admin", "super_admin"]:
+            if 'show_admin_page' in globals(): show_admin_page()
+        else:
+            st.error("Доступ заборонено.")
 
 if __name__ == "__main__":
     main()
