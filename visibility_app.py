@@ -5083,7 +5083,7 @@ def show_my_projects_page():
             save_only = b1.button("💾 Зберегти проект", use_container_width=True)
             save_run = b2.button("🚀 Зберегти та Запустити", type="primary", use_container_width=True)
 
-if save_only or save_run:
+            if save_only or save_run:
             final_project_name = new_proj_name_val if new_proj_name_val else new_brand_val
             
             if new_domain_val and new_industry_val and new_brand_val:
