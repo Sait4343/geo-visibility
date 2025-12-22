@@ -5085,20 +5085,16 @@ def show_my_projects_page():
 
         if save_only or save_run:
             final_project_name = new_proj_name_val if new_proj_name_val else new_brand_val
+            
             if new_domain_val and new_industry_val and new_brand_val:
                 try:
-                    user_id = st.session_state.user.id
+                    uid = st.session_state.user.id
                     
+                    # 1. Створюємо проект в БД
                     new_proj_data = {
-                        "user_id": user_id,
-                        "brand_name": new_brand_val,
-                        "project_name": final_project_name,
-                        "domain": new_domain_val,
-                        "industry": new_industry_val,
-                        "products": new_products_val,
-                        "status": "trial",
-                        "allow_cron": True if save_run else False,
-                        "region": new_region_val,
+                        "user_id": uid, "brand_name": new_brand_val, "project_name": final_project_name,
+                        "domain": new_domain_val, "industry": new_industry_val, "products": new_products_val,
+                        "status": "trial", "allow_cron": True if save_run else False, "region": new_region_val,
                         "created_at": datetime.now().isoformat()
                     }
                     res_proj = supabase.table("projects").insert(new_proj_data).execute()
@@ -5106,58 +5102,62 @@ def show_my_projects_page():
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
                         
+                        # 2. Додаємо домен в Whitelist
                         try:
                             clean_d = new_domain_val.replace("https://", "").replace("http://", "").replace("www.", "").strip().rstrip("/")
                             supabase.table("official_assets").insert({"project_id": new_proj_id, "domain_or_url": clean_d, "type": "website"}).execute()
                         except: pass
 
+                        # 3. Додаємо ключові слова
                         final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
                         if final_kws_clean:
                             kws_data = [{"project_id": new_proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_clean]
                             supabase.table("keywords").insert(kws_data).execute()
 
+                        # 4. Встановлюємо поточний проект в сесію (Це перекине користувача на нормальний вигляд)
+                        st.session_state["current_project"] = res_proj.data[0]
+
+                        # 5. Логіка запуску аналізу
                         if save_run:
-                            st.session_state["current_project"] = res_proj.data[0]
                             if 'n8n_trigger_analysis' in globals():
-                                # --- НОВА ЛОГІКА: ВІДПРАВКА ПО ОДНОМУ ---
-                                progress_text = "Ініціалізація сканування..."
-                                my_bar = st.progress(0, text=progress_text)
-                                
-                                # Рахуємо загальну кількість запитів (Кількість слів * Кількість моделей)
+                                # --- ЦИКЛ ВІДПРАВКИ (по одному запиту) ---
+                                my_bar = st.progress(0, text="Підготовка до запуску...")
                                 total_ops = len(final_kws_clean) * len(selected_llms)
                                 current_op = 0
                                 
                                 for kw_item in final_kws_clean:
                                     for model_item in selected_llms:
                                         current_op += 1
-                                        # Оновлюємо прогрес
-                                        prog_val = min(current_op / total_ops, 1.0)
-                                        my_bar.progress(prog_val, text=f"Аналіз: {kw_item} ({model_item})...")
+                                        prog_val = min(current_op / (total_ops if total_ops > 0 else 1), 1.0)
+                                        my_bar.progress(prog_val, text=f"🚀 Аналіз: {kw_item} ({model_item})...")
                                         
-                                        # Відправляємо 1 запит = 1 слово + 1 модель
                                         n8n_trigger_analysis(
                                             project_id=new_proj_id, 
                                             keywords=[kw_item], 
                                             brand_name=new_brand_val, 
                                             models=[model_item]
                                         )
-                                        # Пауза, щоб не перевантажити систему
-                                        time.sleep(0.7)
+                                        time.sleep(0.2) # Невелика пауза
                                 
-                                my_bar.progress(1.0, text="✅ Всі запити успішно відправлені!")
-                                st.success("✅ Проект збережено і аналіз запущено!")
+                                my_bar.progress(1.0, text="Готово!")
+                                st.toast(f"✅ Проект '{new_brand_val}' створено! Аналіз запущено.", icon="🚀")
                             else:
                                 st.error("Функція аналізу не знайдена.")
                         else:
-                            st.success("✅ Проект успішно збережено!")
+                            st.toast(f"✅ Проект '{new_brand_val}' успішно збережено!", icon="💾")
 
+                        # 6. Очищення форми
                         st.session_state["new_proj_keywords"] = []
                         st.session_state["my_proj_reset_id"] += 1
-                        st.session_state["current_project"] = res_proj.data[0]
-                        time.sleep(2)
+                        
+                        # 7. Перезавантаження (Користувач побачить новий проект у вкладці "Активні")
+                        time.sleep(1.5) 
                         st.rerun()
-                except Exception as e: st.error(f"Помилка створення: {e}")
-            else: st.warning("⚠️ Заповніть обов'язкові поля: Бренд, Домен, Галузь.")
+
+                except Exception as e: 
+                    st.error(f"Помилка створення: {e}")
+            else: 
+                st.warning("⚠️ Заповніть обов'язкові поля: Бренд, Домен, Галузь.")
                 
 
 def show_history_page():
