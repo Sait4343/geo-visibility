@@ -4827,12 +4827,28 @@ def show_my_projects_page():
 
                         # --- 1. Лого + Назва (Editable) ---
                         with col_left:
+                            # Логіка отримання чистого домену
+                            clean_d = None
+                            if p.get('domain'):
+                                # Очищаємо домен від зайвого
+                                clean_d = p['domain'].lower().replace('https://', '').replace('http://', '').replace('www.', '').split('/')[0]
+
+                            # Формування основного URL логотипу
+                            logo_url_src = None
                             if p.get('logo_url'):
-                                st.image(p['logo_url'], width=80)
-                            elif p.get('domain'):
-                                clean_d = p['domain'].replace('https://', '').replace('www.', '').split('/')[0]
-                                l_url = f"https://cdn.brandfetch.io/{clean_d}"
-                                st.image(l_url, width=80)
+                                logo_url_src = p['logo_url']
+                            elif clean_d:
+                                logo_url_src = f"https://cdn.brandfetch.io/{clean_d}"
+                            
+                            # Резервний логотип (Google Favicon)
+                            backup_logo = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128" if clean_d else ""
+
+                            # Відображення через HTML (ВИПРАВЛЕНО СИНТАКСИС)
+                            if logo_url_src:
+                                # Пишемо в один рядок, використовуючи одинарні лапки для Python і подвійні для HTML
+                                # Для JS всередині HTML використовуємо екрановані лапки \'
+                                img_html = f'<img src="{logo_url_src}" style="width: 80px; height: 80px; object-fit: contain; border-radius: 8px; border: 1px solid #eee; padding: 5px;" onerror="this.onerror=null; this.src=\'{backup_logo}\';">'
+                                st.markdown(img_html, unsafe_allow_html=True)
                             else:
                                 st.markdown("🖼️ *No Logo*")
                             
