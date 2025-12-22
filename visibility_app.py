@@ -5083,7 +5083,7 @@ def show_my_projects_page():
             save_only = b1.button("💾 Зберегти проект", use_container_width=True)
             save_run = b2.button("🚀 Зберегти та Запустити", type="primary", use_container_width=True)
 
-        if save_only or save_run:
+if save_only or save_run:
             final_project_name = new_proj_name_val if new_proj_name_val else new_brand_val
             
             if new_domain_val and new_industry_val and new_brand_val:
@@ -5114,10 +5114,10 @@ def show_my_projects_page():
                             kws_data = [{"project_id": new_proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_clean]
                             supabase.table("keywords").insert(kws_data).execute()
 
-                        # 4. Встановлюємо поточний проект в сесію (Це перекине користувача на нормальний вигляд)
+                        # 4. Встановлюємо поточний проект в сесію
                         st.session_state["current_project"] = res_proj.data[0]
 
-                        # 5. Логіка запуску аналізу
+                        # 5. Логіка запуску аналізу (поштучна відправка)
                         if save_run:
                             if 'n8n_trigger_analysis' in globals():
                                 # --- ЦИКЛ ВІДПРАВКИ (по одному запиту) ---
@@ -5150,7 +5150,10 @@ def show_my_projects_page():
                         st.session_state["new_proj_keywords"] = []
                         st.session_state["my_proj_reset_id"] += 1
                         
-                        # 7. Перезавантаження (Користувач побачить новий проект у вкладці "Активні")
+                        # 🔥 7. ПЕРЕНАПРАВЛЕННЯ НА ВКЛАДКУ "МОЇ ПРОЕКТИ"
+                        st.session_state["force_redirect_to"] = "Мої проекти"
+                        
+                        # 8. Перезавантаження
                         time.sleep(1.5) 
                         st.rerun()
 
