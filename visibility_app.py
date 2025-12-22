@@ -4808,21 +4808,23 @@ def show_my_projects_page():
 
 st.title("📂 Мої проекти")
 
-    # 1. ЗАВАНТАЖУЄМО ПРОЕКТИ (щоб знати, що показувати)
+ # 1. ЗАВАНТАЖУЄМО ПРОЕКТИ
     try:
         projs_resp = supabase.table("projects").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
         projects = projs_resp.data if projs_resp.data else []
     except:
         projects = []
 
-    # Змінна для контейнера, де буде форма створення
+    # =================================================================
+    # 🔥 ЛОГІКА ВІДОБРАЖЕННЯ (TABS vs DIRECT)
+    # =================================================================
+    
     create_form_container = None 
 
-    # 2. ЛОГІКА ВІДОБРАЖЕННЯ
     if projects:
-        # ВАРІАНТ А: Є проекти -> Показуємо вкладки
+        # Є проекти -> Показуємо вкладки
         tab_list, tab_create = st.tabs(["📋 Активні проекти", "➕ Створити проект"])
-        create_form_container = tab_create # Форма буде у другій вкладці
+        create_form_container = tab_create 
 
         # --- ВМІСТ ВКЛАДКИ "СПИСОК ПРОЕКТІВ" ---
         with tab_list:
@@ -4845,6 +4847,7 @@ st.title("📂 Мої проекти")
                         backup_logo = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128" if clean_d else ""
 
                         if logo_url_src:
+                            # Безпечний HTML в один рядок
                             img_html = f'<img src="{logo_url_src}" style="width: 80px; height: 80px; object-fit: contain; border-radius: 8px; border: 1px solid #eee; padding: 5px;" onerror="this.onerror=null; this.src=\'{backup_logo}\';">'
                             st.markdown(img_html, unsafe_allow_html=True)
                         else:
@@ -4853,7 +4856,7 @@ st.title("📂 Мої проекти")
                         st.write("")
                         current_name = p.get('project_name') or p.get('brand_name') or 'Без назви'
                         
-                        if st.session_state.get("edit_proj_id") == p['id']:
+                        if st.session_state["edit_proj_id"] == p['id']:
                             new_p_name = st.text_input("Назва", value=current_name, key=f"edit_inp_{p['id']}", label_visibility="collapsed")
                             c_save, c_canc = st.columns([1, 1])
                             if c_save.button("💾", key=f"save_{p['id']}"):
@@ -4915,11 +4918,12 @@ st.title("📂 Мої проекти")
                             st.session_state["menu_id_counter"] += 1
                             time.sleep(0.7)
                             st.rerun()
+
     else:
-        # ВАРІАНТ Б: Немає проектів -> Немає вкладок, просто контейнер
+        # Немає проектів -> Немає вкладок, просто контейнер
         st.info("👋 Вітаємо! Створіть свій перший проект, щоб почати.")
         create_form_container = st.container()
-
+        
     # ========================================================
     # ТАБ 2: СТВОРЕННЯ ПРОЕКТУ
     # ========================================================
