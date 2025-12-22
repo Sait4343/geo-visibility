@@ -6353,50 +6353,68 @@ def main():
         if 'show_auth_page' in globals():
             show_auth_page()
         else:
-            st.error("Функція авторизації не знайдена.")
-        return
+            st.error("Функція авторизації (show_auth_page) не знайдена.")
+        return  # Зупиняємо скрипт, якщо немає юзера
 
     # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ (якщо ще немає)
+    # Якщо проекту немає в сесії, пробуємо знайти в БД
     if not st.session_state.get("current_project"):
+        found_project = False
         try:
             user_id = st.session_state["user"].id
-            if 'supabase' in globals() or 'supabase' in st.session_state:
-                sb_client = globals().get('supabase') or st.session_state.get('supabase')
+            # Отримуємо клієнт Supabase
+            sb_client = None
+            if 'supabase' in globals():
+                sb_client = globals()['supabase']
+            elif 'supabase' in st.session_state:
+                sb_client = st.session_state['supabase']
+            
+            if sb_client:
                 # Шукаємо проекти користувача
                 resp = sb_client.table("projects").select("*").eq("user_id", user_id).execute()
                 
                 if resp.data:
-                    # Якщо проекти є -> беремо перший і йдемо далі
+                    # Якщо проекти є -> беремо перший і зберігаємо в сесію
                     st.session_state["current_project"] = resp.data[0]
+                    found_project = True
                     st.rerun()
-                else:
-                    # 🔥 ЯКЩО ПРОЕКТІВ НЕМАЄ -> ПЕРЕКИДАЄМО НА СТВОРЕННЯ
-                    # Малюємо сайдбар, щоб можна було вийти
-                    if 'sidebar_menu' in globals():
-                        sidebar_menu()
-                    
-                    # Відкриваємо сторінку "Мої проекти" (яка тепер автоматично покаже вкладку "Створити")
-                    show_my_projects_page()
-                    return # Зупиняємо, щоб не малювати інший контент
         except Exception as e:
-            # st.error(f"Error fetching project: {e}")
+            # Виводимо помилку в консоль сервера, щоб не лякати користувача
+            print(f"[DEBUG] Error fetching project: {e}")
             pass
 
-    # 4. ОСНОВНИЙ ДОДАТОК (Коли є проект)
+        # 🔥 ЛОГІКА ПЕРЕНАПРАВЛЕННЯ ДЛЯ НОВИХ КОРИСТУВАЧІВ
+        # Якщо проект не знайдено (і це не адмін, який може ходити без проектів)
+        user_role = st.session_state.get("role", "user")
+        if not found_project and user_role not in ["admin", "super_admin"]:
+            
+            # 1. Малюємо сайдбар (щоб можна було вийти з акаунту)
+            if 'sidebar_menu' in globals():
+                sidebar_menu()
+            
+            # 2. Примусово відкриваємо сторінку "Мої проекти"
+            # Функція show_my_projects_page сама відкриє вкладку "Створити", бо список пустий
+            if 'show_my_projects_page' in globals():
+                show_my_projects_page()
+            else:
+                st.error("Функція 'show_my_projects_page' не знайдена.")
+            
+            return # ⛔ Зупиняємо виконання, щоб не малювати Дашборд знизу
+
+    # 4. ОСНОВНИЙ ДОДАТОК (Тільки коли є User і Project)
     # ---------------------------------------------------------
     
-    # 1. Меню
+    # 1. Меню навігації
+    page = "Дашборд"
     if 'sidebar_menu' in globals():
         page = sidebar_menu()
-    else:
-        page = "Дашборд"
 
-    # 2. Роутинг
+    # 2. Роутинг сторінок
     if page == "Дашборд":
         if 'show_dashboard' in globals(): show_dashboard()
     
     elif page == "Мої проекти":    
-        show_my_projects_page() 
+        if 'show_my_projects_page' in globals(): show_my_projects_page()
         
     elif page == "Перелік запитів":
         if 'show_keywords_page' in globals(): show_keywords_page()
