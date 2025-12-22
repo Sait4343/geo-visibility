@@ -218,7 +218,7 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
         }
 
         # Передаємо headers у запит
-        response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=20)
+        response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=60)
 
         if response.status_code == 200:
             data = response.json()
@@ -392,7 +392,7 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
                     N8N_ANALYZE_URL, 
                     json=payload, 
                     headers=headers, 
-                    timeout=20
+                    timeout=60
                 )
                 
                 if response.status_code == 200:
