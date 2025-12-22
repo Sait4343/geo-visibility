@@ -4636,8 +4636,8 @@ def show_sources_page():
 def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
-    ВЕРСІЯ: STABLE DELETE (UUID keys for lists).
-    Виправлено проблему видалення неправильного запиту шляхом використання унікальних ID.
+    ВЕРСІЯ: INTEGRATED ANALYSIS TRIGGER.
+    Додано виклик n8n_trigger_analysis при створенні проекту з запуском.
     """
     import streamlit as st
     import pandas as pd
@@ -4645,7 +4645,7 @@ def show_my_projects_page():
     import requests
     import re
     import time
-    import uuid  # <--- ВАЖЛИВО: Для унікальних ID
+    import uuid
     
     # --- КОНСТАНТИ ---
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
@@ -4713,7 +4713,6 @@ def show_my_projects_page():
     if "my_proj_reset_id" not in st.session_state:
         st.session_state["my_proj_reset_id"] = 0
 
-    # МІГРАЦІЯ: Додаємо ID старим записам, якщо їх немає (щоб не ламався код)
     for item in st.session_state["new_proj_keywords"]:
         if "id" not in item:
             item["id"] = str(uuid.uuid4())
@@ -4818,11 +4817,7 @@ def show_my_projects_page():
                         generated_kws = trigger_keyword_generation(new_brand_val, new_domain_val, new_industry_val, new_products_val)
                     if generated_kws:
                         for kw in generated_kws:
-                            # ДОДАЄМО З УНІКАЛЬНИМ ID
-                            st.session_state["new_proj_keywords"].append({
-                                "id": str(uuid.uuid4()), 
-                                "keyword": kw
-                            })
+                            st.session_state["new_proj_keywords"].append({"id": str(uuid.uuid4()), "keyword": kw})
                         st.success(f"Додано {len(generated_kws)} запитів!")
                     else: st.warning("AI не повернув запитів.")
                 else: st.warning("⚠️ Заповніть всі поля вище.")
@@ -4832,7 +4827,6 @@ def show_my_projects_page():
             st.caption("Завантажте файл або посилання.")
             import_source = st.radio("Джерело:", ["Файл (.xlsx)", "Посилання (URL)"], horizontal=True, key=f"mp_imp_src_{rk}")
             df_upload = None
-            
             if import_source == "Файл (.xlsx)":
                 uploaded_file = st.file_uploader("Оберіть файл", type=["xlsx", "csv"], key=f"mp_file_{rk}")
                 if uploaded_file:
@@ -4859,13 +4853,9 @@ def show_my_projects_page():
                 cols_lower = [str(c).lower().strip() for c in df_upload.columns]
                 if "keyword" in cols_lower: target_col = df_upload.columns[cols_lower.index("keyword")]
                 imp_kws = df_upload[target_col].dropna().astype(str).tolist()
-                
                 if st.button(f"📥 Імпортувати {len(imp_kws)} запитів", key=f"mp_add_imp_{rk}"):
                     for kw in imp_kws:
-                        st.session_state["new_proj_keywords"].append({
-                            "id": str(uuid.uuid4()), 
-                            "keyword": kw
-                        })
+                        st.session_state["new_proj_keywords"].append({"id": str(uuid.uuid4()), "keyword": kw})
                     st.success("Імпортовано!")
                     st.rerun()
 
@@ -4876,10 +4866,7 @@ def show_my_projects_page():
                 if paste_text:
                     lines = [line.strip() for line in paste_text.split('\n') if line.strip()]
                     for line in lines:
-                        st.session_state["new_proj_keywords"].append({
-                            "id": str(uuid.uuid4()), 
-                            "keyword": line
-                        })
+                        st.session_state["new_proj_keywords"].append({"id": str(uuid.uuid4()), "keyword": line})
                     st.success(f"Додано {len(lines)} запитів!")
                     st.rerun()
 
@@ -4891,10 +4878,7 @@ def show_my_projects_page():
             c_man2.write("") 
             if c_man2.button("➕", key=f"mp_btn_man_{rk}"):
                 if manual_kw:
-                    st.session_state["new_proj_keywords"].append({
-                        "id": str(uuid.uuid4()), 
-                        "keyword": manual_kw
-                    })
+                    st.session_state["new_proj_keywords"].append({"id": str(uuid.uuid4()), "keyword": manual_kw})
                     st.rerun()
 
         # --- СПИСОК (РЕДАГУВАННЯ) ---
@@ -4905,39 +4889,19 @@ def show_my_projects_page():
         if not keywords_list:
             st.info("Список порожній.")
         else:
-            # Iteration з використанням унікального ID
             for i, item in enumerate(keywords_list):
-                unique_key = item['id']  # Використовуємо UUID як ключ
-                
+                unique_key = item['id']
                 with st.container(border=True):
                     c_num, c_txt, c_act = st.columns([0.5, 8, 1])
-                    
-                    with c_num: 
-                        st.markdown(f"<div class='green-number'>{i+1}</div>", unsafe_allow_html=True)
-                    
+                    with c_num: st.markdown(f"<div class='green-number'>{i+1}</div>", unsafe_allow_html=True)
                     with c_txt:
-                        # Прив'язуємо input до UUID
-                        new_val = st.text_input(
-                            "kw", 
-                            value=item['keyword'], 
-                            key=f"kw_input_{unique_key}", 
-                            label_visibility="collapsed"
-                        )
-                        # Оновлюємо значення в state
+                        new_val = st.text_input("kw", value=item['keyword'], key=f"kw_input_{unique_key}", label_visibility="collapsed")
                         if new_val != item['keyword']:
-                            # Знаходимо елемент за ID і оновлюємо
                             for k in st.session_state["new_proj_keywords"]:
-                                if k['id'] == unique_key:
-                                    k['keyword'] = new_val
-                    
+                                if k['id'] == unique_key: k['keyword'] = new_val
                     with c_act:
-                        # Кнопка видалення прив'язана до UUID
                         if st.button("🗑️", key=f"del_btn_{unique_key}"):
-                            # Фільтруємо список: залишаємо все, крім цього ID
-                            st.session_state["new_proj_keywords"] = [
-                                k for k in st.session_state["new_proj_keywords"] 
-                                if k['id'] != unique_key
-                            ]
+                            st.session_state["new_proj_keywords"] = [k for k in st.session_state["new_proj_keywords"] if k['id'] != unique_key]
                             st.rerun()
             
             if st.button("🗑️ Очистити весь список", key=f"mp_clear_all_{rk}", type="secondary"):
@@ -4962,6 +4926,8 @@ def show_my_projects_page():
             if new_domain_val and new_industry_val and new_brand_val:
                 try:
                     user_id = st.session_state.user.id
+                    
+                    # 1. Створення проекту
                     new_proj_data = {
                         "user_id": user_id,
                         "brand_name": new_brand_val,
@@ -4978,27 +4944,54 @@ def show_my_projects_page():
                     
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
+                        
+                        # 2. Домен (Assets)
                         try:
                             clean_d = new_domain_val.replace("https://", "").replace("http://", "").replace("www.", "").strip().rstrip("/")
                             supabase.table("official_assets").insert({"project_id": new_proj_id, "domain_or_url": clean_d, "type": "website"}).execute()
                         except: pass
 
-                        # Очищаємо keywords перед записом (прибираємо id, лишаємо тільки текст)
+                        # 3. Keywords
                         final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
                         if final_kws_clean:
                             kws_data = [{"project_id": new_proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_clean]
                             supabase.table("keywords").insert(kws_data).execute()
 
-                        if save_run: st.toast(f"🚀 Проект створено. Сканування по {selected_llms} запущено!")
-                        else: st.success("✅ Проект успішно збережено!")
+                        # 4. Дія
+                        # Якщо Save & Run -> викликаємо функцію аналізу
+                        if save_run:
+                            # Встановлюємо проект як поточний, щоб функція могла перевірити статус
+                            st.session_state["current_project"] = res_proj.data[0]
+                            
+                            # Ваша функція аналізу
+                            if 'n8n_trigger_analysis' in globals():
+                                with st.spinner("Запускаємо сканування..."):
+                                    # Викликаємо функцію з потрібними параметрами
+                                    success = n8n_trigger_analysis(
+                                        project_id=new_proj_id, 
+                                        keywords=final_kws_clean, 
+                                        brand_name=new_brand_val, 
+                                        models=selected_llms
+                                    )
+                                    if success:
+                                        st.success("✅ Проект збережено і аналіз успішно запущено!")
+                                    else:
+                                        st.warning("Проект збережено, але запуск аналізу не вдався (див. помилку вище).")
+                            else:
+                                st.error("Функція 'n8n_trigger_analysis' не знайдена. Проект збережено.")
+                        else:
+                            st.success("✅ Проект успішно збережено!")
 
                         st.session_state["new_proj_keywords"] = []
                         st.session_state["my_proj_reset_id"] += 1
                         st.session_state["current_project"] = res_proj.data[0]
-                        time.sleep(1.5)
+                        time.sleep(2)
                         st.rerun()
-                except Exception as e: st.error(f"Помилка створення: {e}")
-            else: st.warning("⚠️ Заповніть обов'язкові поля.")
+                        
+                except Exception as e:
+                    st.error(f"Помилка створення: {e}")
+            else:
+                st.warning("⚠️ Заповніть обов'язкові поля: Бренд, Домен, Галузь.")
 
 def show_history_page():
     """
