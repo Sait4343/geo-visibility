@@ -3579,10 +3579,8 @@ def show_keyword_details(kw_id):
 def show_keywords_page():
     """
     Сторінка списку запитів.
-    ВЕРСІЯ: FORCE UI UPDATE (DYNAMIC KEYS).
-    1. Використання динамічних ключів для віджетів (bulk_update_counter).
-    2. Це гарантує повне оновлення візуального стану чекбоксів при масових діях.
-    3. Виправлено проблему 'залипання' старих значень.
+    ВЕРСІЯ: ADDED 'PASTE LIST' TAB.
+    Додано можливість масового додавання запитів списком з опцією запуску аналізу.
     """
     import pandas as pd
     import streamlit as st
@@ -3704,7 +3702,8 @@ def show_keywords_page():
     # ========================================================
     with st.expander("✏️ Редагування запитів", expanded=False): 
         
-        tab_manual, tab_import, tab_export, tab_auto = st.tabs(["✍️ Ввести вручну", "📥 Імпорт (Excel / URL)", "📤 Експорт (Excel)", "⚙️ Автозапуск"])
+        # 🔥 ДОДАНО НОВУ ВКЛАДКУ "📋 Вставити списком"
+        tab_manual, tab_paste, tab_import, tab_export, tab_auto = st.tabs(["✍️ Ввести вручну", "📋 Вставити списком", "📥 Імпорт (Excel / URL)", "📤 Експорт (Excel)", "⚙️ Автозапуск"])
 
         # --- TAB 1: ВРУЧНУ ---
         with tab_manual:
@@ -3763,7 +3762,75 @@ def show_keywords_page():
                     else:
                         st.warning("Введіть хоча б один запит.")
 
-        # --- TAB 2: ІМПОРТ EXCEL / URL ---
+        # --- TAB 2: ВСТАВИТИ СПИСКОМ (НОВИЙ ФУНКЦІОНАЛ) ---
+        with tab_paste:
+            st.info("💡 Вставте список запитів. Кожен новий запит — з нового рядка.")
+            paste_text = st.text_area("Список запитів", height=150, key="kw_paste_area", placeholder="купити квитки\nвідгуки про бренд\nнайкращі ціни")
+            
+            st.write("---")
+            c_paste_models, c_paste_btn1, c_paste_btn2 = st.columns([2, 1.5, 1.5])
+            
+            with c_paste_models:
+                selected_models_paste = st.multiselect("LLM для запуску:", list(MODEL_MAPPING.keys()), default=["Perplexity"], key="paste_multiselect")
+            
+            with c_paste_btn1:
+                st.write("")
+                st.write("")
+                if st.button("📥 Тільки зберегти", use_container_width=True, key="btn_paste_save"):
+                    if paste_text:
+                        lines = [line.strip() for line in paste_text.split('\n') if line.strip()]
+                        if lines:
+                            try:
+                                insert_data = [{
+                                    "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                    "is_auto_scan": False, "frequency": "daily"
+                                } for kw in lines]
+                                
+                                supabase.table("keywords").insert(insert_data).execute()
+                                st.success(f"Успішно збережено {len(lines)} запитів!")
+                                time.sleep(1.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Помилка збереження: {e}")
+                        else:
+                            st.warning("Список пустий.")
+                    else:
+                        st.warning("Поле пусте.")
+
+            with c_paste_btn2:
+                st.write("")
+                st.write("")
+                if st.button("🚀 Зберегти та Аналізувати", type="primary", use_container_width=True, key="btn_paste_run"):
+                    if paste_text:
+                        lines = [line.strip() for line in paste_text.split('\n') if line.strip()]
+                        if lines:
+                            try:
+                                insert_data = [{
+                                    "project_id": proj["id"], "keyword_text": kw, "is_active": True, 
+                                    "is_auto_scan": False, "frequency": "daily"
+                                } for kw in lines]
+                                
+                                res = supabase.table("keywords").insert(insert_data).execute()
+                                if res.data:
+                                    with st.spinner(f"Обробка {len(lines)} запитів..."):
+                                        if 'n8n_trigger_analysis' in globals():
+                                            my_bar = st.progress(0, text="Запуск...")
+                                            total = len(lines)
+                                            for i, kw in enumerate(lines):
+                                                n8n_trigger_analysis(proj["id"], [kw], proj.get("brand_name"), models=selected_models_paste)
+                                                my_bar.progress((i + 1) / total)
+                                                time.sleep(0.3)
+                                        st.success("Успішно збережено та запущено!")
+                                        time.sleep(2)
+                                        st.rerun()
+                            except Exception as e:
+                                st.error(f"Помилка процесу: {e}")
+                        else:
+                            st.warning("Список пустий.")
+                    else:
+                        st.warning("Поле пусте.")
+
+        # --- TAB 3: ІМПОРТ EXCEL / URL ---
         with tab_import:
             st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet. **Важливо:** Для Google Sheet має бути відкрито доступ (Anyone with the link). Перша колонка має називатися **Keyword**.")
             
@@ -3776,7 +3843,7 @@ def show_keywords_page():
                     try:
                         df_upload = pd.read_excel(uploaded_file)
                     except ImportError:
-                        st.error("🚨 Відсутня бібліотека `openpyxl`. Будь ласка, додайте `openpyxl` у requirements.txt вашого проекту.")
+                        st.error("🚨 Відсутня бібліотека `openpyxl`.")
                     except Exception as e:
                         st.error(f"Не вдалося прочитати файл: {e}")
             else: # URL
@@ -3871,7 +3938,7 @@ def show_keywords_page():
                             except Exception as e:
                                 st.error(f"Помилка процесу: {e}")
 
-        # --- TAB 3: ЕКСПОРТ EXCEL ---
+        # --- TAB 4: ЕКСПОРТ EXCEL ---
         with tab_export:
             st.write("Натисніть кнопку нижче, щоб завантажити всі запити цього проекту в Excel.")
             try:
@@ -3911,7 +3978,7 @@ def show_keywords_page():
             except Exception as e:
                 st.error(f"Помилка підготовки експорту: {e}")
 
-        # --- TAB 4: АВТОЗАПУСК (МАСОВЕ НАЛАШТУВАННЯ) ---
+        # --- TAB 5: АВТОЗАПУСК (МАСОВЕ НАЛАШТУВАННЯ) ---
         with tab_auto:
             st.markdown("##### ⚙️ Масове налаштування автозапуску")
             
@@ -3929,10 +3996,9 @@ def show_keywords_page():
                     selected_freq_db = freq_map[selected_freq_ui]
 
                 with c_btn:
-                    st.write("") # spacer
+                    st.write("") 
                     st.write("")
                     
-                    # КНОПКА: УВІМКНУТИ ВСЕ
                     if st.button("✅ Застосувати частоту та Увімкнути", type="primary", use_container_width=True):
                         try:
                             supabase.table("keywords").update({
@@ -3940,7 +4006,6 @@ def show_keywords_page():
                                 "frequency": selected_freq_db
                             }).eq("project_id", proj["id"]).execute()
                             
-                            # 🔥 ГОЛОВНИЙ ФІКС: Змінюємо суфікс, щоб оновити ключі віджетів
                             st.session_state["bulk_update_counter"] += 1
                             
                             st.success(f"Оновлено! Всі запити будуть скануватися: {selected_freq_ui}")
@@ -3949,28 +4014,25 @@ def show_keywords_page():
                         except Exception as e:
                             st.error(f"Помилка оновлення: {e}")
 
-                # КНОПКА: ВИМКНУТИ ВСЕ
                 if st.button("⛔ Вимкнути автосканування для всіх", use_container_width=True):
-                     try:
+                      try:
                         supabase.table("keywords").update({
                             "is_auto_scan": False
                         }).eq("project_id", proj["id"]).execute()
 
-                        # 🔥 ГОЛОВНИЙ ФІКС: Змінюємо суфікс
                         st.session_state["bulk_update_counter"] += 1
                         
                         st.warning("Автосканування вимкнено для всіх запитів.")
                         time.sleep(1)
                         st.rerun()
-                     except Exception as e:
+                      except Exception as e:
                         st.error(f"Помилка: {e}")
                 
                 st.markdown("---")
                 st.markdown("""
                 **ℹ️ Як це працює:**
-                1. **✅ Застосувати:** Активує автозапуск (`ON`) і встановлює обрану частоту для **всіх** запитів. Чекбокси внизу перемкнуться автоматично.
-                2. **⛔ Вимкнути всі:** Деактивує автозапуск (`OFF`) для всіх запитів. Чекбокси внизу вимкнуться.
-                3. **Синхронізація:** Стан перемикачів завжди відповідає даним у базі.
+                1. **✅ Застосувати:** Активує автозапуск (`ON`) і встановлює обрану частоту для **всіх** запитів.
+                2. **⛔ Вимкнути всі:** Деактивує автозапуск (`OFF`) для всіх запитів.
                 """)
 
     st.divider()
@@ -3999,18 +4061,13 @@ def show_keywords_page():
         st.info("Список порожній.")
         return
 
-# ========================================================
-    # 4. & 5. ПАНЕЛЬ ТА СПИСОК (STABLE STATE FIX)
-    # ========================================================
-
     update_suffix = st.session_state.get("bulk_update_counter", 0)
 
     # Функція-фрагмент (оновлюється незалежно)
     @st.fragment(run_every=5)
     def render_live_dashboard(keywords_data, proj_data, suffix_val):
         
-        # --- 1. LIVE DATA FETCH ---
-        # Отримуємо свіжі статуси сканування без перезавантаження всієї сторінки
+        # --- LIVE DATA FETCH ---
         try:
             fresh_scans = supabase.table("scan_results").select("keyword_id, created_at").eq("project_id", proj_data["id"]).order("created_at", desc=True).execute()
             fresh_map = {}
@@ -4019,13 +4076,12 @@ def show_keywords_page():
                     if s['keyword_id'] not in fresh_map:
                         fresh_map[s['keyword_id']] = s['created_at']
             
-            # Оновлюємо дати локально
             for k in keywords_data:
                 k['last_scan_date'] = fresh_map.get(k['id'], "1970-01-01T00:00:00+00:00")
         except Exception:
             pass
 
-        # --- 2. SORTING & FILTERING ---
+        # --- SORTING ---
         c_sort, _ = st.columns([2, 4])
         with c_sort:
             sort_option = st.selectbox("Сортувати за:", 
@@ -4038,22 +4094,15 @@ def show_keywords_page():
         elif sort_option == "Нещодавно проскановані": sorted_kws.sort(key=lambda x: x['last_scan_date'], reverse=True)
         elif sort_option == "Давно не скановані": sorted_kws.sort(key=lambda x: x['last_scan_date'], reverse=False)
 
-        # Збираємо ID поточного списку для логіки "Select All"
         current_page_ids = [str(k['id']) for k in sorted_kws]
 
-        # --- 3. STATE MANAGEMENT (CALLBACKS) ---
-        # Ці функції запускаються ПЕРЕД рендерингом, коли користувач щось клікає
-
+        # --- STATE CALLBACKS ---
         def master_checkbox_change():
-            """Коли клікають 'Всі': проставляємо це значення всім видимим елементам"""
-            # Отримуємо новий стан чекбокса "Всі"
             new_state = st.session_state.select_all_master_key
             for kid in current_page_ids:
                 st.session_state[f"chk_{kid}"] = new_state
 
         def child_checkbox_change():
-            """Коли клікають окремий рядок: перевіряємо, чи треба зняти галочку 'Всі'"""
-            # Якщо хоча б один з видимих елементів False -> Master має бути False
             all_selected = True
             for kid in current_page_ids:
                 if not st.session_state.get(f"chk_{kid}", False):
@@ -4061,29 +4110,24 @@ def show_keywords_page():
                     break
             st.session_state.select_all_master_key = all_selected
 
-        # Ініціалізація стану для кожного рядка (якщо його ще немає)
         for kid in current_page_ids:
             key = f"chk_{kid}"
             if key not in st.session_state:
                 st.session_state[key] = False
 
-        # Ініціалізація майстер-ключа
         if "select_all_master_key" not in st.session_state:
             st.session_state.select_all_master_key = False
 
-        # --- 4. ПАНЕЛЬ ДІЙ ---
+        # --- ПАНЕЛЬ ДІЙ ---
         with st.container(border=True):
             c_check, c_models, c_btn = st.columns([0.5, 3, 1.5])
             
             with c_check:
                 st.write("") 
-                # MASTER CHECKBOX
-                # Важливо: ми не передаємо value, бо key вже керує станом
                 st.checkbox("Всі", key="select_all_master_key", on_change=master_checkbox_change)
             
             with c_models:
                 all_models = list(MODEL_MAPPING.keys())
-                # Використовуємо окремий ключ для моделей, щоб не конфліктував
                 bulk_models = st.multiselect(
                     "ЛЛМ для запуску:", 
                     all_models, 
@@ -4095,7 +4139,6 @@ def show_keywords_page():
             with c_btn:
                 if st.button("🚀 Аналізувати обрані", use_container_width=True, type="primary"):
                     selected_texts = []
-                    # Збираємо тільки ті, що True в session_state
                     for k in sorted_kws:
                         if st.session_state.get(f"chk_{k['id']}", False):
                             selected_texts.append(k['keyword_text'])
@@ -4120,7 +4163,7 @@ def show_keywords_page():
                     else:
                         st.warning("Оберіть хоча б один запит.")
 
-        # --- 5. ТАБЛИЦЯ (RENDER LIST) ---
+        # --- ТАБЛИЦЯ ---
         h_chk, h_num, h_txt, h_cron, h_date, h_act = st.columns([0.4, 0.5, 3.2, 2, 1.2, 1.3])
         h_txt.markdown("**Запит**")
         h_cron.markdown("**Автозапуск**")
@@ -4137,9 +4180,6 @@ def show_keywords_page():
                 
                 with c1:
                     st.write("") 
-                    # ROW CHECKBOX
-                    # ВАЖЛИВО: Ніякого `value=...`. Стан повністю керується через key в session_state.
-                    # on_change викликає перевірку, чи треба зняти галочку "Всі"
                     st.checkbox("", key=f"chk_{k_id_str}", on_change=child_checkbox_change)
                 
                 with c2:
@@ -4151,14 +4191,11 @@ def show_keywords_page():
                         st.rerun()
                 
                 with c4:
-                    # Логіка автозапуску (БД Toggle)
-                    # Тут ми використовуємо suffix_val, щоб уникнути конфліктів ключів при оновленнях
                     cron_c1, cron_c2 = st.columns([0.8, 1.2])
                     is_auto_db = k.get('is_auto_scan', False)
                     
                     with cron_c1:
                         if allow_cron_global:
-                            # Це toggle бази даних, він не залежить від чекбоксів вибору
                             toggle_key = f"auto_{k_id_str}_{suffix_val}"
                             new_auto = st.toggle("Авто", value=is_auto_db, key=toggle_key, label_visibility="collapsed")
                             if new_auto != is_auto_db:
@@ -4168,7 +4205,7 @@ def show_keywords_page():
                             st.caption("🔒")
 
                     with cron_c2:
-                        if allow_cron_global and (is_auto_db or new_auto): # Показуємо, якщо увімкнено (навіть щойно)
+                        if allow_cron_global and (is_auto_db or new_auto): 
                             current_freq = k.get('frequency', 'daily')
                             freq_options = ["daily", "weekly", "monthly"]
                             try: idx_f = freq_options.index(current_freq)
@@ -4187,7 +4224,6 @@ def show_keywords_page():
 
                 with c6:
                     st.write("")
-                    # Логіка видалення
                     del_confirm_key = f"del_confirm_{k_id_str}"
                     if del_confirm_key not in st.session_state: st.session_state[del_confirm_key] = False
 
@@ -4213,6 +4249,7 @@ def show_keywords_page():
 
     # Запускаємо фрагмент
     render_live_dashboard(keywords, proj, update_suffix)
+
 
 # =========================
 # 9. SIDEBAR
