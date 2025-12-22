@@ -4713,10 +4713,8 @@ def show_sources_page():
 def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
-    ВЕРСІЯ: LAYOUT UPDATE & TRIAL STATUS.
-    1. Активні проекти: Назва, Дата, Автор під логотипом.
-    2. Створити проект: Статус за замовчуванням 'trial'.
-    3. LLM Options: Використовуються назви UI (OpenAI GPT, etc).
+    ВЕРСІЯ: PROJECT SWITCHING WITH TOAST & RESET.
+    Додано логіку очищення сесії та сповіщення при перемиканні проекту.
     """
     import streamlit as st
     import pandas as pd
@@ -4762,11 +4760,10 @@ def show_my_projects_page():
         st.error("Потрібна авторизація.")
         return
         
-    # Отримуємо ім'я поточного користувача для відображення
+    # Ім'я автора
     user_details = st.session_state.get("user_details", {})
     author_name = f"{user_details.get('first_name', '')} {user_details.get('last_name', '')}".strip()
-    if not author_name:
-        author_name = user.email
+    if not author_name: author_name = user.email
 
     # --- ХЕЛПЕР: ГЕНЕРАЦІЯ ---
     def trigger_keyword_generation(brand, domain, industry, products):
@@ -4798,7 +4795,6 @@ def show_my_projects_page():
     if "my_proj_reset_id" not in st.session_state:
         st.session_state["my_proj_reset_id"] = 0
 
-    # Міграція ID (на випадок старих даних в сесії)
     for item in st.session_state["new_proj_keywords"]:
         if "id" not in item: item["id"] = str(uuid.uuid4())
 
@@ -4819,12 +4815,10 @@ def show_my_projects_page():
             else:
                 for p in projects:
                     with st.container(border=True):
-                        # 🔥 Оновлена розмітка: Ліва (Лого+Інфо), Центр (Деталі), Права (Джерела+Кнопка)
                         col_left, col_center, col_right = st.columns([1.2, 2, 2])
 
-                        # --- КОЛОНКА 1: ЛОГОТИП + НАЗВА + АВТОР ---
+                        # 1. Лого + Інфо
                         with col_left:
-                            # Логотип
                             if p.get('logo_url'):
                                 st.image(p['logo_url'], width=80)
                             elif p.get('domain'):
@@ -4834,18 +4828,15 @@ def show_my_projects_page():
                             else:
                                 st.markdown("🖼️ *No Logo*")
                             
-                            st.write("") # Відступ
-                            
-                            # Назва проекту
+                            st.write("")
                             proj_title = p.get('project_name') or p.get('brand_name') or 'Без назви'
                             st.markdown(f"**{proj_title}**")
                             
-                            # Дата та Автор
                             created_dt = p.get('created_at', '')[:10]
                             st.caption(f"📅 {created_dt}")
                             st.caption(f"👤 {author_name}")
 
-                        # --- КОЛОНКА 2: ДЕТАЛІ ---
+                        # 2. Деталі
                         with col_center:
                             st.markdown(f"**Бренд:** {p.get('brand_name', '-')}")
                             st.markdown(f"**Домен:** `{p.get('domain', '-')}`")
@@ -4856,12 +4847,11 @@ def show_my_projects_page():
                             else: prods_display = prods
                             st.markdown(f"**Послуги:** {prods_display}")
                             
-                            # Статус (візуалізація)
                             status_p = p.get('status', 'trial').upper()
                             color_s = "orange" if status_p == "TRIAL" else "green"
                             st.markdown(f"Статус: **:{color_s}[{status_p}]**")
 
-                        # --- КОЛОНКА 3: ДЖЕРЕЛА І КНОПКА ---
+                        # 3. Дії
                         with col_right:
                             try:
                                 assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
@@ -4876,12 +4866,34 @@ def show_my_projects_page():
                                 kw_count = kw_resp.count if kw_resp.count is not None else len(kw_resp.data)
                             except: kw_count = 0
                             
-                            # 🔥 Змінено текст
                             st.markdown(f"**Кількість запитів:** `{kw_count}`")
 
                             st.write("")
+                            
+                            # 🔥 ЛОГІКА ПЕРЕМИКАННЯ ПРОЕКТУ
                             if st.button(f"➡️ Відкрити проект", key=f"open_proj_{p['id']}", type="primary", use_container_width=True):
+                                # 1. Сповіщення
+                                st.toast(f"🔄 Перемикання на проект: **{p.get('brand_name')}**...", icon="✅")
+                                
+                                # 2. Очищення стану від старого проекту
+                                keys_to_clear = [
+                                    "focus_keyword_id",   # Скидаємо вибраний запит
+                                    "new_proj_keywords",  # Скидаємо форму створення (опціонально)
+                                    "analysis_results"    # Якщо є кешовані результати
+                                ]
+                                for key in keys_to_clear:
+                                    if key in st.session_state:
+                                        del st.session_state[key]
+
+                                # 3. Встановлення нового проекту
                                 st.session_state["current_project"] = p
+                                
+                                # 4. Оновлення лічильника меню (щоб сайдбар міг перемалюватись, якщо треба)
+                                if "menu_id_counter" not in st.session_state: st.session_state["menu_id_counter"] = 0
+                                st.session_state["menu_id_counter"] += 1
+
+                                # 5. Пауза для краси і перезапуск
+                                time.sleep(0.7)
                                 st.rerun()
 
         except Exception as e:
@@ -4895,7 +4907,6 @@ def show_my_projects_page():
         
         rk = st.session_state["my_proj_reset_id"]
         
-        # --- ФОРМА ---
         c1, c2 = st.columns(2)
         new_brand_val = c1.text_input("Назва бренду (для AI) *", key=f"mp_brand_{rk}", placeholder="Наприклад: Nova Poshta")
         new_domain_val = c2.text_input("Домен *", key=f"mp_domain_{rk}", placeholder="novaposhta.ua")
@@ -5019,7 +5030,6 @@ def show_my_projects_page():
         # --- ДІЇ ---
         col_llm, col_act = st.columns(2)
         with col_llm:
-            # 🔥 ОНОВЛЕНО: Назви для користувача
             ui_llm_options = ["OpenAI GPT", "Google Gemini", "Perplexity"]
             selected_llms = st.multiselect("Активувати LLM", ui_llm_options, default=["OpenAI GPT", "Google Gemini"], key=f"mp_llms_{rk}")
         
@@ -5035,7 +5045,6 @@ def show_my_projects_page():
                 try:
                     user_id = st.session_state.user.id
                     
-                    # 🔥 ОНОВЛЕНО: Статус trial
                     new_proj_data = {
                         "user_id": user_id,
                         "brand_name": new_brand_val,
@@ -5043,7 +5052,7 @@ def show_my_projects_page():
                         "domain": new_domain_val,
                         "industry": new_industry_val,
                         "products": new_products_val,
-                        "status": "trial", # <--- STATUS CHANGED TO TRIAL
+                        "status": "trial",
                         "allow_cron": True if save_run else False,
                         "region": new_region_val,
                         "created_at": datetime.now().isoformat()
@@ -5067,7 +5076,6 @@ def show_my_projects_page():
                             st.session_state["current_project"] = res_proj.data[0]
                             if 'n8n_trigger_analysis' in globals():
                                 with st.spinner("Запускаємо сканування (Trial)..."):
-                                    # Передаємо вибрані UI назви (функція сама зробить мапінг)
                                     success = n8n_trigger_analysis(
                                         project_id=new_proj_id, 
                                         keywords=final_kws_clean, 
@@ -5088,6 +5096,7 @@ def show_my_projects_page():
                         st.rerun()
                 except Exception as e: st.error(f"Помилка створення: {e}")
             else: st.warning("⚠️ Заповніть обов'язкові поля: Бренд, Домен, Галузь.")
+                
 
 def show_history_page():
     """
