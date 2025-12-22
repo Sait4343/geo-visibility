@@ -4676,8 +4676,10 @@ def show_sources_page():
 def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
-    ВЕРСІЯ: INTEGRATED ANALYSIS TRIGGER.
-    Додано виклик n8n_trigger_analysis при створенні проекту з запуском.
+    ВЕРСІЯ: LAYOUT UPDATE & TRIAL STATUS.
+    1. Активні проекти: Назва, Дата, Автор під логотипом.
+    2. Створити проект: Статус за замовчуванням 'trial'.
+    3. LLM Options: Використовуються назви UI (OpenAI GPT, etc).
     """
     import streamlit as st
     import pandas as pd
@@ -4722,6 +4724,12 @@ def show_my_projects_page():
     if not user:
         st.error("Потрібна авторизація.")
         return
+        
+    # Отримуємо ім'я поточного користувача для відображення
+    user_details = st.session_state.get("user_details", {})
+    author_name = f"{user_details.get('first_name', '')} {user_details.get('last_name', '')}".strip()
+    if not author_name:
+        author_name = user.email
 
     # --- ХЕЛПЕР: ГЕНЕРАЦІЯ ---
     def trigger_keyword_generation(brand, domain, industry, products):
@@ -4747,15 +4755,15 @@ def show_my_projects_page():
             st.error(f"Connection error: {e}")
             return []
 
-    # --- STATE & MIGRATION ---
+    # --- STATE ---
     if "new_proj_keywords" not in st.session_state:
         st.session_state["new_proj_keywords"] = [] 
     if "my_proj_reset_id" not in st.session_state:
         st.session_state["my_proj_reset_id"] = 0
 
+    # Міграція ID (на випадок старих даних в сесії)
     for item in st.session_state["new_proj_keywords"]:
-        if "id" not in item:
-            item["id"] = str(uuid.uuid4())
+        if "id" not in item: item["id"] = str(uuid.uuid4())
 
     st.title("📂 Мої проекти")
     
@@ -4774,38 +4782,55 @@ def show_my_projects_page():
             else:
                 for p in projects:
                     with st.container(border=True):
-                        col_logo, col_info, col_stats = st.columns([1, 2, 2])
+                        # 🔥 Оновлена розмітка: Ліва (Лого+Інфо), Центр (Деталі), Права (Джерела+Кнопка)
+                        col_left, col_center, col_right = st.columns([1.2, 2, 2])
 
-                        with col_logo:
+                        # --- КОЛОНКА 1: ЛОГОТИП + НАЗВА + АВТОР ---
+                        with col_left:
+                            # Логотип
                             if p.get('logo_url'):
-                                st.image(p['logo_url'], width=100)
+                                st.image(p['logo_url'], width=80)
                             elif p.get('domain'):
                                 clean_d = p['domain'].replace('https://', '').replace('www.', '').split('/')[0]
                                 l_url = f"https://cdn.brandfetch.io/{clean_d}"
-                                st.image(l_url, width=100)
+                                st.image(l_url, width=80)
                             else:
                                 st.markdown("🖼️ *No Logo*")
-
-                        with col_info:
+                            
+                            st.write("") # Відступ
+                            
+                            # Назва проекту
                             proj_title = p.get('project_name') or p.get('brand_name') or 'Без назви'
-                            st.subheader(proj_title)
+                            st.markdown(f"**{proj_title}**")
+                            
+                            # Дата та Автор
+                            created_dt = p.get('created_at', '')[:10]
+                            st.caption(f"📅 {created_dt}")
+                            st.caption(f"👤 {author_name}")
+
+                        # --- КОЛОНКА 2: ДЕТАЛІ ---
+                        with col_center:
                             st.markdown(f"**Бренд:** {p.get('brand_name', '-')}")
                             st.markdown(f"**Домен:** `{p.get('domain', '-')}`")
                             st.markdown(f"**Галузь:** {p.get('industry', '-')}")
                             
                             prods = p.get('products') or p.get('description') or '-'
-                            if len(prods) > 120: prods_display = prods[:120] + "..."
+                            if len(prods) > 100: prods_display = prods[:100] + "..."
                             else: prods_display = prods
                             st.markdown(f"**Послуги:** {prods_display}")
                             
-                            created_dt = p.get('created_at', '')[:10]
-                            st.caption(f"📅 Створено: {created_dt}")
+                            # Статус (візуалізація)
+                            status_p = p.get('status', 'trial').upper()
+                            color_s = "orange" if status_p == "TRIAL" else "green"
+                            st.markdown(f"Статус: **:{color_s}[{status_p}]**")
 
-                        with col_stats:
+                        # --- КОЛОНКА 3: ДЖЕРЕЛА І КНОПКА ---
+                        with col_right:
                             try:
                                 assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
                                 sources = [a['domain_or_url'] for a in assets_resp.data] if assets_resp.data else []
                             except: sources = []
+                            
                             with st.expander(f"🔗 Джерела ({len(sources)})"):
                                 for s in sources: st.markdown(f"- `{s}`")
 
@@ -4813,11 +4838,15 @@ def show_my_projects_page():
                                 kw_resp = supabase.table("keywords").select("id", count="exact").eq("project_id", p['id']).execute()
                                 kw_count = kw_resp.count if kw_resp.count is not None else len(kw_resp.data)
                             except: kw_count = 0
-                            st.markdown(f"**🔑 Ключових слів:** `{kw_count}`")
+                            
+                            # 🔥 Змінено текст
+                            st.markdown(f"**Кількість запитів:** `{kw_count}`")
 
-                            if st.button(f"➡️ Відкрити проект", key=f"open_proj_{p['id']}", type="primary"):
+                            st.write("")
+                            if st.button(f"➡️ Відкрити проект", key=f"open_proj_{p['id']}", type="primary", use_container_width=True):
                                 st.session_state["current_project"] = p
                                 st.rerun()
+
         except Exception as e:
             st.error(f"Помилка завантаження проектів: {e}")
 
@@ -4921,7 +4950,7 @@ def show_my_projects_page():
                     st.session_state["new_proj_keywords"].append({"id": str(uuid.uuid4()), "keyword": manual_kw})
                     st.rerun()
 
-        # --- СПИСОК (РЕДАГУВАННЯ) ---
+        # --- СПИСОК ---
         st.write("")
         st.markdown("###### 📋 Ваш список для збереження:")
         
@@ -4953,7 +4982,9 @@ def show_my_projects_page():
         # --- ДІЇ ---
         col_llm, col_act = st.columns(2)
         with col_llm:
-            selected_llms = st.multiselect("Активувати LLM", ["chatgpt_4o", "google_gemini", "perplexity"], default=["chatgpt_4o", "google_gemini"], key=f"mp_llms_{rk}")
+            # 🔥 ОНОВЛЕНО: Назви для користувача
+            ui_llm_options = ["OpenAI GPT", "Google Gemini", "Perplexity"]
+            selected_llms = st.multiselect("Активувати LLM", ui_llm_options, default=["OpenAI GPT", "Google Gemini"], key=f"mp_llms_{rk}")
         
         with col_act:
             st.caption("Дія:")
@@ -4967,7 +4998,7 @@ def show_my_projects_page():
                 try:
                     user_id = st.session_state.user.id
                     
-                    # 1. Створення проекту
+                    # 🔥 ОНОВЛЕНО: Статус trial
                     new_proj_data = {
                         "user_id": user_id,
                         "brand_name": new_brand_val,
@@ -4975,7 +5006,7 @@ def show_my_projects_page():
                         "domain": new_domain_val,
                         "industry": new_industry_val,
                         "products": new_products_val,
-                        "status": "active",
+                        "status": "trial", # <--- STATUS CHANGED TO TRIAL
                         "allow_cron": True if save_run else False,
                         "region": new_region_val,
                         "created_at": datetime.now().isoformat()
@@ -4985,40 +5016,31 @@ def show_my_projects_page():
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
                         
-                        # 2. Домен (Assets)
                         try:
                             clean_d = new_domain_val.replace("https://", "").replace("http://", "").replace("www.", "").strip().rstrip("/")
                             supabase.table("official_assets").insert({"project_id": new_proj_id, "domain_or_url": clean_d, "type": "website"}).execute()
                         except: pass
 
-                        # 3. Keywords
                         final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
                         if final_kws_clean:
                             kws_data = [{"project_id": new_proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_clean]
                             supabase.table("keywords").insert(kws_data).execute()
 
-                        # 4. Дія
-                        # Якщо Save & Run -> викликаємо функцію аналізу
                         if save_run:
-                            # Встановлюємо проект як поточний, щоб функція могла перевірити статус
                             st.session_state["current_project"] = res_proj.data[0]
-                            
-                            # Ваша функція аналізу
                             if 'n8n_trigger_analysis' in globals():
-                                with st.spinner("Запускаємо сканування..."):
-                                    # Викликаємо функцію з потрібними параметрами
+                                with st.spinner("Запускаємо сканування (Trial)..."):
+                                    # Передаємо вибрані UI назви (функція сама зробить мапінг)
                                     success = n8n_trigger_analysis(
                                         project_id=new_proj_id, 
                                         keywords=final_kws_clean, 
                                         brand_name=new_brand_val, 
-                                        models=selected_llms
+                                        models=selected_llms 
                                     )
-                                    if success:
-                                        st.success("✅ Проект збережено і аналіз успішно запущено!")
-                                    else:
-                                        st.warning("Проект збережено, але запуск аналізу не вдався (див. помилку вище).")
+                                    if success: st.success("✅ Проект збережено і аналіз запущено!")
+                                    else: st.warning("Проект збережено, але аналіз не вдався або обмежений Trial.")
                             else:
-                                st.error("Функція 'n8n_trigger_analysis' не знайдена. Проект збережено.")
+                                st.error("Функція аналізу не знайдена.")
                         else:
                             st.success("✅ Проект успішно збережено!")
 
@@ -5027,11 +5049,8 @@ def show_my_projects_page():
                         st.session_state["current_project"] = res_proj.data[0]
                         time.sleep(2)
                         st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Помилка створення: {e}")
-            else:
-                st.warning("⚠️ Заповніть обов'язкові поля: Бренд, Домен, Галузь.")
+                except Exception as e: st.error(f"Помилка створення: {e}")
+            else: st.warning("⚠️ Заповніть обов'язкові поля: Бренд, Домен, Галузь.")
 
 def show_history_page():
     """
