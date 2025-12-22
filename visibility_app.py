@@ -5083,14 +5083,15 @@ def show_my_projects_page():
             save_only = b1.button("💾 Зберегти проект", use_container_width=True)
             save_run = b2.button("🚀 Зберегти та Запустити", type="primary", use_container_width=True)
 
-            if save_only or save_run:
+# ЛОГІКА ЗБЕРЕЖЕННЯ (ЗАМІНИТИ ВЕСЬ ЦЕЙ БЛОК)
+        if save_only or save_run:
             final_project_name = new_proj_name_val if new_proj_name_val else new_brand_val
             
             if new_domain_val and new_industry_val and new_brand_val:
                 try:
                     uid = st.session_state.user.id
                     
-                    # 1. Створюємо проект в БД
+                    # 1. Створюємо проект
                     new_proj_data = {
                         "user_id": uid, "brand_name": new_brand_val, "project_name": final_project_name,
                         "domain": new_domain_val, "industry": new_industry_val, "products": new_products_val,
@@ -5102,42 +5103,46 @@ def show_my_projects_page():
                     if res_proj.data:
                         new_proj_id = res_proj.data[0]['id']
                         
-                        # 2. Додаємо домен в Whitelist
+                        # 2. Whitelist
                         try:
                             clean_d = new_domain_val.replace("https://", "").replace("http://", "").replace("www.", "").strip().rstrip("/")
                             supabase.table("official_assets").insert({"project_id": new_proj_id, "domain_or_url": clean_d, "type": "website"}).execute()
                         except: pass
-
-                        # 3. Додаємо ключові слова
+                        
+                        # 3. Keywords
                         final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
                         if final_kws_clean:
                             kws_data = [{"project_id": new_proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_clean]
                             supabase.table("keywords").insert(kws_data).execute()
 
-                        # 4. Встановлюємо поточний проект в сесію
+                        # 4. Встановлюємо проект в сесію (важливо для нових юзерів)
                         st.session_state["current_project"] = res_proj.data[0]
 
-                        # 5. Логіка запуску аналізу (поштучна відправка)
+                        # 5. ЗАПУСК АНАЛІЗУ (ПОШТУЧНО)
                         if save_run:
                             if 'n8n_trigger_analysis' in globals():
-                                # --- ЦИКЛ ВІДПРАВКИ (по одному запиту) ---
-                                my_bar = st.progress(0, text="Підготовка до запуску...")
+                                my_bar = st.progress(0, text="Ініціалізація...")
+                                
+                                # Рахуємо загальну к-сть операцій
                                 total_ops = len(final_kws_clean) * len(selected_llms)
+                                if total_ops == 0: total_ops = 1 # Щоб не ділити на 0
                                 current_op = 0
                                 
+                                # Цикл: Слова -> Моделі
                                 for kw_item in final_kws_clean:
                                     for model_item in selected_llms:
                                         current_op += 1
-                                        prog_val = min(current_op / (total_ops if total_ops > 0 else 1), 1.0)
-                                        my_bar.progress(prog_val, text=f"🚀 Аналіз: {kw_item} ({model_item})...")
+                                        prog_val = min(current_op / total_ops, 1.0)
+                                        my_bar.progress(prog_val, text=f"Аналіз: {kw_item} ({model_item})...")
                                         
+                                        # Виклик функції (вона має приймати список, тому [kw_item])
                                         n8n_trigger_analysis(
                                             project_id=new_proj_id, 
                                             keywords=[kw_item], 
                                             brand_name=new_brand_val, 
                                             models=[model_item]
                                         )
-                                        time.sleep(0.2) # Невелика пауза
+                                        time.sleep(0.2) # Пауза між запитами
                                 
                                 my_bar.progress(1.0, text="Готово!")
                                 st.toast(f"✅ Проект '{new_brand_val}' створено! Аналіз запущено.", icon="🚀")
@@ -5146,21 +5151,19 @@ def show_my_projects_page():
                         else:
                             st.toast(f"✅ Проект '{new_brand_val}' успішно збережено!", icon="💾")
 
-                        # 6. Очищення форми
+                        # 6. Очищення та перенаправлення
                         st.session_state["new_proj_keywords"] = []
                         st.session_state["my_proj_reset_id"] += 1
                         
-                        # 🔥 7. ПЕРЕНАПРАВЛЕННЯ НА ВКЛАДКУ "МОЇ ПРОЕКТИ"
+                        # Примусово перекидаємо на вкладку "Мої проекти" (список)
                         st.session_state["force_redirect_to"] = "Мої проекти"
                         
-                        # 8. Перезавантаження
-                        time.sleep(1.5) 
+                        time.sleep(1.5)
                         st.rerun()
-
                 except Exception as e: 
                     st.error(f"Помилка створення: {e}")
             else: 
-                st.warning("⚠️ Заповніть обов'язкові поля: Бренд, Домен, Галузь.")
+                st.warning("Заповніть обов'язкові поля.")
                 
 
 def show_history_page():
