@@ -6137,7 +6137,7 @@ def show_chat_page():
                     target_url, 
                     json=payload, 
                     headers=headers, 
-                    timeout=60
+                    timeout=240
                 )
 
                 if response.status_code == 200:
