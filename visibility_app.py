@@ -6328,95 +6328,104 @@ def show_chat_page():
         
             
 def main():
-    # 1. Ініціалізація та перевірка сесії
-    if 'check_session' in globals():
-        check_session()
+    # Global error handling to prevent grey screens
+    try:
+        # 1. Initialize Session
+        if 'check_session' in globals():
+            check_session()
 
-    # 2. ПЕРЕВІРКА АВТОРИЗАЦІЇ
-    # Якщо користувача немає в сесії - показуємо сторінку входу
-    if not st.session_state.get("user"):
-        if 'show_auth_page' in globals():
-            show_auth_page()
-        else:
-            st.error("Помилка: Функція show_auth_page не знайдена.")
-        return  # Зупиняємо виконання
+        # 2. CHECK AUTHENTICATION
+        if not st.session_state.get("user"):
+            if 'show_auth_page' in globals():
+                show_auth_page()
+            else:
+                st.error("Error: show_auth_page function not found.")
+            return
 
-    # 3. ЛОГІКА ПЕРЕНАПРАВЛЕННЯ НОВОГО КОРИСТУВАЧА
-    # Якщо користувач залогінився, але не обрав проект (або у нього їх немає)
-    if not st.session_state.get("current_project"):
-        try:
+        # 3. REDIRECT NEW USERS (Skip Onboarding, Go to Create Project)
+        if not st.session_state.get("current_project"):
             user_id = st.session_state["user"].id
-            # Отримуємо клієнт Supabase (глобальний або з сесії)
             sb = globals().get('supabase') or st.session_state.get('supabase')
             
+            has_project = False
             if sb:
-                resp = sb.table("projects").select("*").eq("user_id", user_id).execute()
+                try:
+                    # Check if user has any projects
+                    resp = sb.table("projects").select("*").eq("user_id", user_id).execute()
+                    if resp.data:
+                        # User has projects -> Load the first one and proceed
+                        st.session_state["current_project"] = resp.data[0]
+                        has_project = True
+                        st.rerun()
+                except Exception as e:
+                    print(f"Error fetching projects: {e}")
+
+            # If NO projects found -> Redirect to "My Projects" (Creation Tab)
+            if not has_project:
+                user_role = st.session_state.get("role", "user")
                 
-                if resp.data:
-                    # Проекти є -> беремо перший і йдемо далі
-                    st.session_state["current_project"] = resp.data[0]
-                    st.rerun() # Перезавантажуємо сторінку
-                else:
-                    # 🔥 ПРОЕКТІВ НЕМАЄ. ЦЕ НОВИЙ КОРИСТУВАЧ.
-                    # 1. Малюємо меню (щоб була кнопка Вийти)
+                # Admins can bypass, regular users must create a project
+                if user_role not in ["admin", "super_admin"]:
+                    # Render sidebar so they can logout if needed
                     if 'sidebar_menu' in globals():
                         sidebar_menu()
                     
-                    # 2. Примусово показуємо сторінку створення (Мої проекти)
+                    # Force render the "My Projects" page
                     if 'show_my_projects_page' in globals():
                         show_my_projects_page()
                     else:
-                        st.warning("Функція show_my_projects_page не знайдена.")
+                        st.error("Function show_my_projects_page not found.")
                     
-                    return # ⛔ Зупиняємо скрипт тут, щоб не малювати решту сторінок
-        except Exception as e:
-            # st.error(f"Error checking projects: {e}")
-            pass
+                    return # Stop execution here to prevent Dashboard rendering
 
-    # =========================================================
-    # 4. ОСНОВНИЙ ДОДАТОК (Тільки якщо є User і Project)
-    # =========================================================
-    
-    # 1. Меню навігації
-    page = "Дашборд"
-    if 'sidebar_menu' in globals():
-        page = sidebar_menu()
+        # 4. MAIN APP LOGIC (Only if User AND Project exist)
+        # ---------------------------------------------------------
+        
+        # Menu
+        page = "Дашборд"
+        if 'sidebar_menu' in globals():
+            page = sidebar_menu()
 
-    # 2. Роутинг сторінок
-    if page == "Дашборд":
-        if 'show_dashboard' in globals(): show_dashboard()
-    
-    elif page == "Мої проекти":    
-        if 'show_my_projects_page' in globals(): show_my_projects_page()
+        # Routing
+        if page == "Дашборд":
+            if 'show_dashboard' in globals(): show_dashboard()
         
-    elif page == "Перелік запитів":
-        if 'show_keywords_page' in globals(): show_keywords_page()
-        
-    elif page == "Джерела":
-        if 'show_sources_page' in globals(): show_sources_page()
-        
-    elif page == "Конкуренти":
-        if 'show_competitors_page' in globals(): show_competitors_page()
-        else: st.info("Розділ 'Конкуренти' в розробці.")
+        elif page == "Мої проекти":    
+            if 'show_my_projects_page' in globals(): show_my_projects_page()
             
-    elif page == "Рекомендації":
-        if 'show_recommendations_page' in globals(): show_recommendations_page()
+        elif page == "Перелік запитів":
+            if 'show_keywords_page' in globals(): show_keywords_page()
+            
+        elif page == "Джерела":
+            if 'show_sources_page' in globals(): show_sources_page()
+            
+        elif page == "Конкуренти":
+            if 'show_competitors_page' in globals(): show_competitors_page()
+            else: st.info("Section under construction.")
+                
+        elif page == "Рекомендації":
+            if 'show_recommendations_page' in globals(): show_recommendations_page()
 
-    elif page == "Історія сканувань":
-        if 'show_history_page' in globals(): show_history_page()
-        
-    elif page == "Звіти":
-        if 'show_reports_page' in globals(): show_reports_page()
-        
-    elif page == "FAQ":
-        if 'show_faq_page' in globals(): show_faq_page()
+        elif page == "Історія сканувань":
+            if 'show_history_page' in globals(): show_history_page()
+            
+        elif page == "Звіти":
+            if 'show_reports_page' in globals(): show_reports_page()
+            
+        elif page == "FAQ":
+            if 'show_faq_page' in globals(): show_faq_page()
 
-    elif page == "GPT-Visibility":
-        if 'show_chat_page' in globals(): show_chat_page()
-        
-    elif page == "Адмін":
-        user_role = st.session_state.get("role", "user")
-        if user_role in ["admin", "super_admin"]:
-            if 'show_admin_page' in globals(): show_admin_page()
-        else:
-            st.error("Доступ заборонено.")
+        elif page == "GPT-Visibility":
+            if 'show_chat_page' in globals(): show_chat_page()
+            
+        elif page == "Адмін":
+            user_role = st.session_state.get("role", "user")
+            if user_role in ["admin", "super_admin"]:
+                if 'show_admin_page' in globals(): show_admin_page()
+            else:
+                st.error("Access denied.")
+
+    except Exception as e:
+        # Catches crashes and shows the error instead of a blank screen
+        st.error(f"💥 Critical Error in main(): {e}")
+        st.caption("Please refresh the page.")
