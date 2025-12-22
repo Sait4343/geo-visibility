@@ -236,9 +236,9 @@ def n8n_generate_prompts(brand: str, domain: str, industry: str, products: str):
 def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     """
     Відправляє запит на n8n для аналізу.
-    ВЕРСІЯ: FIX METRICS (CLEAN DATA).
-    1. Очищує official_assets (видаляє https://, www) для коректного підрахунку.
-    2. Зберігає логіку Trial (блокування повторів).
+    ВЕРСІЯ: TRIAL LOGIC UPDATE (One-time scan per keyword).
+    1. Trial дозволяє сканувати будь-яку модель.
+    2. Trial дозволяє сканувати конкретний запит лише 1 раз.
     """
     import requests
     import streamlit as st
@@ -251,6 +251,13 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
     else:
         st.error("🚨 Помилка: Немає підключення до БД.")
         return False
+
+    # Переконайтеся, що URL вебхука доступний
+    if 'N8N_ANALYZE_URL' not in globals():
+        # Спробуйте взяти з secrets або захардкодити, якщо немає
+        N8N_ANALYZE_URL = st.secrets.get("N8N_ANALYZE_URL", "https://virshi.app.n8n.cloud/webhook/webhook/analyze") 
+    else:
+        N8N_ANALYZE_URL = globals()['N8N_ANALYZE_URL']
 
     MODEL_MAPPING = {
         "Perplexity": "perplexity",
@@ -270,46 +277,79 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         return False
 
     if not models:
-        models = ["Perplexity"]
+        models = ["Perplexity"] # Default
+
+    # Нормалізація keywords (завжди список)
+    if isinstance(keywords, str):
+        keywords_list = [keywords]
+    else:
+        keywords_list = keywords
 
     # ==========================================
-    # 🔥 ЛОГІКА ТРІАЛУ (ЗАХИСТ)
+    # 🔥 ЛОГІКА ТРІАЛУ (НОВА)
     # ==========================================
     if status == "trial":
-        is_only_gemini = True
-        for m in models:
-            if "Gemini" not in m and "gemini" not in m:
-                is_only_gemini = False
-                break
-        
-        if not is_only_gemini:
-            st.warning("🔒 У статусі TRIAL доступний аналіз лише через Google Gemini.")
-            return False
-
         try:
-            # Перевірка на повторний запуск
-            existing = supabase.table("scan_results")\
-                .select("id", count="exact")\
+            # Крок 1: Знаходимо ID для переданих ключових слів
+            # Нам треба знати ID, щоб перевірити scan_results
+            kw_resp = supabase.table("keywords")\
+                .select("id, keyword_text")\
                 .eq("project_id", project_id)\
-                .limit(1)\
+                .in_("keyword_text", keywords_list)\
                 .execute()
             
-            if existing.data or (existing.count and existing.count > 0):
-                st.error("⛔ Аналіз неможливий у статусі TRIAL (ліміт вичерпано). Будь ласка, зверніться в техпідтримку на пошту hi@virshi.ai, щоб отримати статус ACTIVE.")
+            kw_map = {item['keyword_text']: item['id'] for item in kw_resp.data} if kw_resp.data else {}
+            
+            allowed_keywords = []
+            blocked_keywords = []
+
+            for kw_text in keywords_list:
+                kw_id = kw_map.get(kw_text)
+                
+                if kw_id:
+                    # Крок 2: Перевіряємо, чи вже сканували цей ID
+                    # Шукаємо хоча б один запис у scan_results для цього keyword_id
+                    existing_scan = supabase.table("scan_results")\
+                        .select("id", count="exact")\
+                        .eq("keyword_id", kw_id)\
+                        .limit(1)\
+                        .execute()
+                    
+                    if existing_scan.count and existing_scan.count > 0:
+                        blocked_keywords.append(kw_text)
+                    else:
+                        allowed_keywords.append(kw_text)
+                else:
+                    # Якщо ID не знайдено (наприклад, слово ще не записано в БД), 
+                    # то теоретично це "нове" слово. 
+                    # Але n8n зазвичай очікує, що слова вже є в базі.
+                    # Дозволяємо, сподіваючись, що n8n розбереться або створить.
+                    allowed_keywords.append(kw_text)
+
+            if blocked_keywords:
+                st.warning(f"🔒 Наступні запити вже були проскановані (Trial ліміт 1 раз): {', '.join(blocked_keywords[:3])}...")
+            
+            if not allowed_keywords:
+                st.error("⛔ Всі обрані запити вже були проскановані. У статусі Trial повторне сканування заборонено.")
                 return False
+            
+            # Оновлюємо список для відправки (лишаємо тільки дозволені)
+            keywords_list = allowed_keywords
+
         except Exception as e:
             print(f"Trial check error: {e}")
+            # У випадку помилки перевірки - краще пропустити або заблокувати?
+            # Для безпеки можна заблокувати, але для UX краще показати warning
+            st.warning("⚠️ Не вдалося перевірити ліміти Trial. Спробуйте пізніше.")
+            return False
 
     try:
         user = st.session_state.get("user")
         user_email = user.email if user else "no-reply@virshi.ai"
         
-        if isinstance(keywords, str):
-            keywords = [keywords]
-
         success_count = 0
 
-        # --- 3. ОТРИМАННЯ ТА ЧИСТКА WHITELIST (ВАЖЛИВО!) ---
+        # --- 3. ОТРИМАННЯ ТА ЧИСТКА WHITELIST ---
         clean_assets = []
         try:
             assets_resp = supabase.table("official_assets")\
@@ -320,7 +360,6 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
             if assets_resp.data:
                 for item in assets_resp.data:
                     raw_url = item.get("domain_or_url", "").lower().strip()
-                    # Видаляємо сміття, щоб n8n міг знайти цей домен у тексті
                     clean = raw_url.replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
                     if clean:
                         clean_assets.append(clean)
@@ -331,23 +370,24 @@ def n8n_trigger_analysis(project_id, keywords, brand_name, models=None):
         headers = {"virshi-auth": "hi@virshi.ai2025"}
 
         # 4. ВІДПРАВКА
+        # Важливо: Якщо Trial відфільтрував слова, відправляємо тільки allowed_keywords
+        if not keywords_list:
+             return False
+
         for ui_model_name in models:
             tech_model_id = MODEL_MAPPING.get(ui_model_name, ui_model_name)
 
             payload = {
                 "project_id": project_id,
-                "keywords": keywords, 
+                "keywords": keywords_list, # Вже відфільтровані
                 "brand_name": brand_name,
                 "user_email": user_email,
                 "provider": tech_model_id,
                 "models": [tech_model_id],
-                
-                # 🔥 ВІДПРАВЛЯЄМО ЧИСТІ ДОМЕНИ
                 "official_assets": clean_assets 
             }
             
             try:
-                # Переконайтеся, що змінна N8N_ANALYZE_URL доступна
                 response = requests.post(
                     N8N_ANALYZE_URL, 
                     json=payload, 
