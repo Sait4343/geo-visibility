@@ -4637,15 +4637,36 @@ def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
     Вкладка 1: Список активних проектів з детальною статистикою.
-    Вкладка 2: Створення нового проекту (+ запуск сканування).
+    Вкладка 2: Створення нового проекту (ПОВНИЙ ФУНКЦІОНАЛ З АДМІНКИ + ГЕНЕРАЦІЯ AI).
     """
     import streamlit as st
     import pandas as pd
     from datetime import datetime
+    import requests
+    import re
+    import time
+    
+    # --- КОНСТАНТИ ДЛЯ СТВОРЕННЯ ---
+    N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 
-    st.title("📂 Мої проекти")
+    # --- CSS для стилізації номерів ---
+    st.markdown("""
+    <style>
+        .green-number { 
+            background-color: #00C896; 
+            color: white; 
+            width: 24px; 
+            height: 24px; 
+            border-radius: 50%; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-weight: bold; 
+            font-size: 12px; 
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # Перевірка БД
     if 'supabase' in st.session_state:
         supabase = st.session_state['supabase']
     elif 'supabase' in globals():
@@ -4659,6 +4680,39 @@ def show_my_projects_page():
         st.error("Потрібна авторизація.")
         return
 
+    # --- Хелпери для створення ---
+    def trigger_keyword_generation(brand, domain, industry, products):
+        payload = { "brand": brand, "domain": domain, "industry": industry, "products": products }
+        headers = {"virshi-auth": "hi@virshi.ai2025"}
+        try:
+            response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=60)
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    if isinstance(data, dict):
+                        if "prompts" in data: return data["prompts"]
+                        if "keywords" in data: return data["keywords"]
+                        return list(data.values()) if data else []
+                    elif isinstance(data, list):
+                        return data
+                    return []
+                except ValueError:
+                    return []
+            else:
+                st.error(f"Error: {response.status_code}")
+                return []
+        except Exception as e:
+            st.error(f"Connection error: {e}")
+            return []
+
+    # Ініціалізація списку ключових слів для нового проекту
+    if "new_proj_keywords" not in st.session_state:
+        st.session_state["new_proj_keywords"] = [] 
+    if "my_proj_reset_id" not in st.session_state:
+        st.session_state["my_proj_reset_id"] = 0
+
+    st.title("📂 Мої проекти")
+    
     # Вкладки
     tab1, tab2 = st.tabs(["📋 Активні проекти", "➕ Створити проект"])
 
@@ -4667,8 +4721,6 @@ def show_my_projects_page():
     # ========================================================
     with tab1:
         try:
-            # 1. Отримуємо проекти користувача
-            # Якщо адмін - може бачити всі? За логікою "Мої проекти" - тільки свої.
             projs_resp = supabase.table("projects").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
             projects = projs_resp.data if projs_resp.data else []
 
@@ -4677,43 +4729,36 @@ def show_my_projects_page():
             else:
                 for p in projects:
                     with st.container(border=True):
-                        # Основна розмітка: Лого (зліва) + Інфо (центр) + Статистика (справа)
                         col_logo, col_info, col_stats = st.columns([1, 2, 2])
 
-                        # --- Колонка 1: Логотип ---
+                        # 1. Лого
                         with col_logo:
                             if p.get('logo_url'):
                                 st.image(p['logo_url'], width=100)
+                            elif p.get('domain'):
+                                clean_d = p['domain'].replace('https://', '').replace('www.', '').split('/')[0]
+                                l_url = f"https://cdn.brandfetch.io/{clean_d}"
+                                st.image(l_url, width=100)
                             else:
                                 st.markdown("🖼️ *No Logo*")
 
-                        # --- Колонка 2: Інформація ---
+                        # 2. Інфо
                         with col_info:
-                            st.subheader(p.get('project_name', 'Без назви'))
-                            st.markdown(f"**Бренд:** {p.get('brand_name')}")
+                            st.subheader(p.get('brand_name') or p.get('project_name', 'Без назви'))
+                            st.markdown(f"**Домен:** {p.get('domain', '-')}")
                             st.markdown(f"**Галузь:** {p.get('industry', '-')}")
-                            st.markdown(f"**Послуги:** {p.get('description', '-')}") # Припускаємо, що послуги в описі
                             
-                            # Дата створення
+                            # Продукти/Опис
+                            desc = p.get('description', '-')
+                            if len(desc) > 100: desc = desc[:100] + "..."
+                            st.markdown(f"**Послуги:** {desc}")
+                            
                             created_dt = p.get('created_at', '')[:10]
-                            st.caption(f"📅 Створено: {created_dt} | ID: {p['id']}")
+                            st.caption(f"📅 Створено: {created_dt}")
 
-                            # Автор (ПІБ)
-                            # Пробуємо отримати ім'я з профілю
-                            author_name = "Поточний користувач"
-                            try:
-                                # Оптимізація: можна кешувати профілі, але тут робимо запит
-                                profile_resp = supabase.table("profiles").select("first_name, last_name").eq("id", p['user_id']).execute()
-                                if profile_resp.data:
-                                    prof = profile_resp.data[0]
-                                    author_name = f"{prof.get('first_name','')} {prof.get('last_name','')}"
-                            except:
-                                pass
-                            st.caption(f"👤 **Автор:** {author_name}")
-
-                        # --- Колонка 3: Статистика та Джерела ---
+                        # 3. Статистика
                         with col_stats:
-                            # 1. Офіційні джерела
+                            # Джерела
                             try:
                                 assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
                                 sources = [a['domain_or_url'] for a in assets_resp.data] if assets_resp.data else []
@@ -4723,7 +4768,7 @@ def show_my_projects_page():
                                 for s in sources:
                                     st.markdown(f"- `{s}`")
 
-                            # 2. Кількість запитів (Keywords)
+                            # Кількість запитів
                             try:
                                 kw_resp = supabase.table("keywords").select("id", count="exact").eq("project_id", p['id']).execute()
                                 kw_count = kw_resp.count if kw_resp.count is not None else len(kw_resp.data)
@@ -4731,121 +4776,204 @@ def show_my_projects_page():
                             
                             st.markdown(f"**🔑 Ключових слів:** `{kw_count}`")
 
-                            # 3. Сканування по LLM
-                            st.markdown("**🤖 Сканування по моделях:**")
-                            try:
-                                # Агрегація сканувань. (Це може бути важкий запит, краще робити через rpc, але зробимо простий підрахунок)
-                                scan_resp = supabase.table("scan_results").select("provider").eq("project_id", p['id']).execute()
-                                if scan_resp.data:
-                                    df_scans = pd.DataFrame(scan_resp.data)
-                                    stats = df_scans['provider'].value_counts()
-                                    
-                                    cols_llm = st.columns(len(stats) if len(stats) > 0 else 1)
-                                    for idx, (provider, count) in enumerate(stats.items()):
-                                        # Красиві назви
-                                        prov_nice = provider.replace("google_", "").replace("openai_", "").capitalize()
-                                        st.markdown(f"- **{prov_nice}:** {count}")
-                                else:
-                                    st.caption("Сканувань ще не було.")
-                            except Exception as e:
-                                st.caption("Помилка завантаження статистики")
-
-                        # Кнопка переходу в проект
-                        if st.button(f"➡️ Відкрити '{p.get('brand_name')}'", key=f"open_proj_{p['id']}"):
-                            st.session_state["current_project"] = p
-                            st.rerun()
+                            # Кнопка відкриття
+                            if st.button(f"➡️ Відкрити проект", key=f"open_proj_{p['id']}", type="primary"):
+                                st.session_state["current_project"] = p
+                                st.rerun()
 
         except Exception as e:
             st.error(f"Помилка завантаження проектів: {e}")
 
     # ========================================================
-    # ТАБ 2: СТВОРЕННЯ ПРОЕКТУ
+    # ТАБ 2: СТВОРЕННЯ ПРОЕКТУ (ПОВНИЙ ФУНКЦІОНАЛ)
     # ========================================================
     with tab2:
-        st.subheader("Створення нового проекту")
+        st.markdown("##### 🚀 Створення нового проекту")
         
-        with st.form("create_project_form_user"):
-            c1, c2 = st.columns(2)
-            with c1:
-                new_brand = st.text_input("Назва бренду (Brand Name)", placeholder="Virshi AI")
-                new_domain = st.text_input("Домен (Domain)", placeholder="virshi.ai")
-                new_industry = st.selectbox("Галузь", ["IT", "E-commerce", "Fintech", "Health", "Agro", "Retail", "Other"])
-            
-            with c2:
-                new_project_name = st.text_input("Назва проекту (внутрішня)", placeholder="Virshi Main Audit")
-                new_logo = st.text_input("URL логотипу", placeholder="https://example.com/logo.png")
-            
-            new_desc = st.text_area("Опис послуг / Про проект", placeholder="Ми займаємось AI аналітикою...")
-            
-            st.markdown("---")
-            st.markdown("#### ⚙️ Налаштування сканування")
-            
-            # Вибір LLM
-            llm_options = ["google_gemini", "chatgpt_4o", "perplexity", "claude_3"]
-            selected_llms = st.multiselect("Оберіть LLM для аналізу", llm_options, default=["chatgpt_4o", "google_gemini"])
-            
-            # Офіційні джерела (Text area для масового вводу)
-            st.markdown("#### 🔗 Офіційні джерела (по одному в рядок)")
-            sources_text = st.text_area("Список URL (Whitelist)", height=100, placeholder="https://virshi.ai\nhttps://linkedin.com/company/virshi")
-            
-            col_b1, col_b2 = st.columns(2)
-            
-            # Кнопка 1: Зберегти
-            submitted_save = col_b1.form_submit_button("💾 Зберегти проект")
-            
-            # Кнопка 2: Зберегти і запустити
-            submitted_run = col_b2.form_submit_button("🚀 Зберегти і запустити аналіз")
+        rk = st.session_state["my_proj_reset_id"]
+        
+        c1, c2 = st.columns(2)
+        new_name_val = c1.text_input("Назва бренду *", key=f"mp_name_{rk}", placeholder="Наприклад: SkyUp")
+        new_domain_val = c2.text_input("Домен *", key=f"mp_domain_{rk}", placeholder="skyup.aero")
+        
+        c3, c4 = st.columns(2)
+        new_industry_val = c3.text_input("Галузь *", key=f"mp_ind_{rk}", placeholder="напр. авіаперевезення")
+        region_options = ["Ukraine", "USA", "Europe", "Global"]
+        new_region_val = c4.selectbox("Регіон", region_options, key=f"mp_region_{rk}")
 
-            if submitted_save or submitted_run:
-                if not new_brand or not new_project_name:
-                    st.error("Назва бренду та Назва проекту обов'язкові.")
+        new_desc_val = st.text_area("Продукти/Послуги *", placeholder="Опишіть основні продукти для точної генерації запитів", height=68, key=f"mp_desc_{rk}")
+        
+        # --- ГЕНЕРАЦІЯ ЗАПИТІВ ---
+        if st.button("✨ Згенерувати запити (AI)", key=f"mp_btn_gen_{rk}"):
+            if new_domain_val and new_industry_val and new_desc_val: 
+                brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
+                
+                with st.spinner("Аналіз бренду та генерація запитів..."):
+                    generated_kws = trigger_keyword_generation(
+                        brand=brand_for_ai,
+                        domain=new_domain_val,
+                        industry=new_industry_val,
+                        products=new_desc_val
+                    )
+                
+                if generated_kws:
+                    current_kws = st.session_state["new_proj_keywords"]
+                    for kw in generated_kws:
+                        current_kws.append({"keyword": kw})
+                    st.session_state["new_proj_keywords"] = current_kws
+                    st.success(f"Додано {len(generated_kws)} запитів!")
                 else:
+                    st.warning("AI не повернув запитів. Спробуйте уточнити опис.")
+            else:
+                st.warning("⚠️ Для генерації заповніть: Домен, Галузь та Продукти.")
+
+        st.divider()
+        st.markdown("###### 📝 Список запитів (Моніторинг)")
+        
+        # --- ІМПОРТ ---
+        with st.expander("📥 Імпорт (Excel / URL)", expanded=False):
+            st.info("💡 Завантажте файл .xlsx або вставте посилання. Перша колонка має бути 'Keyword'.")
+            
+            import_source = st.radio("Джерело:", ["Файл (.xlsx)", "Посилання (URL)"], horizontal=True, key=f"mp_imp_src_{rk}")
+            df_upload = None
+            
+            if import_source == "Файл (.xlsx)":
+                uploaded_file = st.file_uploader("Оберіть файл", type=["xlsx"], key=f"mp_file_{rk}")
+                if uploaded_file:
+                    try: df_upload = pd.read_excel(uploaded_file)
+                    except Exception as e: st.error(f"Помилка файлу: {e}")
+            else:
+                import_url = st.text_input("Посилання (Google Sheets / CSV):", key=f"mp_url_{rk}")
+                if import_url:
                     try:
-                        # 1. Створення проекту
-                        user_id = st.session_state.user.id
-                        proj_data = {
-                            "user_id": user_id,
-                            "brand_name": new_brand,
-                            "project_name": new_project_name,
-                            "domain": new_domain,
-                            "industry": new_industry,
-                            "description": new_desc, # Зберігаємо послуги тут
-                            "logo_url": new_logo,
-                            "status": "active",
-                            "created_at": datetime.now().isoformat()
-                        }
-                        
-                        res = supabase.table("projects").insert(proj_data).execute()
-                        
-                        if res.data:
-                            new_proj_id = res.data[0]['id']
-                            
-                            # 2. Додавання джерел
-                            sources_list = [s.strip() for s in sources_text.split('\n') if s.strip()]
-                            if new_domain and new_domain not in sources_text: 
-                                sources_list.insert(0, new_domain) # Додаємо сам домен
+                        if "docs.google.com" in import_url:
+                            match = re.search(r'/d/([a-zA-Z0-9-_]+)', import_url)
+                            if match:
+                                sheet_id = match.group(1)
+                                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+                                df_upload = pd.read_csv(csv_url)
+                            else: st.error("Невірний Google Sheet URL")
+                        elif import_url.endswith(".csv"):
+                            df_upload = pd.read_csv(import_url)
+                        elif import_url.endswith(".xlsx"):
+                            df_upload = pd.read_excel(import_url)
+                    except Exception as e: st.error(f"Помилка URL: {e}")
 
-                            if sources_list:
-                                assets_data = [{"project_id": new_proj_id, "domain_or_url": s, "asset_type": "web"} for s in sources_list]
-                                supabase.table("official_assets").insert(assets_data).execute()
+            if df_upload is not None:
+                target_col = df_upload.columns[0]
+                cols_lower = [str(c).lower().strip() for c in df_upload.columns]
+                if "keyword" in cols_lower: target_col = df_upload.columns[cols_lower.index("keyword")]
+                
+                imp_kws = df_upload[target_col].dropna().astype(str).tolist()
+                
+                if st.button(f"Додати {len(imp_kws)} запитів", key=f"mp_add_imp_{rk}"):
+                    current_kws = st.session_state["new_proj_keywords"]
+                    for kw in imp_kws:
+                        current_kws.append({"keyword": kw})
+                    st.session_state["new_proj_keywords"] = current_kws
+                    st.success("Імпортовано!")
+                    st.rerun()
 
-                            # 3. Логіка запуску (якщо обрано Run)
-                            if submitted_run:
-                                # Тут має бути логіка додавання в чергу сканування
-                                # Оскільки ми не маємо keywords, ми просто зберігаємо налаштування LLM
-                                # або додаємо заглушку
-                                st.success(f"Проект '{new_brand}' створено! LLM {selected_llms} підготовлено до сканування.")
-                                st.info("⚠️ Увага: Для реального запуску аналізу додайте ключові слова у розділі 'Перелік запитів'.")
-                            else:
-                                st.success(f"Проект '{new_brand}' успішно збережено!")
-                            
-                            # Оновлюємо сесію (опціонально одразу перемикаємо на новий проект)
-                            st.session_state["current_project"] = res.data[0]
-                            time.sleep(1) # Пауза для UX
+        # --- ТАБЛИЦЯ ЗАПИТІВ ---
+        keywords_list = st.session_state["new_proj_keywords"]
+        
+        if not keywords_list:
+            st.info("Список запитів порожній.")
+        else:
+            for i, item in enumerate(keywords_list):
+                with st.container(border=True):
+                    c_num, c_txt, c_act = st.columns([0.5, 8, 1])
+                    with c_num:
+                        st.markdown(f"<div class='green-number'>{i+1}</div>", unsafe_allow_html=True)
+                    with c_txt:
+                        new_val = st.text_input("kw", value=item['keyword'], key=f"mp_kw_{i}_{rk}", label_visibility="collapsed")
+                        if new_val != item['keyword']:
+                            st.session_state["new_proj_keywords"][i]['keyword'] = new_val
+                    with c_act:
+                        if st.button("🗑️", key=f"mp_del_{i}_{rk}"):
+                            st.session_state["new_proj_keywords"].pop(i)
                             st.rerun()
-                            
-                    except Exception as e:
-                        st.error(f"Помилка створення: {e}")
+
+        if st.button("➕ Додати рядок", key=f"mp_plus_{rk}"):
+            st.session_state["new_proj_keywords"].append({"keyword": ""})
+            st.rerun()
+
+        st.divider()
+        st.markdown("#### ⚙️ Налаштування запуску")
+        
+        col_llm, col_act = st.columns(2)
+        with col_llm:
+            llm_opts = ["chatgpt_4o", "google_gemini", "perplexity", "claude_3"]
+            selected_llms = st.multiselect("Активувати LLM", llm_opts, default=["chatgpt_4o", "google_gemini"], key=f"mp_llms_{rk}")
+        
+        with col_act:
+            st.caption("Дія:")
+            # Дві кнопки поруч
+            b1, b2 = st.columns(2)
+            save_only = b1.button("💾 Зберегти проект", use_container_width=True)
+            save_run = b2.button("🚀 Зберегти та Запустити", type="primary", use_container_width=True)
+
+        if save_only or save_run:
+            final_name = new_name_val if new_name_val else new_domain_val.split('.')[0].capitalize()
+            
+            if new_domain_val and new_industry_val:
+                try:
+                    user_id = st.session_state.user.id
+                    
+                    # 1. Створення проекту
+                    new_proj_data = {
+                        "user_id": user_id,
+                        "brand_name": final_name,
+                        "domain": new_domain_val,
+                        "industry": new_industry_val,
+                        "description": new_desc_val,
+                        "status": "active",
+                        "allow_cron": True if save_run else False,
+                        "region": new_region_val,
+                        "created_at": datetime.now().isoformat()
+                    }
+                    
+                    res_proj = supabase.table("projects").insert(new_proj_data).execute()
+                    
+                    if res_proj.data:
+                        new_proj_id = res_proj.data[0]['id']
+                        
+                        # 2. Офіційні джерела (Домен)
+                        try:
+                            clean_d = new_domain_val.replace("https://", "").replace("http://", "").replace("www.", "").strip().rstrip("/")
+                            supabase.table("official_assets").insert({
+                                "project_id": new_proj_id, 
+                                "domain_or_url": clean_d, 
+                                "type": "website"
+                            }).execute()
+                        except: pass
+
+                        # 3. Ключові слова
+                        final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
+                        if final_kws_clean:
+                            kws_data = [{"project_id": new_proj_id, "keyword_text": kw, "is_active": True} for kw in final_kws_clean]
+                            supabase.table("keywords").insert(kws_data).execute()
+
+                        # 4. Якщо обрано "Запустити" -> Додаємо в чергу (mockup)
+                        # В реальності тут треба записати в таблицю scanning_queue або викликати вебхук запуску
+                        if save_run:
+                            st.toast(f"🚀 Проект створено. Сканування запущено по {len(selected_llms)} моделях!")
+                        else:
+                            st.success("✅ Проект успішно збережено!")
+
+                        # 5. Очистка і перехід
+                        st.session_state["new_proj_keywords"] = []
+                        st.session_state["my_proj_reset_id"] += 1
+                        
+                        # Перемикаємось на новий проект
+                        st.session_state["current_project"] = res_proj.data[0]
+                        time.sleep(1.5)
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"Помилка створення: {e}")
+            else:
+                st.warning("⚠️ Заповніть обов'язкові поля: Назва, Домен, Галузь.")
 
 
 def show_history_page():
@@ -5477,24 +5605,16 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    ВЕРСІЯ: FINAL FIXES (RESET FIELDS, IMPORT URL, STATUS ERROR HANDLING).
-    1. Tab 2: Виправлено очищення полів через динамічні ключі (fix 'cannot be modified').
-    2. Tab 2: Додано імпорт запитів через URL.
-    3. Tab 1: Обробка помилки ENUM для статусу 'blocked'.
-    4. Tab 3: Проекти з нового рядка.
+    ВЕРСІЯ: CLEANED (Removed Project Creation).
+    Залишено:
+    1. Список проектів (фільтрація, редагування статусів, видалення).
+    2. Управління користувачами (ролі).
     """
     import pandas as pd
     import streamlit as st
     import numpy as np
-    import requests
-    import json
     import time
     import plotly.express as px
-    import io
-    import re
-
-    # --- КОНСТАНТИ ---
-    N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 
     # --- 0. ПІДКЛЮЧЕННЯ ---
     if 'supabase' not in globals():
@@ -5505,29 +5625,6 @@ def show_admin_page():
             return
     else:
         supabase = globals()['supabase']
-
-    # --- CSS ---
-    st.markdown("""
-    <style>
-        .green-number { 
-            background-color: #00C896; 
-            color: white; 
-            width: 24px; 
-            height: 24px; 
-            border-radius: 50%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            font-weight: bold; 
-            font-size: 12px; 
-        }
-        .del-kw-btn { color: #FF4B4B; cursor: pointer; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # --- STATE ДЛЯ ОЧИЩЕННЯ ФОРМИ ---
-    if "admin_reset_id" not in st.session_state:
-        st.session_state["admin_reset_id"] = 0
 
     # --- ХЕЛПЕРИ ---
     def clean_data_for_json(data):
@@ -5548,48 +5645,14 @@ def show_admin_page():
             if "my_projects" in st.session_state: del st.session_state["my_projects"]
             if "all_projects_admin" in st.session_state: del st.session_state["all_projects_admin"]
             
-            # Оновлення поточного
-            if "current_project" in st.session_state and st.session_state["current_project"]:
-                if st.session_state["current_project"]["id"] == proj_id:
-                    st.session_state["current_project"][field] = val
-                
             st.toast(f"✅ Оновлено: {field} -> {value}")
             time.sleep(0.5)
         except Exception as e:
             err_msg = str(e)
             if "invalid input value for enum" in err_msg:
-                st.error(f"⚠️ Помилка БД: Статус '{value}' не додано в ENUM (тип даних) у Supabase. Зверніться до розробника БД.")
+                st.error(f"⚠️ Помилка БД: Статус '{value}' не валідний.")
             else:
                 st.error(f"Помилка оновлення: {err_msg}")
-
-    # --- ВЕБХУК ---
-    def trigger_keyword_generation(brand, domain, industry, products):
-        payload = { "brand": brand, "domain": domain, "industry": industry, "products": products }
-        headers = {"virshi-auth": "hi@virshi.ai2025"}
-        try:
-            response = requests.post(N8N_GEN_URL, json=payload, headers=headers, timeout=60)
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                    if isinstance(data, dict):
-                        if "prompts" in data: return data["prompts"]
-                        if "keywords" in data: return data["keywords"]
-                        return list(data.values()) if data else []
-                    elif isinstance(data, list):
-                        return data
-                    return []
-                except ValueError:
-                    return []
-            else:
-                st.error(f"Error: {response.status_code}")
-                return []
-        except Exception as e:
-            st.error(f"Connection error: {e}")
-            return []
-
-    # Ініціалізація списку
-    if "new_proj_keywords" not in st.session_state:
-        st.session_state["new_proj_keywords"] = [] 
 
     st.title("🛡️ Admin Panel (CRM)")
 
@@ -5637,8 +5700,8 @@ def show_admin_page():
 
     st.write("")
 
-    # --- 3. ВКЛАДКИ ---
-    tab_list, tab_create, tab_users = st.tabs(["📂 Список проектів", "➕ Створити проект", "👥 Користувачі & Права"])
+    # --- 3. ВКЛАДКИ (ТІЛЬКИ 2) ---
+    tab_list, tab_users = st.tabs(["📂 Список проектів", "👥 Користувачі & Права"])
 
     # ========================================================
     # TAB 1: СПИСОК ПРОЕКТІВ
@@ -5676,7 +5739,7 @@ def show_admin_page():
             reverse_sort = True if sort_order == "Найновіші" else False
             filtered_projects.sort(key=lambda x: x.get('created_at', ''), reverse=reverse_sort)
 
-        # Header (Трохи змінили пропорції колонок, щоб вмістити лого)
+        # Header
         h0, h1, h_dash, h2, h3, h_cnt, h4, h5 = st.columns([0.3, 2.5, 0.4, 1.3, 1.2, 0.7, 0.9, 0.5])
         h0.markdown("**#**")
         h1.markdown("**Проект / Користувач**")
@@ -5698,77 +5761,47 @@ def show_admin_page():
             raw_name = p.get('brand_name') or p.get('project_name')
             domain = p.get('domain', '')
             
-            # Логіка очистки імені та домену
             if raw_name:
                 clean_name = str(raw_name).replace('*', '').strip()
             else:
                 clean_name = domain.replace('https://', '').replace('www.', '').split('/')[0] if domain else "Без назви"
-# ---------------------------------------------------------
-            # ЛОГІКА ЛОГОТИПУ (Brandfetch CDN + Google Fallback)
-            # ---------------------------------------------------------
+
+            # ЛОГОТИП
             logo_url = None
             backup_logo_url = None
-
             if domain:
-                # Очистка домену від сміття
                 clean_d = domain.lower().replace('https://', '').replace('http://', '').replace('www.', '')
                 if '/' in clean_d: clean_d = clean_d.split('/')[0]
-                
-                # 1. Основне посилання (Brandfetch CDN)
                 logo_url = f"https://cdn.brandfetch.io/{clean_d}"
-                # 2. Резервне посилання (Google Favicons)
                 backup_logo_url = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=64"
 
-            # Отримуємо кількість запитів
             k_count = kw_counts.get(p_id, 0)
 
-            # ---------------------------------------------------------
-            # ВІДОБРАЖЕННЯ В ТАБЛИЦІ
-            # ---------------------------------------------------------
             with st.container():
-                # Пропорції колонок
                 c0, c1, c_dash, c2, c3, c_cnt, c4, c5 = st.columns([0.3, 2.5, 0.4, 1.3, 1.2, 0.7, 0.9, 0.5])
 
                 with c0: st.caption(f"{idx}")
 
                 with c1:
-                    # Якщо є домен -> показуємо Лого + Назву
                     if logo_url:
                         sub_c1, sub_c2 = st.columns([0.15, 0.85])
-                        
                         with sub_c1:
-                            # 🔥 ФІКС "СИНЬОГО КОДУ": 
-                            # Ми формуємо HTML в окремій змінній з одинарними лапками всередині.
-                            # Це гарантує, що Python не заплутається в лапках.
                             img_html = f'<img src="{logo_url}" style="width: 30px; border-radius: 4px; pointer-events: none;" onerror="this.onerror=null; this.src=\'{backup_logo_url}\';">'
-                            
                             st.markdown(img_html, unsafe_allow_html=True)
-
                         with sub_c2:
-                            # УВАГА: Тут тільки ОДНА лапка в кінці!
                             st.markdown(f"**{clean_name}**")
                     else:
-                        # Якщо домену немає -> просто назва
                         st.markdown(f"**{clean_name}**")
                     
-                    # Решта інфо про проект (ID, лінки)
                     st.caption(f"ID: `{p_id}`")
                     if domain: st.caption(f"🌐 {domain}")
                     st.caption(f"👤 {owner_info['full_name']} | {owner_info['email']}")
 
-                
                 with c_dash:
                     if st.button("↗️", key=f"goto_{p_id}", help="Відкрити дашборд"):
-                        # 1. Встановлюємо проект
                         st.session_state["current_project"] = p
-                        
-                        # 2. Встановлюємо ціль для меню
                         st.session_state["force_redirect_to"] = "Дашборд"
-                        
-                        # 3. Змінюємо ID меню, щоб воно перемалювалось з новим default_index
                         st.session_state["menu_id_counter"] = st.session_state.get("menu_id_counter", 0) + 1
-                        
-                        # 4. Скидаємо фокус
                         st.session_state["focus_keyword_id"] = None
                         st.rerun()
                         
@@ -5815,196 +5848,9 @@ def show_admin_page():
                             st.rerun()
                 
                 st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
-        
-    # ========================================================
-    # TAB 2: СТВОРИТИ ПРОЕКТ
-    # ========================================================
-    with tab_create:
-        st.markdown("##### Створення нового проекту")
-        
-        # Використовуємо динамічний ключ для скидання полів
-        rk = st.session_state["admin_reset_id"]
-        
-        c1, c2 = st.columns(2)
-        new_name_val = c1.text_input("Назва проекту (Бренд)", key=f"new_proj_name_{rk}", placeholder="Наприклад: SkyUp")
-        new_domain_val = c2.text_input("Домен", key=f"new_proj_domain_{rk}", placeholder="skyup.aero")
-        
-        c3, c4 = st.columns(2)
-        new_industry_val = c3.text_input("Галузь (Обов'язково)", key=f"new_proj_ind_{rk}", placeholder="напр. авіаперевезення")
-        
-        region_options = ["Ukraine", "USA", "Europe", "Global"]
-        new_region_val = c4.selectbox("Регіон", region_options, key=f"new_proj_region_{rk}")
-
-        new_desc_val = st.text_area("Продукти/Послуги", placeholder="напр. лоукостер, квитки", height=68, key=f"new_proj_desc_{rk}")
-        
-        if st.button("✨ Згенерувати 10 запитів (AI)", key=f"btn_gen_{rk}"):
-            if new_domain_val and new_industry_val and new_desc_val: 
-                brand_for_ai = new_name_val if new_name_val else new_domain_val.split('.')[0]
-                
-                with st.spinner("Звертаємось до n8n для генерації..."):
-                    generated_kws = trigger_keyword_generation(
-                        brand=brand_for_ai,
-                        domain=new_domain_val,
-                        industry=new_industry_val,
-                        products=new_desc_val
-                    )
-                
-                if generated_kws:
-                    current_kws = st.session_state["new_proj_keywords"]
-                    for kw in generated_kws:
-                        current_kws.append({"keyword": kw})
-                    st.session_state["new_proj_keywords"] = current_kws
-                    st.success(f"Додано {len(generated_kws)} запитів!")
-                else:
-                    st.warning("Вебхук не повернув даних.")
-            else:
-                st.warning("⚠️ Заповніть: Домен, Галузь та Продукти.")
-
-        st.divider()
-        st.markdown("###### 📝 Редагування запитів перед створенням")
-        
-        # --- ІМПОРТ (FILE & URL) ---
-        with st.expander("📥 Імпорт (Excel / URL)", expanded=False):
-            st.info("💡 Завантажте файл .xlsx або вставте посилання на Google Sheet. Перша колонка має називатися **Keyword**.")
-            
-            import_source = st.radio("Джерело:", ["Файл (.xlsx)", "Посилання (URL)"], horizontal=True, key=f"admin_imp_src_{rk}")
-            df_upload = None
-            
-            if import_source == "Файл (.xlsx)":
-                uploaded_file = st.file_uploader("Оберіть файл Excel", type=["xlsx"], key=f"admin_kw_import_file_{rk}")
-                if uploaded_file:
-                    try:
-                        df_upload = pd.read_excel(uploaded_file)
-                    except Exception as e:
-                        st.error(f"Помилка файлу: {e}")
-            else:
-                import_url = st.text_input("Вставте посилання (Google Sheets або CSV):", key=f"admin_kw_import_url_{rk}")
-                if import_url:
-                    try:
-                        if "docs.google.com" in import_url:
-                            match = re.search(r'/d/([a-zA-Z0-9-_]+)', import_url)
-                            if match:
-                                sheet_id = match.group(1)
-                                csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
-                                df_upload = pd.read_csv(csv_url)
-                            else:
-                                st.error("Не вдалося розпізнати ID Google Sheet.")
-                        elif import_url.endswith(".csv"):
-                            df_upload = pd.read_csv(import_url)
-                        elif import_url.endswith(".xlsx"):
-                            df_upload = pd.read_excel(import_url)
-                        else:
-                            st.warning("Пробуємо як CSV...")
-                            df_upload = pd.read_csv(import_url)
-                    except Exception as e:
-                        if "400" in str(e): st.error("Помилка 400. Перевірте доступ (Anyone with the link).")
-                        else: st.error(f"Помилка URL: {e}")
-
-            if df_upload is not None:
-                target_col = None
-                cols_lower = [str(c).lower().strip() for c in df_upload.columns]
-                if "keyword" in cols_lower: target_col = df_upload.columns[cols_lower.index("keyword")]
-                elif "запит" in cols_lower: target_col = df_upload.columns[cols_lower.index("запит")]
-                else: target_col = df_upload.columns[0]
-                
-                imp_kws = df_upload[target_col].dropna().astype(str).tolist()
-                
-                if st.button(f"Додати {len(imp_kws)} запитів", key=f"btn_add_imp_{rk}"):
-                    current_kws = st.session_state["new_proj_keywords"]
-                    for kw in imp_kws:
-                        current_kws.append({"keyword": kw})
-                    st.session_state["new_proj_keywords"] = current_kws
-                    st.success("Імпортовано!")
-                    st.rerun()
-
-        # --- ТАБЛИЦЯ ЗАПИТІВ ---
-        keywords_list = st.session_state["new_proj_keywords"]
-        
-        if not keywords_list:
-            st.info("Список запитів порожній. Додайте вручну або згенеруйте.")
-        else:
-            for i, item in enumerate(keywords_list):
-                with st.container(border=True):
-                    c_num, c_txt, c_act = st.columns([0.5, 8, 1])
-                    with c_num:
-                        st.markdown(f"<div class='green-number'>{i+1}</div>", unsafe_allow_html=True)
-                    with c_txt:
-                        new_val = st.text_input("kw", value=item['keyword'], key=f"edit_kw_adm_{i}_{rk}", label_visibility="collapsed")
-                        if new_val != item['keyword']:
-                            st.session_state["new_proj_keywords"][i]['keyword'] = new_val
-                    with c_act:
-                        if st.button("🗑️", key=f"del_kw_adm_{i}_{rk}"):
-                            st.session_state["new_proj_keywords"].pop(i)
-                            st.rerun()
-
-        if st.button("➕ Додати рядок", key=f"btn_plus_{rk}"):
-            st.session_state["new_proj_keywords"].append({"keyword": ""})
-            st.rerun()
-
-        st.divider()
-        c_st, c_cr = st.columns(2)
-        new_status = c_st.selectbox("Початковий статус", ["trial", "active", "blocked"], key=f"new_proj_status_{rk}")
-        new_cron = c_cr.checkbox("Дозволити автосканування одразу?", value=False, key=f"new_proj_cron_{rk}")
-
-        if st.button("🚀 Створити проект та зберегти запити", type="primary", key=f"btn_create_{rk}"):
-            final_name = new_name_val if new_name_val else new_domain_val.split('.')[0].capitalize()
-            
-            if new_domain_val:
-                try:
-                    current_user_id = st.session_state["user"].id
-                    
-                    new_proj_data = {
-                        "user_id": current_user_id,
-                        "brand_name": final_name, 
-                        "domain": new_domain_val,
-                        "status": new_status,
-                        "allow_cron": new_cron,
-                        "region": new_region_val
-                    }
-                    res_proj = supabase.table("projects").insert(new_proj_data).execute()
-                    
-                    if res_proj.data:
-                        new_proj_id = res_proj.data[0]['id']
-                        
-                        # Whitelist Clean
-                        try:
-                            clean_d = new_domain_val.replace("https://", "").replace("http://", "").replace("www.", "").strip().rstrip("/")
-                            supabase.table("official_assets").insert({
-                                "project_id": new_proj_id, 
-                                "domain_or_url": clean_d, 
-                                "type": "website"
-                            }).execute()
-                        except: pass
-
-                        final_kws_clean = [k['keyword'].strip() for k in keywords_list if k['keyword'].strip()]
-                        
-                        if final_kws_clean:
-                            kws_data = [
-                                {
-                                    "project_id": new_proj_id, 
-                                    "keyword_text": kw,
-                                    "is_active": True
-                                } for kw in final_kws_clean
-                            ]
-                            supabase.table("keywords").insert(kws_data).execute()
-                        
-                        # --- SUCCESS & RESET ---
-                        st.session_state["new_proj_keywords"] = [] 
-                        if "my_projects" in st.session_state: del st.session_state["my_projects"]
-                        
-                        # Змінюємо ключ, щоб очистити інпути
-                        st.session_state["admin_reset_id"] += 1
-                        
-                        st.success(f"✅ Проект '{final_name}' успішно створено!")
-                        time.sleep(2)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Помилка створення: {e}")
-            else:
-                st.warning("Домен обов'язковий.")
 
     # ========================================================
-    # TAB 3: КОРИСТУВАЧІ ТА ПРАВА (NEW LINE PROJECTS)
+    # TAB 3 (NOW 2): КОРИСТУВАЧІ ТА ПРАВА
     # ========================================================
     with tab_users:
         st.markdown("##### 👥 База користувачів")
@@ -6035,7 +5881,6 @@ def show_admin_page():
                         p_dt = p_row.get('created_at', '')[:10]
                         user_projs.append(f"{p_nm} ({p_dt})")
                 
-                # 🔥 FIX: Новий рядок
                 projs_str = "\n".join(user_projs) if user_projs else "-"
 
                 user_table_data.append({
@@ -6118,7 +5963,6 @@ def show_admin_page():
                 st.warning("Користувачів не знайдено.")
         else:
             st.warning("База користувачів пуста.")
-
 
 def show_chat_page():
     """
