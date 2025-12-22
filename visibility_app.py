@@ -6451,68 +6451,71 @@ def main():
         check_session()
 
     # 2. ПЕРЕВІРКА АВТОРИЗАЦІЇ
-    # Якщо користувача немає в сесії - показуємо вхід і зупиняємо виконання
     if not st.session_state.get("user"):
         if 'show_auth_page' in globals():
             show_auth_page()
         else:
             st.error("Функція авторизації не знайдена.")
-        return  # <--- ВАЖЛИВО: Зупиняємо скрипт, щоб не малювати зайвого
+        return  # Зупиняємо виконання, якщо немає юзера
 
-    # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ (якщо їх ще немає)
+    # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ (Спроба знайти існуючий)
     if not st.session_state.get("current_project"):
         try:
             user_id = st.session_state["user"].id
-            # Використовуємо глобальний supabase об'єкт
-            if 'supabase' in globals() or 'supabase' in st.session_state:
-                sb_client = globals().get('supabase') or st.session_state.get('supabase')
+            # Отримуємо клієнт Supabase
+            sb_client = globals().get('supabase') or st.session_state.get('supabase')
+            
+            if sb_client:
                 resp = sb_client.table("projects").select("*").eq("user_id", user_id).execute()
                 
                 if resp.data:
-                    # Беремо перший знайдений проект і зберігаємо
+                    # Якщо проекти є -> беремо перший і зберігаємо в сесію
                     st.session_state["current_project"] = resp.data[0]
-                    st.rerun()  # <--- Перезавантажуємо, щоб меню одразу побачило проект
+                    st.rerun() # Перезавантажуємо сторінку, щоб показати Дашборд
         except Exception as e:
-            # Можна розкоментувати для дебагу: st.error(f"Error fetching project: {e}")
+            # st.error(f"Error fetching project: {e}")
             pass
 
-    # 4. ЛОГІКА ONBOARDING (Якщо проекту все ще немає)
+    # 4. ЛОГІКА ДЛЯ НОВИХ КОРИСТУВАЧІВ (Якщо проекту все ще немає)
     user_role = st.session_state.get("role", "user")
     
+    # Якщо проекту немає і це не адмін -> ПРИМУСОВО показуємо сторінку створення
     if st.session_state.get("current_project") is None and user_role not in ["admin", "super_admin"]:
-        # Сайдбар для онбордингу (спрощений)
-        with st.sidebar:
-            st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150)
-            st.markdown("---")
-            if st.button("Вийти", use_container_width=True):
-                # Припускаємо, що logout() чистить сесію
-                if 'logout' in globals(): logout()
-                
-        # Тіло онбордингу
-        if 'onboarding_wizard' in globals():
-            onboarding_wizard()
-        else:
-            st.info("Вітаємо! Створіть свій перший проект.")
         
-        return # <--- Зупиняємо скрипт, далі не йдемо
+        # 1. Малюємо сайдбар (щоб можна було вийти)
+        if 'sidebar_menu' in globals():
+            # Тут ми можемо викликати спрощену версію меню або повну
+            # Але оскільки current_project = None, меню покаже "Оберіть проект" або пусте поле
+            with st.sidebar:
+                st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150)
+                st.markdown("---")
+                if st.button("🚪 Вийти з акаунту", use_container_width=True):
+                    if 'logout' in globals(): logout()
+                    else: st.session_state.clear(); st.rerun()
+        
+        # 2. Показуємо сторінку проектів (вона сама відкриє вкладку "Створити")
+        if 'show_my_projects_page' in globals():
+            show_my_projects_page()
+        else:
+            st.warning("Сторінка проектів не знайдена.")
+        
+        return # <--- Зупиняємо скрипт тут! Дашборд нижче не виконається.
 
     # =========================================================
     # 5. ОСНОВНИЙ ДОДАТОК (Тільки якщо є User і Project)
     # =========================================================
     
-    # 1. Спочатку малюємо меню (щоб воно було завжди)
+    # 1. Меню навігації
+    page = "Дашборд"
     if 'sidebar_menu' in globals():
         page = sidebar_menu()
-    else:
-        st.error("Помилка: Функція sidebar_menu не знайдена")
-        page = "Дашборд"
 
     # 2. Роутинг сторінок
     if page == "Дашборд":
         if 'show_dashboard' in globals(): show_dashboard()
     
-    elif page == "Мої проекти":    # <--- ДОДАНО
-        show_my_projects_page()    # <--- ВИКЛИК НОВОЇ ФУНКЦІЇ            
+    elif page == "Мої проекти":    
+        if 'show_my_projects_page' in globals(): show_my_projects_page()
         
     elif page == "Перелік запитів":
         if 'show_keywords_page' in globals(): show_keywords_page()
