@@ -4713,8 +4713,11 @@ def show_sources_page():
 def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
-    ВЕРСІЯ: FIX SYNTAX ERROR.
-    Виправлено помилку з лапками в CSS, через яку виникав сірий екран.
+    ВЕРСІЯ: FIX SYNTAX & LOGO.
+    Виправлено:
+    1. CSS винесено в змінну (лікує 'invalid decimal literal').
+    2. Логотип відображається через HTML <img> (лікує 'биту' картинку).
+    3. Логіка вкладок (Smart Tabs).
     """
     import streamlit as st
     import pandas as pd
@@ -4727,8 +4730,8 @@ def show_my_projects_page():
     # --- КОНСТАНТИ ---
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 
-    # --- CSS (Уважно з лапками!) ---
-    st.markdown("""
+    # --- CSS (Безпечний формат) ---
+    CSS_STYLES = """
     <style>
         .green-number { 
             background-color: #00C896; 
@@ -4744,13 +4747,13 @@ def show_my_projects_page():
         }
         .stTabs [data-baseweb="tab-list"] { gap: 10px; }
         
-        /* Стиль для кнопки редагування */
         button[kind="secondary"] {
             padding: 0px 10px !important;
             border: none !important;
         }
     </style>
-    """, unsafe_allow_html=True)
+    """
+    st.markdown(CSS_STYLES, unsafe_allow_html=True)
 
     # --- ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
@@ -4786,7 +4789,8 @@ def show_my_projects_page():
                     elif isinstance(data, list): return data
                     return []
                 except ValueError: return []
-            return []
+            else:
+                return []
         except Exception: return []
 
     # --- STATE ---
@@ -4825,7 +4829,7 @@ def show_my_projects_page():
                 with st.container(border=True):
                     col_left, col_center, col_right = st.columns([1.3, 2, 2])
 
-                    # --- 1. Лого + Назва (Editable) ---
+                    # --- 1. Лого + Назва ---
                     with col_left:
                         clean_d = None
                         if p.get('domain'):
@@ -4839,7 +4843,7 @@ def show_my_projects_page():
                         
                         backup_logo = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128" if clean_d else ""
 
-                        # HTML для логотипу (виправлено лапки)
+                        # Відображення через HTML (безпечний рядок)
                         if logo_url_src:
                             img_html = f'<img src="{logo_url_src}" style="width: 80px; height: 80px; object-fit: contain; border-radius: 8px; border: 1px solid #eee; padding: 5px;" onerror="this.onerror=null; this.src=\'{backup_logo}\';">'
                             st.markdown(img_html, unsafe_allow_html=True)
@@ -4849,6 +4853,7 @@ def show_my_projects_page():
                         st.write("")
                         current_name = p.get('project_name') or p.get('brand_name') or 'Без назви'
                         
+                        # Редагування назви
                         if st.session_state["edit_proj_id"] == p['id']:
                             new_p_name = st.text_input("Назва", value=current_name, key=f"edit_inp_{p['id']}", label_visibility="collapsed")
                             c_save, c_canc = st.columns([1, 1])
@@ -4873,7 +4878,7 @@ def show_my_projects_page():
                         st.caption(f"📅 {p.get('created_at', '')[:10]}")
                         st.caption(f"👤 {author_name}")
 
-                    # Центр
+                    # --- 2. Деталі ---
                     with col_center:
                         st.markdown(f"**Бренд:** {p.get('brand_name', '-')}")
                         st.markdown(f"**Домен:** `{p.get('domain', '-')}`")
@@ -4885,7 +4890,7 @@ def show_my_projects_page():
                         color_s = "orange" if status_p == "TRIAL" else "green"
                         st.markdown(f"Статус: **:{color_s}[{status_p}]**")
 
-                    # Права колонка
+                    # --- 3. Дії ---
                     with col_right:
                         try:
                             assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
