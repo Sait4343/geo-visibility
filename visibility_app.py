@@ -4713,8 +4713,8 @@ def show_sources_page():
 def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
-    ВЕРСІЯ: SMART TABS (Create First if Empty).
-    Якщо у користувача немає проектів, вкладка 'Створити' показується першою.
+    ВЕРСІЯ: SMART TABS.
+    Якщо у користувача немає проектів, вкладка 'Створити' стає першою.
     """
     import streamlit as st
     import pandas as pd
@@ -4731,16 +4731,9 @@ def show_my_projects_page():
     st.markdown("""
     <style>
         .green-number { 
-            background-color: #00C896; 
-            color: white; 
-            width: 24px; 
-            height: 24px; 
-            border-radius: 50%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            font-weight: bold; 
-            font-size: 12px; 
+            background-color: #00C896; color: white; width: 24px; height: 24px; 
+            border-radius: 50%; display: flex; align-items: center; justify-content: center; 
+            font-weight: bold; font-size: 12px; 
         }
         .stTabs [data-baseweb="tab-list"] { gap: 10px; }
         button[kind="secondary"] { padding: 0px 10px !important; border: none !important; }
@@ -4781,12 +4774,8 @@ def show_my_projects_page():
                     elif isinstance(data, list): return data
                     return []
                 except ValueError: return []
-            else:
-                st.error(f"Error: {response.status_code}")
-                return []
-        except Exception as e:
-            st.error(f"Connection error: {e}")
             return []
+        except Exception: return []
 
     # --- STATE ---
     if "new_proj_keywords" not in st.session_state: st.session_state["new_proj_keywords"] = [] 
@@ -4798,15 +4787,15 @@ def show_my_projects_page():
 
     st.title("📂 Мої проекти")
     
-    # 1. ЗАВАНТАЖУЄМО ПРОЕКТИ СПОЧАТКУ
+    # 1. ЗАВАНТАЖУЄМО ПРОЕКТИ
     try:
         projs_resp = supabase.table("projects").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
         projects = projs_resp.data if projs_resp.data else []
     except:
         projects = []
 
-    # 2. ЛОГІКА ПОРЯДКУ ВКЛАДОК
-    # Якщо проектів немає -> Створення перше. Якщо є -> Список перший.
+    # 2. РОЗУМНІ ВКЛАДКИ
+    # Якщо проектів немає -> "Створити" перша. Якщо є -> "Список" перший.
     if not projects:
         tabs = st.tabs(["➕ Створити проект", "📋 Активні проекти"])
         tab_create = tabs[0]
@@ -4816,17 +4805,16 @@ def show_my_projects_page():
         tab_list = tabs[0]
         tab_create = tabs[1]
 
-    # ========================================================
-    # ТАБ: СПИСОК ПРОЕКТІВ
-    # ========================================================
+    # --- ТАБ: СПИСОК ---
     with tab_list:
         if not projects:
-            st.info("У вас поки немає створених проектів. Перейдіть на вкладку 'Створити проект'.")
+            st.info("У вас поки немає проектів. Перейдіть на вкладку 'Створити проект'.")
         else:
             for p in projects:
                 with st.container(border=True):
                     col_left, col_center, col_right = st.columns([1.3, 2, 2])
-
+                    
+                    # Ліва колонка
                     with col_left:
                         if p.get('logo_url'): st.image(p['logo_url'], width=80)
                         elif p.get('domain'):
@@ -4844,29 +4832,24 @@ def show_my_projects_page():
                                 if new_p_name and new_p_name != current_name:
                                     try:
                                         supabase.table("projects").update({"project_name": new_p_name}).eq("id", p['id']).execute()
-                                        st.toast("Назву змінено!", icon="✅")
+                                        st.toast("Оновлено!", icon="✅")
                                         st.session_state["edit_proj_id"] = None
-                                        time.sleep(0.5)
-                                        st.rerun()
+                                        time.sleep(0.5); st.rerun()
                                     except: st.error("Помилка")
-                                else:
-                                    st.session_state["edit_proj_id"] = None
-                                    st.rerun()
+                                else: st.session_state["edit_proj_id"] = None; st.rerun()
                             if c_canc.button("❌", key=f"cncl_{p['id']}"):
-                                st.session_state["edit_proj_id"] = None
-                                st.rerun()
+                                st.session_state["edit_proj_id"] = None; st.rerun()
                         else:
                             c_txt, c_btn = st.columns([0.8, 0.2])
                             with c_txt: st.markdown(f"**{current_name}**")
                             with c_btn:
                                 if st.button("✏️", key=f"edit_{p['id']}"):
-                                    st.session_state["edit_proj_id"] = p['id']
-                                    st.rerun()
+                                    st.session_state["edit_proj_id"] = p['id']; st.rerun()
                         
-                        created_dt = p.get('created_at', '')[:10]
-                        st.caption(f"📅 {created_dt}")
+                        st.caption(f"📅 {p.get('created_at', '')[:10]}")
                         st.caption(f"👤 {author_name}")
 
+                    # Центр
                     with col_center:
                         st.markdown(f"**Бренд:** {p.get('brand_name', '-')}")
                         st.markdown(f"**Домен:** `{p.get('domain', '-')}`")
@@ -4878,6 +4861,7 @@ def show_my_projects_page():
                         color_s = "orange" if status_p == "TRIAL" else "green"
                         st.markdown(f"Статус: **:{color_s}[{status_p}]**")
 
+                    # Права колонка
                     with col_right:
                         try:
                             assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
@@ -4904,21 +4888,19 @@ def show_my_projects_page():
                             time.sleep(0.7)
                             st.rerun()
 
-    # ========================================================
-    # ТАБ: СТВОРЕННЯ ПРОЕКТУ
-    # ========================================================
+    # --- ТАБ: СТВОРЕННЯ ---
     with tab_create:
         st.markdown("##### 🚀 Створення нового проекту")
         rk = st.session_state["my_proj_reset_id"]
         
         c1, c2 = st.columns(2)
-        new_brand_val = c1.text_input("Назва бренду (для AI) *", key=f"mp_brand_{rk}", placeholder="Наприклад: Nova Poshta")
-        new_domain_val = c2.text_input("Домен *", key=f"mp_domain_{rk}", placeholder="novaposhta.ua")
+        new_brand_val = c1.text_input("Назва бренду (для AI) *", key=f"mp_brand_{rk}", placeholder="Наприклад: Monobank")
+        new_domain_val = c2.text_input("Домен *", key=f"mp_domain_{rk}", placeholder="monobank.ua")
         
         c3, c4 = st.columns(2)
         def_proj_name = f"{new_brand_val} Audit" if new_brand_val else ""
         new_proj_name_val = c3.text_input("Назва проекту (Внутрішня) *", value=def_proj_name, key=f"mp_pname_{rk}")
-        new_industry_val = c4.text_input("Галузь *", key=f"mp_ind_{rk}", placeholder="напр. Логістика")
+        new_industry_val = c4.text_input("Галузь *", key=f"mp_ind_{rk}", placeholder="напр. Фінтех")
 
         c5, c6 = st.columns([1, 2])
         new_region_val = c5.selectbox("Регіон", ["Ukraine", "USA", "Europe", "Global"], key=f"mp_region_{rk}")
@@ -4928,7 +4910,6 @@ def show_my_projects_page():
         st.markdown("###### 📝 Наповнення семантичного ядра (Keywords)")
         kw_tabs = st.tabs(["✨ AI Генерація", "📥 Імпорт (Excel/URL)", "📋 Вставити списком", "✍️ Додати вручну"])
         
-        # --- KW TABS ---
         with kw_tabs[0]:
             st.caption("Автоматичне створення запитів.")
             if st.button("✨ Згенерувати запити", key=f"mp_btn_gen_{rk}"):
@@ -4953,7 +4934,7 @@ def show_my_projects_page():
             else:
                 u = st.text_input("URL:", key=f"mp_u_{rk}")
                 if u:
-                    try: df_up = pd.read_csv(u) if u.endswith('.csv') else pd.read_excel(u) # Simple check
+                    try: df_up = pd.read_csv(u) if u.endswith('.csv') else pd.read_excel(u)
                     except: st.warning("Спробуйте посилання на CSV")
             
             if df_up is not None:
@@ -6344,7 +6325,7 @@ def show_chat_page():
         
             
 def main():
-    # 1. Ініціалізація сесії (Cookie check)
+    # 1. Ініціалізація та перевірка сесії
     if 'check_session' in globals():
         check_session()
 
@@ -6355,12 +6336,11 @@ def main():
             show_auth_page()
         else:
             st.error("Помилка: Функція show_auth_page не знайдена.")
-        return  # Зупиняємо виконання, щоб не малювати меню
+        return  # Зупиняємо виконання
 
     # 3. ЛОГІКА ПЕРЕНАПРАВЛЕННЯ НОВОГО КОРИСТУВАЧА
     # Якщо користувач залогінився, але не обрав проект (або у нього їх немає)
     if not st.session_state.get("current_project"):
-        # Пробуємо знайти проекти в БД
         try:
             user_id = st.session_state["user"].id
             # Отримуємо клієнт Supabase (глобальний або з сесії)
@@ -6370,25 +6350,25 @@ def main():
                 resp = sb.table("projects").select("*").eq("user_id", user_id).execute()
                 
                 if resp.data:
-                    # УРА! Проекти є. Беремо перший і зберігаємо в сесію.
+                    # Проекти є -> беремо перший і йдемо далі
                     st.session_state["current_project"] = resp.data[0]
-                    st.rerun() # Перезавантажуємо сторінку, щоб показати Дашборд
+                    st.rerun() # Перезавантажуємо сторінку
                 else:
-                    # ПРОЕКТІВ НЕМАЄ. ЦЕ НОВИЙ КОРИСТУВАЧ.
+                    # 🔥 ПРОЕКТІВ НЕМАЄ. ЦЕ НОВИЙ КОРИСТУВАЧ.
                     # 1. Малюємо меню (щоб була кнопка Вийти)
                     if 'sidebar_menu' in globals():
                         sidebar_menu()
                     
-                    # 2. Примусово показуємо сторінку створення
+                    # 2. Примусово показуємо сторінку створення (Мої проекти)
                     if 'show_my_projects_page' in globals():
                         show_my_projects_page()
                     else:
-                        st.warning("Створіть свій перший проект (функція show_my_projects_page не знайдена).")
+                        st.warning("Функція show_my_projects_page не знайдена.")
                     
-                    return # Зупиняємо скрипт тут, щоб не малювати решту сторінок
+                    return # ⛔ Зупиняємо скрипт тут, щоб не малювати решту сторінок
         except Exception as e:
-            # Якщо сталася помилка з'єднання, виводимо її в консоль, щоб не лякати юзера
-            print(f"Error checking projects: {e}")
+            # st.error(f"Error checking projects: {e}")
+            pass
 
     # =========================================================
     # 4. ОСНОВНИЙ ДОДАТОК (Тільки якщо є User і Project)
