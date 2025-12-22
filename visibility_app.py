@@ -4711,13 +4711,10 @@ def show_sources_page():
             st.info("Дані відсутні.")
 
 def show_my_projects_page():
+   def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
     ВЕРСІЯ: FIX SYNTAX & LOGO.
-    Виправлено:
-    1. CSS винесено в змінну (лікує 'invalid decimal literal').
-    2. Логотип відображається через HTML <img> (лікує 'биту' картинку).
-    3. Логіка вкладок (Smart Tabs).
     """
     import streamlit as st
     import pandas as pd
@@ -4730,8 +4727,9 @@ def show_my_projects_page():
     # --- КОНСТАНТИ ---
     N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
 
-    # --- CSS (Безпечний формат) ---
-    CSS_STYLES = """
+    # --- CSS (ВИПРАВЛЕНО ЛАПКИ) ---
+    # Ми записуємо стилі в змінну, щоб Python точно розумів, що це текст
+    STYLE_BLOCK = """
     <style>
         .green-number { 
             background-color: #00C896; 
@@ -4753,7 +4751,7 @@ def show_my_projects_page():
         }
     </style>
     """
-    st.markdown(CSS_STYLES, unsafe_allow_html=True)
+    st.markdown(STYLE_BLOCK, unsafe_allow_html=True)
 
     # --- ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
