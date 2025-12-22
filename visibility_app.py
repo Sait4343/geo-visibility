@@ -5727,10 +5727,8 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    ВЕРСІЯ: CLEANED (Removed Project Creation).
-    Залишено:
-    1. Список проектів (фільтрація, редагування статусів, видалення).
-    2. Управління користувачами (ролі).
+    ВЕРСІЯ: ASSIGN PROJECTS.
+    Додано можливість призначати (передавати) проекти користувачам у вкладці 'Користувачі'.
     """
     import pandas as pd
     import streamlit as st
@@ -5763,33 +5761,32 @@ def show_admin_page():
             val = clean_data_for_json(value)
             supabase.table("projects").update({field: val}).eq("id", proj_id).execute()
             
-            # Очистка кешу
             if "my_projects" in st.session_state: del st.session_state["my_projects"]
             if "all_projects_admin" in st.session_state: del st.session_state["all_projects_admin"]
             
             st.toast(f"✅ Оновлено: {field} -> {value}")
             time.sleep(0.5)
         except Exception as e:
-            err_msg = str(e)
-            if "invalid input value for enum" in err_msg:
-                st.error(f"⚠️ Помилка БД: Статус '{value}' не валідний.")
-            else:
-                st.error(f"Помилка оновлення: {err_msg}")
+            st.error(f"Помилка оновлення: {e}")
 
     st.title("🛡️ Admin Panel (CRM)")
 
     # --- 1. ОТРИМАННЯ ДАНИХ ---
     try:
+        # Отримуємо проекти
         projects_resp = supabase.table("projects").select("*").execute()
         projects_data = projects_resp.data if projects_resp.data else []
 
+        # Отримуємо кількість запитів для статистики
         kws_resp = supabase.table("keywords").select("project_id").execute()
         kws_df = pd.DataFrame(kws_resp.data) if kws_resp.data else pd.DataFrame()
         kw_counts = kws_df['project_id'].value_counts().to_dict() if not kws_df.empty else {}
 
+        # Отримуємо користувачів
         users_resp = supabase.table("profiles").select("*").execute()
         users_data = users_resp.data if users_resp.data else []
         
+        # Мапа користувачів для швидкого пошуку
         user_map = {}
         for u in users_data:
             f_name = u.get('first_name', '') or ''
@@ -5822,7 +5819,7 @@ def show_admin_page():
 
     st.write("")
 
-    # --- 3. ВКЛАДКИ (ТІЛЬКИ 2) ---
+    # --- 3. ВКЛАДКИ ---
     tab_list, tab_users = st.tabs(["📂 Список проектів", "👥 Користувачі & Права"])
 
     # ========================================================
@@ -5972,9 +5969,11 @@ def show_admin_page():
                 st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
     # ========================================================
-    # TAB 3 (NOW 2): КОРИСТУВАЧІ ТА ПРАВА
+    # TAB 2: КОРИСТУВАЧІ ТА ПРАВА
     # ========================================================
     with tab_users:
+        
+        # --- БЛОК 1: ТАБЛИЦЯ КОРИСТУВАЧІВ ---
         st.markdown("##### 👥 База користувачів")
 
         uf1, uf2 = st.columns(2)
@@ -6056,35 +6055,80 @@ def show_admin_page():
                             
                     except Exception as e:
                         st.error(f"Помилка збереження: {e}")
-
-                st.divider()
-                st.markdown("##### 📈 Динаміка реєстрацій")
-                
-                df_chart = pd.DataFrame(users_data)
-                if 'created_at' in df_chart.columns:
-                    df_chart['date'] = pd.to_datetime(df_chart['created_at']).dt.date
-                    from datetime import timedelta
-                    time_filter = st.selectbox("Період", ["Останні 7 днів", "Останні 30 днів", "Останні 90 днів", "Весь час"], index=1)
-                    
-                    today = pd.to_datetime("today").date()
-                    if "7" in time_filter: start_date = today - timedelta(days=7)
-                    elif "30" in time_filter: start_date = today - timedelta(days=30)
-                    elif "90" in time_filter: start_date = today - timedelta(days=90)
-                    else: start_date = df_chart['date'].min()
-                    
-                    df_chart_filtered = df_chart[df_chart['date'] >= start_date]
-                    reg_counts = df_chart_filtered.groupby('date').size().reset_index(name='count')
-                    
-                    if not reg_counts.empty:
-                        fig = px.bar(reg_counts, x='date', y='count', labels={'date': 'Дата', 'count': 'Нових користувачів'})
-                        fig.update_layout(height=300)
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("Немає реєстрацій за цей період.")
             else:
                 st.warning("Користувачів не знайдено.")
         else:
             st.warning("База користувачів пуста.")
+
+        st.divider()
+
+        # --- БЛОК 2: ПРИЗНАЧЕННЯ ПРОЕКТІВ ---
+        with st.expander("🛠️ Призначити проект користувачу (зміна власника)", expanded=False):
+            st.info("Тут ви можете передати існуючий проект іншому користувачу.")
+            
+            c_asn_1, c_asn_2, c_asn_3 = st.columns([1.5, 1.5, 1])
+            
+            # 1. Вибір користувача
+            # Формуємо список: "email (Name)"
+            user_options = {f"{u['email']} ({u.get('first_name','')} {u.get('last_name','')})": u['id'] for u in users_data}
+            
+            with c_asn_1:
+                selected_user_key = st.selectbox("1. Оберіть нового власника", options=list(user_options.keys()))
+            
+            # 2. Вибір проекту
+            # Формуємо список: "Brand Name (Current Owner Email)"
+            proj_options = {}
+            for p in projects_data:
+                owner_id = p.get('user_id')
+                owner_email = user_map.get(owner_id, {}).get('email', 'Unknown')
+                label = f"{p.get('brand_name', 'No Name')} (Власник: {owner_email})"
+                proj_options[label] = p['id']
+                
+            with c_asn_2:
+                selected_proj_key = st.selectbox("2. Оберіть проект для передачі", options=list(proj_options.keys()))
+            
+            with c_asn_3:
+                st.write("")
+                st.write("")
+                if st.button("🔄 Призначити", type="primary", use_container_width=True):
+                    if selected_user_key and selected_proj_key:
+                        target_user_id = user_options[selected_user_key]
+                        target_proj_id = proj_options[selected_proj_key]
+                        
+                        try:
+                            supabase.table("projects").update({"user_id": target_user_id}).eq("id", target_proj_id).execute()
+                            st.success(f"Проект успішно передано користувачу {selected_user_key}!")
+                            time.sleep(1.5)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Помилка при передачі: {e}")
+                    else:
+                        st.warning("Оберіть користувача та проект.")
+
+        st.divider()
+        st.markdown("##### 📈 Динаміка реєстрацій")
+        
+        df_chart = pd.DataFrame(users_data)
+        if 'created_at' in df_chart.columns:
+            df_chart['date'] = pd.to_datetime(df_chart['created_at']).dt.date
+            from datetime import timedelta
+            time_filter = st.selectbox("Період", ["Останні 7 днів", "Останні 30 днів", "Останні 90 днів", "Весь час"], index=1)
+            
+            today = pd.to_datetime("today").date()
+            if "7" in time_filter: start_date = today - timedelta(days=7)
+            elif "30" in time_filter: start_date = today - timedelta(days=30)
+            elif "90" in time_filter: start_date = today - timedelta(days=90)
+            else: start_date = df_chart['date'].min()
+            
+            df_chart_filtered = df_chart[df_chart['date'] >= start_date]
+            reg_counts = df_chart_filtered.groupby('date').size().reset_index(name='count')
+            
+            if not reg_counts.empty:
+                fig = px.bar(reg_counts, x='date', y='count', labels={'date': 'Дата', 'count': 'Нових користувачів'})
+                fig.update_layout(height=300)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Немає реєстрацій за цей період.")
 
 def show_chat_page():
     """
