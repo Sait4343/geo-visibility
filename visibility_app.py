@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timedelta, date, time as dt_time # Додано dt_time
+from datetime import datetime, timedelta, date, time as dt_time
 import plotly.express as px 
 import pandas as pd
 import plotly.graph_objects as go
@@ -8,9 +8,12 @@ import streamlit as st
 import extra_streamlit_components as stx
 from streamlit_option_menu import option_menu
 from supabase import create_client, Client
-import numpy as np # Потрібно для адмінки
+import numpy as np 
 import json
-import uuid
+import uuid  # <--- CRITICAL IMPORT
+import re
+import io
+import pytz
 
 
 # =========================
