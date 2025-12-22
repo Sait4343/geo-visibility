@@ -4712,7 +4712,22 @@ def show_sources_page():
 
 def show_my_projects_page():
     """
-    # --- CSS ---
+    Сторінка 'Мої проекти'.
+    ВЕРСІЯ: FIX SYNTAX ERROR.
+    Виправлено помилку з лапками в CSS, через яку виникав сірий екран.
+    """
+    import streamlit as st
+    import pandas as pd
+    from datetime import datetime
+    import requests
+    import re
+    import time
+    import uuid
+    
+    # --- КОНСТАНТИ ---
+    N8N_GEN_URL = "https://virshi.app.n8n.cloud/webhook/webhook/generate-prompts"
+
+    # --- CSS (Уважно з лапками!) ---
     st.markdown("""
     <style>
         .green-number { 
@@ -4729,6 +4744,7 @@ def show_my_projects_page():
         }
         .stTabs [data-baseweb="tab-list"] { gap: 10px; }
         
+        /* Стиль для кнопки редагування */
         button[kind="secondary"] {
             padding: 0px 10px !important;
             border: none !important;
@@ -4823,7 +4839,7 @@ def show_my_projects_page():
                         
                         backup_logo = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128" if clean_d else ""
 
-                        # 🔥 ВИПРАВЛЕНИЙ РЯДОК (Один рядок, без потрійних лапок)
+                        # HTML для логотипу (виправлено лапки)
                         if logo_url_src:
                             img_html = f'<img src="{logo_url_src}" style="width: 80px; height: 80px; object-fit: contain; border-radius: 8px; border: 1px solid #eee; padding: 5px;" onerror="this.onerror=null; this.src=\'{backup_logo}\';">'
                             st.markdown(img_html, unsafe_allow_html=True)
