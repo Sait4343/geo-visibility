@@ -4713,8 +4713,8 @@ def show_sources_page():
 def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
-    ВЕРСІЯ: PROJECT SWITCHING WITH TOAST & RESET.
-    Додано логіку очищення сесії та сповіщення при перемиканні проекту.
+    ВЕРСІЯ: EDIT PROJECT NAME IN LIST.
+    Додано можливість редагувати назву проекту (олівець -> інпут -> зберегти).
     """
     import streamlit as st
     import pandas as pd
@@ -4743,6 +4743,12 @@ def show_my_projects_page():
             font-size: 12px; 
         }
         .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+        
+        /* Стиль для кнопки редагування, щоб вона була компактною */
+        button[kind="secondary"] {
+            padding: 0px 10px !important;
+            border: none !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -4794,6 +4800,8 @@ def show_my_projects_page():
         st.session_state["new_proj_keywords"] = [] 
     if "my_proj_reset_id" not in st.session_state:
         st.session_state["my_proj_reset_id"] = 0
+    if "edit_proj_id" not in st.session_state:
+        st.session_state["edit_proj_id"] = None
 
     for item in st.session_state["new_proj_keywords"]:
         if "id" not in item: item["id"] = str(uuid.uuid4())
@@ -4815,9 +4823,9 @@ def show_my_projects_page():
             else:
                 for p in projects:
                     with st.container(border=True):
-                        col_left, col_center, col_right = st.columns([1.2, 2, 2])
+                        col_left, col_center, col_right = st.columns([1.3, 2, 2])
 
-                        # 1. Лого + Інфо
+                        # --- 1. Лого + Назва (Editable) ---
                         with col_left:
                             if p.get('logo_url'):
                                 st.image(p['logo_url'], width=80)
@@ -4829,14 +4837,47 @@ def show_my_projects_page():
                                 st.markdown("🖼️ *No Logo*")
                             
                             st.write("")
-                            proj_title = p.get('project_name') or p.get('brand_name') or 'Без назви'
-                            st.markdown(f"**{proj_title}**")
+                            
+                            # 🔥 ЛОГІКА РЕДАГУВАННЯ НАЗВИ
+                            current_name = p.get('project_name') or p.get('brand_name') or 'Без назви'
+                            
+                            if st.session_state["edit_proj_id"] == p['id']:
+                                # Режим редагування
+                                new_p_name = st.text_input("Назва", value=current_name, key=f"edit_inp_{p['id']}", label_visibility="collapsed")
+                                
+                                c_save, c_canc = st.columns([1, 1])
+                                if c_save.button("💾", key=f"save_{p['id']}", help="Зберегти"):
+                                    if new_p_name and new_p_name != current_name:
+                                        try:
+                                            supabase.table("projects").update({"project_name": new_p_name}).eq("id", p['id']).execute()
+                                            st.toast("Назву успішно змінено!", icon="✅")
+                                            st.session_state["edit_proj_id"] = None
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Помилка: {e}")
+                                    else:
+                                        st.session_state["edit_proj_id"] = None
+                                        st.rerun()
+                                        
+                                if c_canc.button("❌", key=f"cncl_{p['id']}", help="Скасувати"):
+                                    st.session_state["edit_proj_id"] = None
+                                    st.rerun()
+                            else:
+                                # Режим перегляду (Текст + Олівець)
+                                c_txt, c_btn = st.columns([0.8, 0.2])
+                                with c_txt:
+                                    st.markdown(f"**{current_name}**")
+                                with c_btn:
+                                    if st.button("✏️", key=f"edit_{p['id']}", help="Редагувати назву"):
+                                        st.session_state["edit_proj_id"] = p['id']
+                                        st.rerun()
                             
                             created_dt = p.get('created_at', '')[:10]
                             st.caption(f"📅 {created_dt}")
                             st.caption(f"👤 {author_name}")
 
-                        # 2. Деталі
+                        # --- 2. Деталі ---
                         with col_center:
                             st.markdown(f"**Бренд:** {p.get('brand_name', '-')}")
                             st.markdown(f"**Домен:** `{p.get('domain', '-')}`")
@@ -4851,7 +4892,7 @@ def show_my_projects_page():
                             color_s = "orange" if status_p == "TRIAL" else "green"
                             st.markdown(f"Статус: **:{color_s}[{status_p}]**")
 
-                        # 3. Дії
+                        # --- 3. Дії ---
                         with col_right:
                             try:
                                 assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
@@ -4869,30 +4910,17 @@ def show_my_projects_page():
                             st.markdown(f"**Кількість запитів:** `{kw_count}`")
 
                             st.write("")
-                            
-                            # 🔥 ЛОГІКА ПЕРЕМИКАННЯ ПРОЕКТУ
                             if st.button(f"➡️ Відкрити проект", key=f"open_proj_{p['id']}", type="primary", use_container_width=True):
-                                # 1. Сповіщення
-                                st.toast(f"🔄 Перемикання на проект: **{p.get('brand_name')}**...", icon="✅")
+                                st.toast(f"🔄 Перемикання на проект: **{current_name}**...", icon="✅")
                                 
-                                # 2. Очищення стану від старого проекту
-                                keys_to_clear = [
-                                    "focus_keyword_id",   # Скидаємо вибраний запит
-                                    "new_proj_keywords",  # Скидаємо форму створення (опціонально)
-                                    "analysis_results"    # Якщо є кешовані результати
-                                ]
+                                keys_to_clear = ["focus_keyword_id", "new_proj_keywords", "analysis_results"]
                                 for key in keys_to_clear:
-                                    if key in st.session_state:
-                                        del st.session_state[key]
+                                    if key in st.session_state: del st.session_state[key]
 
-                                # 3. Встановлення нового проекту
                                 st.session_state["current_project"] = p
-                                
-                                # 4. Оновлення лічильника меню (щоб сайдбар міг перемалюватись, якщо треба)
                                 if "menu_id_counter" not in st.session_state: st.session_state["menu_id_counter"] = 0
                                 st.session_state["menu_id_counter"] += 1
 
-                                # 5. Пауза для краси і перезапуск
                                 time.sleep(0.7)
                                 st.rerun()
 
@@ -5083,7 +5111,7 @@ def show_my_projects_page():
                                         models=selected_llms 
                                     )
                                     if success: st.success("✅ Проект збережено і аналіз запущено!")
-                                    else: st.warning("Проект збережено, але аналіз не вдався або обмежений Trial.")
+                                    else: st.warning("Проект збережено, але аналіз не вдався.")
                             else:
                                 st.error("Функція аналізу не знайдена.")
                         else:
