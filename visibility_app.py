@@ -4713,8 +4713,10 @@ def show_sources_page():
 def show_my_projects_page():
     """
     Сторінка 'Мої проекти'.
-    ВЕРСІЯ: EDIT PROJECT NAME IN LIST.
-    Додано можливість редагувати назву проекту (олівець -> інпут -> зберегти).
+    ВЕРСІЯ: FINAL & STABLE.
+    - Редагування назви проекту (олівець).
+    - Розумні вкладки (Smart Tabs): якщо немає проектів, відкривається 'Створити'.
+    - Виправлено імпорти та логіку відображення логотипів.
     """
     import streamlit as st
     import pandas as pd
@@ -4789,7 +4791,6 @@ def show_my_projects_page():
                     return []
                 except ValueError: return []
             else:
-                st.error(f"Error: {response.status_code}")
                 return []
         except Exception as e:
             st.error(f"Connection error: {e}")
@@ -4808,145 +4809,152 @@ def show_my_projects_page():
 
     st.title("📂 Мої проекти")
     
-    tab1, tab2 = st.tabs(["📋 Активні проекти", "➕ Створити проект"])
+    # 1. ЗАВАНТАЖУЄМО ПРОЕКТИ СПОЧАТКУ (Для логіки Smart Tabs)
+    try:
+        projs_resp = supabase.table("projects").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
+        projects = projs_resp.data if projs_resp.data else []
+    except:
+        projects = []
+
+    # 2. ВИЗНАЧАЄМО ПОРЯДОК ВКЛАДОК
+    if not projects:
+        # Якщо проектів немає -> Створення перша
+        tabs = st.tabs(["➕ Створити проект", "📋 Активні проекти"])
+        tab_create = tabs[0]
+        tab_list = tabs[1]
+    else:
+        # Якщо проекти є -> Список перший
+        tabs = st.tabs(["📋 Активні проекти", "➕ Створити проект"])
+        tab_list = tabs[0]
+        tab_create = tabs[1]
 
     # ========================================================
-    # ТАБ 1: СПИСОК ПРОЕКТІВ
+    # ТАБ: СПИСОК ПРОЕКТІВ
     # ========================================================
-    with tab1:
-        try:
-            projs_resp = supabase.table("projects").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
-            projects = projs_resp.data if projs_resp.data else []
+    with tab_list:
+        if not projects:
+            st.info("У вас поки немає створених проектів. Перейдіть на вкладку 'Створити проект'.")
+        else:
+            for p in projects:
+                with st.container(border=True):
+                    col_left, col_center, col_right = st.columns([1.3, 2, 2])
 
-            if not projects:
-                st.info("У вас поки немає створених проектів.")
-            else:
-                for p in projects:
-                    with st.container(border=True):
-                        col_left, col_center, col_right = st.columns([1.3, 2, 2])
+                    # --- 1. Лого + Назва (Editable) ---
+                    with col_left:
+                        # Логіка отримання чистого домену (Виправлена)
+                        clean_d = None
+                        if p.get('domain'):
+                            clean_d = p['domain'].lower().replace('https://', '').replace('http://', '').replace('www.', '').split('/')[0]
 
-                        # --- 1. Лого + Назва (Editable) ---
-                        with col_left:
-                            # Логіка отримання чистого домену
-                            clean_d = None
-                            if p.get('domain'):
-                                # Очищаємо домен від зайвого
-                                clean_d = p['domain'].lower().replace('https://', '').replace('http://', '').replace('www.', '').split('/')[0]
+                        # Формування URL логотипу
+                        logo_url_src = None
+                        if p.get('logo_url'):
+                            logo_url_src = p['logo_url']
+                        elif clean_d:
+                            logo_url_src = f"https://cdn.brandfetch.io/{clean_d}"
+                        
+                        # Резервний логотип (Google Favicon)
+                        backup_logo = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128" if clean_d else ""
 
-                            # Формування основного URL логотипу
-                            logo_url_src = None
-                            if p.get('logo_url'):
-                                logo_url_src = p['logo_url']
-                            elif clean_d:
-                                logo_url_src = f"https://cdn.brandfetch.io/{clean_d}"
+                        # Відображення через HTML (з обробкою помилок)
+                        if logo_url_src:
+                            img_html = f'<img src="{logo_url_src}" style="width: 80px; height: 80px; object-fit: contain; border-radius: 8px; border: 1px solid #eee; padding: 5px;" onerror="this.onerror=null; this.src=\'{backup_logo}\';">'
+                            st.markdown(img_html, unsafe_allow_html=True)
+                        else:
+                            st.markdown("🖼️ *No Logo*")
+                        
+                        st.write("")
+                        
+                        # 🔥 ЛОГІКА РЕДАГУВАННЯ НАЗВИ
+                        current_name = p.get('project_name') or p.get('brand_name') or 'Без назви'
+                        
+                        if st.session_state["edit_proj_id"] == p['id']:
+                            # Режим редагування
+                            new_p_name = st.text_input("Назва", value=current_name, key=f"edit_inp_{p['id']}", label_visibility="collapsed")
                             
-                            # Резервний логотип (Google Favicon)
-                            backup_logo = f"https://www.google.com/s2/favicons?domain={clean_d}&sz=128" if clean_d else ""
-
-                            # Відображення через HTML (ВИПРАВЛЕНО СИНТАКСИС)
-                            if logo_url_src:
-                                # Пишемо в один рядок, використовуючи одинарні лапки для Python і подвійні для HTML
-                                # Для JS всередині HTML використовуємо екрановані лапки \'
-                                img_html = f'<img src="{logo_url_src}" style="width: 80px; height: 80px; object-fit: contain; border-radius: 8px; border: 1px solid #eee; padding: 5px;" onerror="this.onerror=null; this.src=\'{backup_logo}\';">'
-                                st.markdown(img_html, unsafe_allow_html=True)
-                            else:
-                                st.markdown("🖼️ *No Logo*")
-                            
-                            st.write("")
-                            
-                            # 🔥 ЛОГІКА РЕДАГУВАННЯ НАЗВИ
-                            current_name = p.get('project_name') or p.get('brand_name') or 'Без назви'
-                            
-                            if st.session_state["edit_proj_id"] == p['id']:
-                                # Режим редагування
-                                new_p_name = st.text_input("Назва", value=current_name, key=f"edit_inp_{p['id']}", label_visibility="collapsed")
-                                
-                                c_save, c_canc = st.columns([1, 1])
-                                if c_save.button("💾", key=f"save_{p['id']}", help="Зберегти"):
-                                    if new_p_name and new_p_name != current_name:
-                                        try:
-                                            supabase.table("projects").update({"project_name": new_p_name}).eq("id", p['id']).execute()
-                                            st.toast("Назву успішно змінено!", icon="✅")
-                                            st.session_state["edit_proj_id"] = None
-                                            time.sleep(0.5)
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"Помилка: {e}")
-                                    else:
+                            c_save, c_canc = st.columns([1, 1])
+                            if c_save.button("💾", key=f"save_{p['id']}", help="Зберегти"):
+                                if new_p_name and new_p_name != current_name:
+                                    try:
+                                        supabase.table("projects").update({"project_name": new_p_name}).eq("id", p['id']).execute()
+                                        st.toast("Назву успішно змінено!", icon="✅")
                                         st.session_state["edit_proj_id"] = None
+                                        time.sleep(0.5)
                                         st.rerun()
-                                        
-                                if c_canc.button("❌", key=f"cncl_{p['id']}", help="Скасувати"):
+                                    except Exception as e:
+                                        st.error(f"Помилка: {e}")
+                                else:
                                     st.session_state["edit_proj_id"] = None
                                     st.rerun()
-                            else:
-                                # Режим перегляду (Текст + Олівець)
-                                c_txt, c_btn = st.columns([0.8, 0.2])
-                                with c_txt:
-                                    st.markdown(f"**{current_name}**")
-                                with c_btn:
-                                    if st.button("✏️", key=f"edit_{p['id']}", help="Редагувати назву"):
-                                        st.session_state["edit_proj_id"] = p['id']
-                                        st.rerun()
-                            
-                            created_dt = p.get('created_at', '')[:10]
-                            st.caption(f"📅 {created_dt}")
-                            st.caption(f"👤 {author_name}")
-
-                        # --- 2. Деталі ---
-                        with col_center:
-                            st.markdown(f"**Бренд:** {p.get('brand_name', '-')}")
-                            st.markdown(f"**Домен:** `{p.get('domain', '-')}`")
-                            st.markdown(f"**Галузь:** {p.get('industry', '-')}")
-                            
-                            prods = p.get('products') or p.get('description') or '-'
-                            if len(prods) > 100: prods_display = prods[:100] + "..."
-                            else: prods_display = prods
-                            st.markdown(f"**Послуги:** {prods_display}")
-                            
-                            status_p = p.get('status', 'trial').upper()
-                            color_s = "orange" if status_p == "TRIAL" else "green"
-                            st.markdown(f"Статус: **:{color_s}[{status_p}]**")
-
-                        # --- 3. Дії ---
-                        with col_right:
-                            try:
-                                assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
-                                sources = [a['domain_or_url'] for a in assets_resp.data] if assets_resp.data else []
-                            except: sources = []
-                            
-                            with st.expander(f"🔗 Джерела ({len(sources)})"):
-                                for s in sources: st.markdown(f"- `{s}`")
-
-                            try:
-                                kw_resp = supabase.table("keywords").select("id", count="exact").eq("project_id", p['id']).execute()
-                                kw_count = kw_resp.count if kw_resp.count is not None else len(kw_resp.data)
-                            except: kw_count = 0
-                            
-                            st.markdown(f"**Кількість запитів:** `{kw_count}`")
-
-                            st.write("")
-                            if st.button(f"➡️ Відкрити проект", key=f"open_proj_{p['id']}", type="primary", use_container_width=True):
-                                st.toast(f"🔄 Перемикання на проект: **{current_name}**...", icon="✅")
-                                
-                                keys_to_clear = ["focus_keyword_id", "new_proj_keywords", "analysis_results"]
-                                for key in keys_to_clear:
-                                    if key in st.session_state: del st.session_state[key]
-
-                                st.session_state["current_project"] = p
-                                if "menu_id_counter" not in st.session_state: st.session_state["menu_id_counter"] = 0
-                                st.session_state["menu_id_counter"] += 1
-
-                                time.sleep(0.7)
+                                    
+                            if c_canc.button("❌", key=f"cncl_{p['id']}", help="Скасувати"):
+                                st.session_state["edit_proj_id"] = None
                                 st.rerun()
+                        else:
+                            # Режим перегляду (Текст + Олівець)
+                            c_txt, c_btn = st.columns([0.8, 0.2])
+                            with c_txt:
+                                st.markdown(f"**{current_name}**")
+                            with c_btn:
+                                if st.button("✏️", key=f"edit_{p['id']}", help="Редагувати назву"):
+                                    st.session_state["edit_proj_id"] = p['id']
+                                    st.rerun()
+                        
+                        created_dt = p.get('created_at', '')[:10]
+                        st.caption(f"📅 {created_dt}")
+                        st.caption(f"👤 {author_name}")
 
-        except Exception as e:
-            st.error(f"Помилка завантаження проектів: {e}")
+                    # --- 2. Деталі ---
+                    with col_center:
+                        st.markdown(f"**Бренд:** {p.get('brand_name', '-')}")
+                        st.markdown(f"**Домен:** `{p.get('domain', '-')}`")
+                        st.markdown(f"**Галузь:** {p.get('industry', '-')}")
+                        
+                        prods = p.get('products') or p.get('description') or '-'
+                        if len(prods) > 100: prods_display = prods[:100] + "..."
+                        else: prods_display = prods
+                        st.markdown(f"**Послуги:** {prods_display}")
+                        
+                        status_p = p.get('status', 'trial').upper()
+                        color_s = "orange" if status_p == "TRIAL" else "green"
+                        st.markdown(f"Статус: **:{color_s}[{status_p}]**")
+
+                    # --- 3. Дії ---
+                    with col_right:
+                        try:
+                            assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
+                            sources = [a['domain_or_url'] for a in assets_resp.data] if assets_resp.data else []
+                        except: sources = []
+                        
+                        with st.expander(f"🔗 Джерела ({len(sources)})"):
+                            for s in sources: st.markdown(f"- `{s}`")
+
+                        try:
+                            kw_resp = supabase.table("keywords").select("id", count="exact").eq("project_id", p['id']).execute()
+                            kw_count = kw_resp.count if kw_resp.count is not None else len(kw_resp.data)
+                        except: kw_count = 0
+                        
+                        st.markdown(f"**Кількість запитів:** `{kw_count}`")
+
+                        st.write("")
+                        if st.button(f"➡️ Відкрити проект", key=f"open_proj_{p['id']}", type="primary", use_container_width=True):
+                            st.toast(f"🔄 Перемикання на проект: **{current_name}**...", icon="✅")
+                            
+                            keys_to_clear = ["focus_keyword_id", "new_proj_keywords", "analysis_results"]
+                            for key in keys_to_clear:
+                                if key in st.session_state: del st.session_state[key]
+
+                            st.session_state["current_project"] = p
+                            if "menu_id_counter" not in st.session_state: st.session_state["menu_id_counter"] = 0
+                            st.session_state["menu_id_counter"] += 1
+
+                            time.sleep(0.7)
+                            st.rerun()
 
     # ========================================================
-    # ТАБ 2: СТВОРЕННЯ ПРОЕКТУ
+    # ТАБ: СТВОРЕННЯ ПРОЕКТУ
     # ========================================================
-    with tab2:
+    with tab_create:
         st.markdown("##### 🚀 Створення нового проекту")
         
         rk = st.session_state["my_proj_reset_id"]
@@ -5127,7 +5135,7 @@ def show_my_projects_page():
                                         models=selected_llms 
                                     )
                                     if success: st.success("✅ Проект збережено і аналіз запущено!")
-                                    else: st.warning("Проект збережено, але аналіз не вдався.")
+                                    else: st.warning("Проект збережено, але аналіз не вдався або обмежений Trial.")
                             else:
                                 st.error("Функція аналізу не знайдена.")
                         else:
@@ -6451,68 +6459,62 @@ def main():
         check_session()
 
     # 2. ПЕРЕВІРКА АВТОРИЗАЦІЇ
-    # Якщо користувача немає в сесії - показуємо вхід і зупиняємо виконання
+    # Якщо користувача немає в сесії - показуємо сторінку входу
     if not st.session_state.get("user"):
         if 'show_auth_page' in globals():
             show_auth_page()
         else:
-            st.error("Функція авторизації не знайдена.")
-        return  # <--- ВАЖЛИВО: Зупиняємо скрипт, щоб не малювати зайвого
+            st.error("Помилка: Функція show_auth_page не знайдена.")
+        return  # Зупиняємо виконання, щоб не малювати меню
 
-    # 3. ОТРИМАННЯ ДАНИХ ПРОЕКТУ (якщо їх ще немає)
+    # 3. ЛОГІКА ПЕРЕНАПРАВЛЕННЯ НОВОГО КОРИСТУВАЧА
+    # Якщо користувач залогінився, але не обрав проект (або у нього їх немає)
     if not st.session_state.get("current_project"):
+        # Пробуємо знайти проекти в БД
         try:
             user_id = st.session_state["user"].id
-            # Використовуємо глобальний supabase об'єкт
-            if 'supabase' in globals() or 'supabase' in st.session_state:
-                sb_client = globals().get('supabase') or st.session_state.get('supabase')
-                resp = sb_client.table("projects").select("*").eq("user_id", user_id).execute()
+            # Отримуємо клієнт Supabase (глобальний або з сесії)
+            sb = globals().get('supabase') or st.session_state.get('supabase')
+            
+            if sb:
+                resp = sb.table("projects").select("*").eq("user_id", user_id).execute()
                 
                 if resp.data:
-                    # Беремо перший знайдений проект і зберігаємо
+                    # УРА! Проекти є. Беремо перший і зберігаємо в сесію.
                     st.session_state["current_project"] = resp.data[0]
-                    st.rerun()  # <--- Перезавантажуємо, щоб меню одразу побачило проект
+                    st.rerun() # Перезавантажуємо сторінку, щоб показати Дашборд
+                else:
+                    # ПРОЕКТІВ НЕМАЄ. ЦЕ НОВИЙ КОРИСТУВАЧ.
+                    # 1. Малюємо меню (щоб була кнопка Вийти)
+                    if 'sidebar_menu' in globals():
+                        sidebar_menu()
+                    
+                    # 2. Примусово показуємо сторінку створення (Мої проекти)
+                    if 'show_my_projects_page' in globals():
+                        show_my_projects_page()
+                    else:
+                        st.warning("Створіть свій перший проект (функція show_my_projects_page не знайдена).")
+                    
+                    return # Зупиняємо скрипт тут, щоб не малювати решту сторінок
         except Exception as e:
-            # Можна розкоментувати для дебагу: st.error(f"Error fetching project: {e}")
-            pass
-
-    # 4. ЛОГІКА ONBOARDING (Якщо проекту все ще немає)
-    user_role = st.session_state.get("role", "user")
-    
-    if st.session_state.get("current_project") is None and user_role not in ["admin", "super_admin"]:
-        # Сайдбар для онбордингу (спрощений)
-        with st.sidebar:
-            st.image("https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png", width=150)
-            st.markdown("---")
-            if st.button("Вийти", use_container_width=True):
-                # Припускаємо, що logout() чистить сесію
-                if 'logout' in globals(): logout()
-                
-        # Тіло онбордингу
-        if 'onboarding_wizard' in globals():
-            onboarding_wizard()
-        else:
-            st.info("Вітаємо! Створіть свій перший проект.")
-        
-        return # <--- Зупиняємо скрипт, далі не йдемо
+            # Якщо сталася помилка з'єднання, виводимо її в консоль, щоб не лякати юзера
+            print(f"Error checking projects: {e}")
 
     # =========================================================
-    # 5. ОСНОВНИЙ ДОДАТОК (Тільки якщо є User і Project)
+    # 4. ОСНОВНИЙ ДОДАТОК (Тільки якщо є User і Project)
     # =========================================================
     
-    # 1. Спочатку малюємо меню (щоб воно було завжди)
+    # 1. Меню навігації
+    page = "Дашборд"
     if 'sidebar_menu' in globals():
         page = sidebar_menu()
-    else:
-        st.error("Помилка: Функція sidebar_menu не знайдена")
-        page = "Дашборд"
 
     # 2. Роутинг сторінок
     if page == "Дашборд":
         if 'show_dashboard' in globals(): show_dashboard()
     
-    elif page == "Мої проекти":    # <--- ДОДАНО
-        show_my_projects_page()    # <--- ВИКЛИК НОВОЇ ФУНКЦІЇ            
+    elif page == "Мої проекти":    
+        if 'show_my_projects_page' in globals(): show_my_projects_page()
         
     elif page == "Перелік запитів":
         if 'show_keywords_page' in globals(): show_keywords_page()
@@ -6540,10 +6542,8 @@ def main():
         if 'show_chat_page' in globals(): show_chat_page()
         
     elif page == "Адмін":
+        user_role = st.session_state.get("role", "user")
         if user_role in ["admin", "super_admin"]:
             if 'show_admin_page' in globals(): show_admin_page()
         else:
             st.error("Доступ заборонено.")
-
-if __name__ == "__main__":
-    main()
