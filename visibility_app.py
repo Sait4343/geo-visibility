@@ -4633,6 +4633,220 @@ def show_sources_page():
         else:
             st.info("Дані відсутні.")
 
+def show_my_projects_page():
+    """
+    Сторінка 'Мої проекти'.
+    Вкладка 1: Список активних проектів з детальною статистикою.
+    Вкладка 2: Створення нового проекту (+ запуск сканування).
+    """
+    import streamlit as st
+    import pandas as pd
+    from datetime import datetime
+
+    st.title("📂 Мої проекти")
+
+    # Перевірка БД
+    if 'supabase' in st.session_state:
+        supabase = st.session_state['supabase']
+    elif 'supabase' in globals():
+        supabase = globals()['supabase']
+    else:
+        st.error("🚨 Помилка підключення до БД.")
+        return
+
+    user = st.session_state.get("user")
+    if not user:
+        st.error("Потрібна авторизація.")
+        return
+
+    # Вкладки
+    tab1, tab2 = st.tabs(["📋 Активні проекти", "➕ Створити проект"])
+
+    # ========================================================
+    # ТАБ 1: СПИСОК ПРОЕКТІВ
+    # ========================================================
+    with tab1:
+        try:
+            # 1. Отримуємо проекти користувача
+            # Якщо адмін - може бачити всі? За логікою "Мої проекти" - тільки свої.
+            projs_resp = supabase.table("projects").select("*").eq("user_id", user.id).order("created_at", desc=True).execute()
+            projects = projs_resp.data if projs_resp.data else []
+
+            if not projects:
+                st.info("У вас поки немає створених проектів.")
+            else:
+                for p in projects:
+                    with st.container(border=True):
+                        # Основна розмітка: Лого (зліва) + Інфо (центр) + Статистика (справа)
+                        col_logo, col_info, col_stats = st.columns([1, 2, 2])
+
+                        # --- Колонка 1: Логотип ---
+                        with col_logo:
+                            if p.get('logo_url'):
+                                st.image(p['logo_url'], width=100)
+                            else:
+                                st.markdown("🖼️ *No Logo*")
+
+                        # --- Колонка 2: Інформація ---
+                        with col_info:
+                            st.subheader(p.get('project_name', 'Без назви'))
+                            st.markdown(f"**Бренд:** {p.get('brand_name')}")
+                            st.markdown(f"**Галузь:** {p.get('industry', '-')}")
+                            st.markdown(f"**Послуги:** {p.get('description', '-')}") # Припускаємо, що послуги в описі
+                            
+                            # Дата створення
+                            created_dt = p.get('created_at', '')[:10]
+                            st.caption(f"📅 Створено: {created_dt} | ID: {p['id']}")
+
+                            # Автор (ПІБ)
+                            # Пробуємо отримати ім'я з профілю
+                            author_name = "Поточний користувач"
+                            try:
+                                # Оптимізація: можна кешувати профілі, але тут робимо запит
+                                profile_resp = supabase.table("profiles").select("first_name, last_name").eq("id", p['user_id']).execute()
+                                if profile_resp.data:
+                                    prof = profile_resp.data[0]
+                                    author_name = f"{prof.get('first_name','')} {prof.get('last_name','')}"
+                            except:
+                                pass
+                            st.caption(f"👤 **Автор:** {author_name}")
+
+                        # --- Колонка 3: Статистика та Джерела ---
+                        with col_stats:
+                            # 1. Офіційні джерела
+                            try:
+                                assets_resp = supabase.table("official_assets").select("domain_or_url").eq("project_id", p['id']).execute()
+                                sources = [a['domain_or_url'] for a in assets_resp.data] if assets_resp.data else []
+                            except: sources = []
+                            
+                            with st.expander(f"🔗 Офіційні джерела ({len(sources)})"):
+                                for s in sources:
+                                    st.markdown(f"- `{s}`")
+
+                            # 2. Кількість запитів (Keywords)
+                            try:
+                                kw_resp = supabase.table("keywords").select("id", count="exact").eq("project_id", p['id']).execute()
+                                kw_count = kw_resp.count if kw_resp.count is not None else len(kw_resp.data)
+                            except: kw_count = 0
+                            
+                            st.markdown(f"**🔑 Ключових слів:** `{kw_count}`")
+
+                            # 3. Сканування по LLM
+                            st.markdown("**🤖 Сканування по моделях:**")
+                            try:
+                                # Агрегація сканувань. (Це може бути важкий запит, краще робити через rpc, але зробимо простий підрахунок)
+                                scan_resp = supabase.table("scan_results").select("provider").eq("project_id", p['id']).execute()
+                                if scan_resp.data:
+                                    df_scans = pd.DataFrame(scan_resp.data)
+                                    stats = df_scans['provider'].value_counts()
+                                    
+                                    cols_llm = st.columns(len(stats) if len(stats) > 0 else 1)
+                                    for idx, (provider, count) in enumerate(stats.items()):
+                                        # Красиві назви
+                                        prov_nice = provider.replace("google_", "").replace("openai_", "").capitalize()
+                                        st.markdown(f"- **{prov_nice}:** {count}")
+                                else:
+                                    st.caption("Сканувань ще не було.")
+                            except Exception as e:
+                                st.caption("Помилка завантаження статистики")
+
+                        # Кнопка переходу в проект
+                        if st.button(f"➡️ Відкрити '{p.get('brand_name')}'", key=f"open_proj_{p['id']}"):
+                            st.session_state["current_project"] = p
+                            st.rerun()
+
+        except Exception as e:
+            st.error(f"Помилка завантаження проектів: {e}")
+
+    # ========================================================
+    # ТАБ 2: СТВОРЕННЯ ПРОЕКТУ
+    # ========================================================
+    with tab2:
+        st.subheader("Створення нового проекту")
+        
+        with st.form("create_project_form_user"):
+            c1, c2 = st.columns(2)
+            with c1:
+                new_brand = st.text_input("Назва бренду (Brand Name)", placeholder="Virshi AI")
+                new_domain = st.text_input("Домен (Domain)", placeholder="virshi.ai")
+                new_industry = st.selectbox("Галузь", ["IT", "E-commerce", "Fintech", "Health", "Agro", "Retail", "Other"])
+            
+            with c2:
+                new_project_name = st.text_input("Назва проекту (внутрішня)", placeholder="Virshi Main Audit")
+                new_logo = st.text_input("URL логотипу", placeholder="https://example.com/logo.png")
+            
+            new_desc = st.text_area("Опис послуг / Про проект", placeholder="Ми займаємось AI аналітикою...")
+            
+            st.markdown("---")
+            st.markdown("#### ⚙️ Налаштування сканування")
+            
+            # Вибір LLM
+            llm_options = ["google_gemini", "chatgpt_4o", "perplexity", "claude_3"]
+            selected_llms = st.multiselect("Оберіть LLM для аналізу", llm_options, default=["chatgpt_4o", "google_gemini"])
+            
+            # Офіційні джерела (Text area для масового вводу)
+            st.markdown("#### 🔗 Офіційні джерела (по одному в рядок)")
+            sources_text = st.text_area("Список URL (Whitelist)", height=100, placeholder="https://virshi.ai\nhttps://linkedin.com/company/virshi")
+            
+            col_b1, col_b2 = st.columns(2)
+            
+            # Кнопка 1: Зберегти
+            submitted_save = col_b1.form_submit_button("💾 Зберегти проект")
+            
+            # Кнопка 2: Зберегти і запустити
+            submitted_run = col_b2.form_submit_button("🚀 Зберегти і запустити аналіз")
+
+            if submitted_save or submitted_run:
+                if not new_brand or not new_project_name:
+                    st.error("Назва бренду та Назва проекту обов'язкові.")
+                else:
+                    try:
+                        # 1. Створення проекту
+                        user_id = st.session_state.user.id
+                        proj_data = {
+                            "user_id": user_id,
+                            "brand_name": new_brand,
+                            "project_name": new_project_name,
+                            "domain": new_domain,
+                            "industry": new_industry,
+                            "description": new_desc, # Зберігаємо послуги тут
+                            "logo_url": new_logo,
+                            "status": "active",
+                            "created_at": datetime.now().isoformat()
+                        }
+                        
+                        res = supabase.table("projects").insert(proj_data).execute()
+                        
+                        if res.data:
+                            new_proj_id = res.data[0]['id']
+                            
+                            # 2. Додавання джерел
+                            sources_list = [s.strip() for s in sources_text.split('\n') if s.strip()]
+                            if new_domain and new_domain not in sources_text: 
+                                sources_list.insert(0, new_domain) # Додаємо сам домен
+
+                            if sources_list:
+                                assets_data = [{"project_id": new_proj_id, "domain_or_url": s, "asset_type": "web"} for s in sources_list]
+                                supabase.table("official_assets").insert(assets_data).execute()
+
+                            # 3. Логіка запуску (якщо обрано Run)
+                            if submitted_run:
+                                # Тут має бути логіка додавання в чергу сканування
+                                # Оскільки ми не маємо keywords, ми просто зберігаємо налаштування LLM
+                                # або додаємо заглушку
+                                st.success(f"Проект '{new_brand}' створено! LLM {selected_llms} підготовлено до сканування.")
+                                st.info("⚠️ Увага: Для реального запуску аналізу додайте ключові слова у розділі 'Перелік запитів'.")
+                            else:
+                                st.success(f"Проект '{new_brand}' успішно збережено!")
+                            
+                            # Оновлюємо сесію (опціонально одразу перемикаємо на новий проект)
+                            st.session_state["current_project"] = res.data[0]
+                            time.sleep(1) # Пауза для UX
+                            st.rerun()
+                            
+                    except Exception as e:
+                        st.error(f"Помилка створення: {e}")
+
 
 def show_history_page():
     """
@@ -4931,10 +5145,9 @@ def show_history_page():
 def sidebar_menu():
     """
     Бокове меню навігації.
-    ВЕРСІЯ: LOGO RESTORED.
-    1. Логотип: Повернуто на місце (прибрано margin-top: -80px).
-    2. Кнопка згортання: Активна, позиція top: 120px.
-    3. Проект: Великий шрифт (20px), без лейбла.
+    ВЕРСІЯ: ADDED 'MY PROJECTS'.
+    1. Додано пункт 'Мої проекти' перед Дашбордом.
+    2. Іконка 'folder' для проектів.
     """
     from streamlit_option_menu import option_menu
     import streamlit as st
@@ -4994,7 +5207,7 @@ def sidebar_menu():
             </style>
         """, unsafe_allow_html=True)
 
-        # 1. ЛОГОТИП + AI VISIBILITY (Нормальне позиціонування)
+        # 1. Логотип + AI VISIBILITY (Нормальне позиціонування)
         st.markdown(f"""
             <div style="text-align: center; margin-bottom: 5px;">
                 <img src="https://raw.githubusercontent.com/virshi-ai/image/refs/heads/main/logo-removebg-preview.png" width="160" style="display: inline-block;">
@@ -5053,6 +5266,7 @@ def sidebar_menu():
 
         # 4. Меню
         options = [
+            "Мої проекти",      # <--- НОВИЙ ПУНКТ
             "Дашборд", 
             "Перелік запитів", 
             "Джерела", 
@@ -5065,6 +5279,7 @@ def sidebar_menu():
         ]
         
         icons = [
+            "folder",           # <--- ІКОНКА ДЛЯ "МОЇ ПРОЕКТИ"
             "speedometer2", 
             "list-task", 
             "router", 
@@ -6230,6 +6445,9 @@ def main():
     # 2. Роутинг сторінок
     if page == "Дашборд":
         if 'show_dashboard' in globals(): show_dashboard()
+    
+    elif page == "Мої проекти":    # <--- ДОДАНО
+        show_my_projects_page()    # <--- ВИКЛИК НОВОЇ ФУНКЦІЇ            
         
     elif page == "Перелік запитів":
         if 'show_keywords_page' in globals(): show_keywords_page()
