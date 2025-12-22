@@ -6343,14 +6343,21 @@ def main():
             return
 
         # 3. REDIRECT NEW USERS (Skip Onboarding, Go to Create Project)
+        # Check if project is loaded in session
         if not st.session_state.get("current_project"):
             user_id = st.session_state["user"].id
-            sb = globals().get('supabase') or st.session_state.get('supabase')
+            
+            # Safe access to supabase client
+            sb = None
+            if 'supabase' in globals():
+                sb = globals()['supabase']
+            elif 'supabase' in st.session_state:
+                sb = st.session_state['supabase']
             
             has_project = False
             if sb:
                 try:
-                    # Check if user has any projects
+                    # Check if user has any projects in DB
                     resp = sb.table("projects").select("*").eq("user_id", user_id).execute()
                     if resp.data:
                         # User has projects -> Load the first one and proceed
@@ -6374,7 +6381,7 @@ def main():
                     if 'show_my_projects_page' in globals():
                         show_my_projects_page()
                     else:
-                        st.error("Function show_my_projects_page not found.")
+                        st.error("Function show_my_projects_page not found. Please define it.")
                     
                     return # Stop execution here to prevent Dashboard rendering
 
@@ -6389,6 +6396,7 @@ def main():
         # Routing
         if page == "Дашборд":
             if 'show_dashboard' in globals(): show_dashboard()
+            else: st.warning("Dashboard function missing.")
         
         elif page == "Мої проекти":    
             if 'show_my_projects_page' in globals(): show_my_projects_page()
