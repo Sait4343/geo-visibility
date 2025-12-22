@@ -5755,8 +5755,8 @@ def show_auth_page():
 def show_admin_page():
     """
     Адмін-панель (CRM).
-    ВЕРСІЯ: ASSIGN PROJECTS.
-    Додано можливість призначати (передавати) проекти користувачам у вкладці 'Користувачі'.
+    ВЕРСІЯ: PROJECT NAME / BRAND NAME.
+    Відображення: "Назва проекту / Назва бренду" у списку.
     """
     import pandas as pd
     import streamlit as st
@@ -5872,11 +5872,13 @@ def show_admin_page():
                 u_id = p.get('user_id')
                 owner = user_map.get(u_id, {"full_name": "", "email": ""})
                 
-                p_name = p.get('brand_name') or p.get('project_name') or ""
+                p_int = p.get('project_name') or ""
+                p_brand = p.get('brand_name') or ""
                 p_domain = p.get('domain') or ""
                 p_id_str = str(p.get('id', ''))
                 
-                search_text = f"{p_name} {p_domain} {p_id_str} {owner['full_name']} {owner['email']}".lower()
+                # Пошук по всіх полях
+                search_text = f"{p_int} {p_brand} {p_domain} {p_id_str} {owner['full_name']} {owner['email']}".lower()
                 
                 if search_query and search_query.lower() not in search_text: continue
                 if status_filter and p.get('status', 'trial') not in status_filter: continue
@@ -5905,12 +5907,23 @@ def show_admin_page():
             u_id = p.get('user_id')
             owner_info = user_map.get(u_id, {"full_name": "Невідомий", "role": "user", "email": "-"})
             
-            raw_name = p.get('brand_name') or p.get('project_name')
+            # 🔥 ФОРМУВАННЯ НАЗВИ: "Project Name / Brand Name"
+            p_internal = p.get('project_name')
+            p_brand = p.get('brand_name')
             domain = p.get('domain', '')
             
-            if raw_name:
-                clean_name = str(raw_name).replace('*', '').strip()
+            if p_internal and p_brand:
+                # Якщо вони однакові, показуємо один раз
+                if p_internal.strip() == p_brand.strip():
+                    clean_name = p_internal
+                else:
+                    clean_name = f"{p_internal} / {p_brand}"
+            elif p_internal:
+                clean_name = p_internal
+            elif p_brand:
+                clean_name = p_brand
             else:
+                # Якщо назв немає взагалі, беремо домен або заглушку
                 clean_name = domain.replace('https://', '').replace('www.', '').split('/')[0] if domain else "Без назви"
 
             # ЛОГОТИП
@@ -6097,14 +6110,12 @@ def show_admin_page():
             c_asn_1, c_asn_2, c_asn_3 = st.columns([1.5, 1.5, 1])
             
             # 1. Вибір користувача
-            # Формуємо список: "email (Name)"
             user_options = {f"{u['email']} ({u.get('first_name','')} {u.get('last_name','')})": u['id'] for u in users_data}
             
             with c_asn_1:
                 selected_user_key = st.selectbox("1. Оберіть нового власника", options=list(user_options.keys()))
             
             # 2. Вибір проекту
-            # Формуємо список: "Brand Name (Current Owner Email)"
             proj_options = {}
             for p in projects_data:
                 owner_id = p.get('user_id')
