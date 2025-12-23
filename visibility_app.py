@@ -1799,14 +1799,13 @@ def show_faq_page():
     for question, answer in faq_data:
         with st.expander(f"🔹 {question}"):
             st.write(answer)
-
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FIX SENTIMENT & SORTING.
-    1. Сортування: Найновіші запити зверху.
-    2. Тональність: Рахується окремо для кожної LLM на основі реальних згадок.
-    3. Виправлено тексти (Настрій -> Тональність).
+    ВЕРСІЯ: FINAL DONUT 100% & COMPETITOR SENTIMENT.
+    1. Донат тональності завжди дає 100% (базується на згадках target brand).
+    2. У таблиці конкурентів показується реальна домінуюча тональність.
+    3. Сортування запитів: від найновіших.
     """
     import pandas as pd
     from datetime import datetime
@@ -1882,11 +1881,11 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             
-            # Нормалізація тональності (для бази даних)
-            raw_sent = str(m.get('sentiment_score', '')).capitalize()
-            if 'Поз' in raw_sent: m['sentiment_score'] = 'Позитивна'
-            elif 'Нег' in raw_sent: m['sentiment_score'] = 'Негативна'
-            elif 'Ней' in raw_sent: m['sentiment_score'] = 'Нейтральна'
+            # Нормалізація тональності
+            raw_sent = str(m.get('sentiment_score', '')).lower()
+            if 'поз' in raw_sent or 'pos' in raw_sent: m['sentiment_score'] = 'Позитивна'
+            elif 'нег' in raw_sent or 'neg' in raw_sent: m['sentiment_score'] = 'Негативна'
+            elif 'ней' in raw_sent or 'neu' in raw_sent: m['sentiment_score'] = 'Нейтральна'
             else: m['sentiment_score'] = 'Не визначено'
 
             processed_mentions.append(m)
@@ -1968,7 +1967,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* Sentiment Legend in KPI Box */
+    /* Sentiment Legend */
     .sent-legend { display: flex; justify-content: center; gap: 8px; margin-top: 10px; font-size: 10px; font-weight: bold; }
     
     @media (min-width: 768px) { .content-card { padding: 50px; } }
@@ -1991,17 +1990,18 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- NEW: 3-Color Sentiment Doughnut ---
+    // --- 3-Color Sentiment Donut (100% Total) ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
         
-        // Якщо даних немає, показуємо порожнє сіре коло
         let dataValues = [pos, neu, neg];
-        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Зелений, Сірий, Червоний
+        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Gray, Red
+        
+        // Якщо немає даних - сіре коло
         if (pos + neu + neg === 0) {
              dataValues = [1];
-             bgColors = ['#F0F2F6']; // Empty
+             bgColors = ['#F0F2F6'];
         }
 
         new Chart(ctx, {
@@ -2085,19 +2085,17 @@ __JS_BLOCK__
     tt_brand_cov = "Відсоток запитів, де бренд був згаданий."
     tt_domain_cov = "Відсоток запитів з клікабельним посиланням на ваш домен."
 
-    # --- MAIN LOOP (Generating Tabs) ---
+    # --- MAIN LOOP ---
     for i, prov_ui in enumerate(providers_ui):
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
         provider_scans = data_by_provider[prov_ui]
         
-        # 🔥 FIX 1: SORTING (Newest First)
-        # Сортуємо скани цієї моделі за датою створення (спадання)
+        # 🔥 1. Сортування: Найновіші зверху
         provider_scans.sort(key=lambda x: x.get('created_at', ''), reverse=True)
         
-        # --- LOCAL CALCS (Specific to this Provider) ---
-        # Збираємо всі згадки та джерела ТІЛЬКИ для цієї моделі
+        # --- LOCAL CALCS ---
         all_mentions = []
         all_sources = []
         for s in provider_scans:
@@ -2109,21 +2107,21 @@ __JS_BLOCK__
         
         total_queries = len(provider_scans)
         
-        # 1. SOV (Local)
+        # 1. SOV
         sov_pct = 0
         if not df_m_local.empty:
             total_market = df_m_local['mention_count'].sum()
             my_total = df_m_local[df_m_local['is_real_target'] == True]['mention_count'].sum()
             if total_market > 0: sov_pct = (my_total / total_market * 100)
             
-        # 2. Official % (Local)
+        # 2. Official %
         off_pct = 0
         if not df_s_local.empty:
             total_lnk = len(df_s_local)
             off_lnk = len(df_s_local[df_s_local['is_official_calc'] == True])
             if total_lnk > 0: off_pct = (off_lnk / total_lnk * 100)
             
-        # 3. Brand Coverage (Local)
+        # 3. Brand Coverage
         brand_cov = 0
         scans_present_count = 0
         for s in provider_scans:
@@ -2131,7 +2129,7 @@ __JS_BLOCK__
             if found: scans_present_count += 1
         if total_queries > 0: brand_cov = (scans_present_count / total_queries * 100)
 
-        # 4. Domain Coverage (Local)
+        # 4. Domain Coverage
         domain_cov = 0
         scans_link_count = 0
         for s in provider_scans:
@@ -2139,29 +2137,29 @@ __JS_BLOCK__
              if found_link: scans_link_count += 1
         if total_queries > 0: domain_cov = (scans_link_count / total_queries * 100)
 
-        # 5. Avg Position (Local)
+        # 5. Avg Position
         avg_pos = 0
         if not df_m_local.empty:
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: SENTIMENT (Local & Correct Data Source)
-        # Рахуємо тональність тільки для ЦІЄЇ моделі і ТІЛЬКИ для нашого бренду
+        # 🔥 6. Sentiment Breakdown (Local, 100% distribution)
         pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_local.empty:
-            # Беремо тільки наш бренд
+            # Беремо ТІЛЬКИ НАШ БРЕНД
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
-                total_s = counts.sum()
+                total_s = counts.sum() # Сума тільки по нашому бренду = 100%
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
                     neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
                     neg_v = (counts.get('Негативна', 0) / total_s * 100)
         
-        # --- SUMMARY TABLES ---
+        # --- SUMMARY TABLES (COMPETITORS) ---
         summary_competitors_html = ""
         if not df_m_local.empty:
+            # Групуємо і знаходимо домінуючу тональність (mode)
             comp_grp = df_m_local.groupby('brand_name').agg(
                 total_mentions=('mention_count', 'sum'),
                 avg_pos=('rank_position', lambda x: x[x>0].mean() if not x[x>0].empty else 0),
@@ -2172,7 +2170,13 @@ __JS_BLOCK__
             rows = ""
             for _, r in comp_grp.iterrows():
                 pos_val = f"{r['avg_pos']:.1f}" if r['avg_pos'] > 0 else "-"
-                s_txt = r['sentiment'] # Вже нормалізовано вище
+                
+                # Корекція назви тональності
+                s_txt = str(r['sentiment'])
+                if 'Поз' in s_txt: s_txt = 'Позитивна'
+                elif 'Нег' in s_txt: s_txt = 'Негативна'
+                elif 'Ней' in s_txt: s_txt = 'Нейтральна'
+                
                 rows += f"<tr><td>{r['brand_name']}</td><td>{int(r['total_mentions'])}</td><td>{s_txt}</td><td>{pos_val}</td></tr>"
             
             if rows:
@@ -2212,7 +2216,7 @@ __JS_BLOCK__
                     <div class="table-responsive"><table class="summary-table"><thead><tr><th>Домен</th><th>Згадок</th></tr></thead><tbody>{rows}</tbody></table></div>
                 </div>'''
 
-        # Tab Content Construction
+        # Tab Content
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
             <div class="kpi-row">
@@ -2246,7 +2250,6 @@ __JS_BLOCK__
         '''
 
         # --- LOOPS (Accordion) ---
-        # Тут ми вже проходимо по відсортованому списку provider_scans (крок FIX 1)
         for idx, scan_row in enumerate(provider_scans):
             q_text = scan_row.get('keyword_text', 'Запит')
             
@@ -2264,6 +2267,10 @@ __JS_BLOCK__
             if not my_row.empty and l_my > 0:
                 best = my_row.sort_values('mention_count', ascending=False).iloc[0]
                 l_sent = best.get('sentiment_score', 'Не знайдено')
+                if 'Поз' in l_sent: l_sent = 'Позитивна'
+                elif 'Нег' in l_sent: l_sent = 'Негативна'
+                elif 'Ней' in l_sent: l_sent = 'Нейтральна'
+
                 vr = my_row[my_row['rank_position'] > 0]['rank_position']
                 val = vr.min() if not vr.empty else None
                 if pd.notnull(val): l_pos = f"#{safe_int(val)}"
@@ -2287,7 +2294,12 @@ __JS_BLOCK__
                         if b['mention_count'] > 0:
                             has_b = True
                             bg = "style='background:#e6fffa; font-weight:bold;'" if b['is_real_target'] else ""
-                            rows_b += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{b['sentiment_score']}</td><td>{safe_int(b['rank_position'])}</td></tr>"
+                            s_loc = b['sentiment_score']
+                            if 'Поз' in s_loc: s_loc = 'Позитивна'
+                            elif 'Нег' in s_loc: s_loc = 'Негативна'
+                            elif 'Ней' in s_loc: s_loc = 'Нейтральна'
+                            
+                            rows_b += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{s_loc}</td><td>{safe_int(b['rank_position'])}</td></tr>"
                     
                     if has_b:
                         details_html += f'<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Тональність</th><th>Поз.</th></tr></thead><tbody>{rows_b}</tbody></table></div></div>'
@@ -2334,7 +2346,6 @@ __JS_BLOCK__
         # JS Charts
         js_charts_code += f"createDoughnut('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
-        # 🔥 NEW: Sentiment Donut Call
         js_charts_code += f"createSentimentDoughnut('chartSent_{prov_id}', {pos_v}, {neu_v}, {neg_v});\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov}, '#4DD0E1');\n"
