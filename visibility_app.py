@@ -1799,12 +1799,14 @@ def show_faq_page():
     for question, answer in faq_data:
         with st.expander(f"🔹 {question}"):
             st.write(answer)
+
+
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FINAL DONUT 100% & COMPETITOR SENTIMENT.
-    1. Донат тональності завжди дає 100% (базується на згадках target brand).
-    2. У таблиці конкурентів показується реальна домінуюча тональність.
+    ВЕРСІЯ: FINAL DONUT 100% (TARGET BRAND ONLY).
+    1. Донат тональності будується тільки по target brand (сума 100%).
+    2. У таблиці конкурентів показується реальна тональність.
     3. Сортування запитів: від найновіших.
     """
     import pandas as pd
@@ -2092,7 +2094,7 @@ __JS_BLOCK__
         
         provider_scans = data_by_provider[prov_ui]
         
-        # 🔥 1. Сортування: Найновіші зверху
+        # 🔥 FIX 1: SORTING (Newest First)
         provider_scans.sort(key=lambda x: x.get('created_at', ''), reverse=True)
         
         # --- LOCAL CALCS ---
@@ -2143,14 +2145,16 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 6. Sentiment Breakdown (Local, 100% distribution)
+        # 🔥 FIX 2: LOCAL SENTIMENT METRICS (TARGET BRAND ONLY, SUM = 100%)
         pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_local.empty:
-            # Беремо ТІЛЬКИ НАШ БРЕНД
+            # Беремо ТІЛЬКИ НАШ БРЕНД (target brand)
+            # Вважаємо кожну згадку (запис в brand_mentions) як один голос за тональність
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
                 total_s = counts.sum() # Сума тільки по нашому бренду = 100%
+                
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
                     neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
