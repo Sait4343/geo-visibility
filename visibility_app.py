@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FINAL FIX - 100% SENTIMENT + UI MATCH + SORTING.
-    1. Відсотки тональності = (Кількість конкретної / Сума ЗНАЙДЕНИХ) * 100.
-    2. Дизайн блоку тональності ідентичний до скріншоту.
-    3. Сортування запитів ідентичне до головної сторінки (від найновіших).
+    ВЕРСІЯ: GLOBAL SORTING + FIXED SENTIMENT 100%.
+    1. Сортування: Використовує глобальний час запиту, щоб порядок був однаковим на всіх вкладках.
+    2. Тональність: Рахується від суми згадок бренду (100%).
+    3. UI: Легенда списком, графік знизу.
     """
     import pandas as pd
     from datetime import datetime
@@ -1846,6 +1846,15 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         txt = txt.replace('* ', '<br>• ')
         txt = txt.replace('\n', '<br>')
         return txt
+
+    # --- 0. PRE-CALCULATE GLOBAL SORT ORDER (Fix jumping queries) ---
+    # Знаходимо найсвіжіший час для кожного тексту запиту серед усіх моделей
+    query_time_map = {}
+    for s in scans_data:
+        kw = s.get('keyword_text', '')
+        t = s.get('created_at', '')
+        if kw and (kw not in query_time_map or t > query_time_map[kw]):
+            query_time_map[kw] = t
 
     # --- UI Mapping ---
     PROVIDER_MAPPING = {
@@ -1969,7 +1978,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* 🔥 SPECIFIC UI FOR SENTIMENT BOX (FIXED) */
+    /* 🔥 SPECIFIC UI FOR SENTIMENT BOX */
     .sent-kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 220px; }
     .sent-list { width: 100%; margin-bottom: 15px; margin-top: 5px; }
     .sent-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
@@ -2114,9 +2123,9 @@ __JS_BLOCK__
         
         provider_scans = data_by_provider[prov_ui]
         
-        # 🔥 FIX 1: SORTING (NEWEST FIRST)
-        # Сортуємо скани цієї моделі за датою створення (спадання)
-        provider_scans.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        # 🔥 FIX 1: CONSISTENT SORTING (By Global Max Time + Keyword)
+        # Сортуємо спочатку за глобальним часом (щоб всі вкладки були однакові), потім за текстом
+        provider_scans.sort(key=lambda x: (query_time_map.get(x.get('keyword_text', ''), ''), x.get('keyword_text', '')), reverse=True)
         
         # --- LOCAL CALCS ---
         all_mentions = []
