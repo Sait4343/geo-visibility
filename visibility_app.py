@@ -2639,16 +2639,17 @@ def show_reports_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: FIX DATA VISIBILITY & DUPLICATE ID.
-    1. Виправлено логіку визначення "свого бренду" (is_target), щоб дані не були 0.
-    2. Додано unique keys для графіків (виправляє помилку Streamlit).
-    3. Порядок моделей: OpenAI -> Gemini -> Perplexity.
+    ВЕРСІЯ: FIX ZERO DATA (SMART BRAND MATCHING).
+    1. Розумне визначення бренду: Ігнорує пробіли/тире при порівнянні (Fix n8n bug).
+    2. Послідовність: OpenAI -> Gemini -> Perplexity.
+    3. Тональність: 100% сума, UI як у звіті.
     """
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
     import streamlit as st
     from datetime import datetime, timedelta
+    import re
 
     # --- 1. ПІДКЛЮЧЕННЯ ---
     if 'supabase' in st.session_state:
@@ -2711,9 +2712,11 @@ def show_dashboard():
     # ==============================================================================
     with st.spinner("Аналіз даних..."):
         try:
+            # Отримуємо слова
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             keywords_df = pd.DataFrame(kw_resp.data) if kw_resp.data else pd.DataFrame()
             
+            # Отримуємо скани
             scan_resp = supabase.table("scan_results")\
                 .select("id, provider, created_at, keyword_id")\
                 .eq("project_id", proj["id"])\
@@ -2726,11 +2729,23 @@ def show_dashboard():
             
             if not scans_df.empty:
                 scan_ids = scans_df['id'].tolist()
-                m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", scan_ids).execute()
-                if m_resp.data: mentions_df = pd.DataFrame(m_resp.data)
                 
-                s_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", scan_ids).execute()
-                if s_resp.data: sources_df = pd.DataFrame(s_resp.data)
+                # Отримуємо згадки (batch)
+                # Розбиваємо на чанки, якщо ID дуже багато, щоб не впертися в ліміт URL
+                chunk_size = 200
+                all_mentions = []
+                all_sources = []
+                
+                for i in range(0, len(scan_ids), chunk_size):
+                    chunk = scan_ids[i:i + chunk_size]
+                    m_resp = supabase.table("brand_mentions").select("*").in_("scan_result_id", chunk).execute()
+                    if m_resp.data: all_mentions.extend(m_resp.data)
+                    
+                    s_resp = supabase.table("extracted_sources").select("*").in_("scan_result_id", chunk).execute()
+                    if s_resp.data: all_sources.extend(s_resp.data)
+                
+                if all_mentions: mentions_df = pd.DataFrame(all_mentions)
+                if all_sources: sources_df = pd.DataFrame(all_sources)
 
         except Exception as e:
             st.error(f"Помилка завантаження даних: {e}")
@@ -2741,7 +2756,7 @@ def show_dashboard():
         return
 
     # ==============================================================================
-    # 3. ОБРОБКА ДАНИХ (FIXED)
+    # 3. ОБРОБКА ТА НОРМАЛІЗАЦІЯ (SMART MATCHING)
     # ==============================================================================
     def norm_provider(p):
         p = str(p).lower()
@@ -2753,8 +2768,16 @@ def show_dashboard():
     scans_df['provider_ui'] = scans_df['provider'].apply(norm_provider)
     scans_df['created_at'] = pd.to_datetime(scans_df['created_at'])
 
+    # 🔥 ОТРИМУЄМО НАЗВУ БРЕНДУ З ПРОЕКТУ (ДЛЯ АІ)
+    # Це те саме поле, яке ви заповнювали як "Назва бренду (для AI)"
     target_brand_raw = proj.get('brand_name', '').strip()
-    target_brand_lower = target_brand_raw.lower()
+    
+    # Функція нормалізації: видаляє все крім букв і цифр (be-it agency -> beitagency)
+    def normalize_str(s):
+        if not s: return ""
+        return re.sub(r'[^a-zA-Z0-9а-яА-ЯіїєґІЇЄҐ]', '', str(s).lower())
+
+    target_brand_norm = normalize_str(target_brand_raw)
     
     if not mentions_df.empty:
         mentions_df['mention_count'] = pd.to_numeric(mentions_df['mention_count'], errors='coerce').fillna(0)
@@ -2772,18 +2795,20 @@ def show_dashboard():
 
         df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
         
-        # 🔥 РОЗШИРЕНА ЛОГІКА ВИЗНАЧЕННЯ ЦІЛЬОВОГО БРЕНДУ
+        # 🔥 ГОЛОВНЕ ВИПРАВЛЕННЯ: РОЗУМНЕ ВИЗНАЧЕННЯ "СВОГО" БРЕНДУ
         def check_is_target(row):
-            # 1. Перевірка прапорця з БД (обробка рядків 'true', '1' тощо)
+            # 1. Спробувати взяти прапорець з бази (якщо n8n колись виправиться)
             flag_val = str(row.get('is_my_brand', '')).lower()
             if flag_val in ['true', '1', 't', 'yes', 'on']:
                 return True
             
-            # 2. Перевірка по назві (Target IN Brand OR Brand IN Target)
-            brand_in_row = str(row.get('brand_name', '')).lower().strip()
-            if target_brand_lower and brand_in_row:
-                if target_brand_lower in brand_in_row: return True
-                if brand_in_row in target_brand_lower: return True
+            # 2. Якщо в базі False, перевіряємо самі через нормалізацію
+            row_brand_norm = normalize_str(row.get('brand_name', ''))
+            
+            # Перевірка: чи міститься наш нормалізований бренд у знайденому (або навпаки)
+            if target_brand_norm and row_brand_norm:
+                if target_brand_norm in row_brand_norm: return True
+                if row_brand_norm in target_brand_norm: return True
             
             return False
 
@@ -2800,7 +2825,7 @@ def show_dashboard():
         model_scans = scans_df[scans_df['provider_ui'] == model_name]
         if model_scans.empty: return 0, 0, (0,0,0)
         
-        # Беремо останній скан для кожного кейворда
+        # Snapshot: беремо тільки останній скан для кожного кейворда
         latest_scans = model_scans.sort_values('created_at', ascending=False).drop_duplicates('keyword_id')
         target_scan_ids = latest_scans['id'].tolist()
         
@@ -2810,7 +2835,8 @@ def show_dashboard():
         if current_mentions.empty: return 0, 0, (0,0,0)
 
         total_mentions = current_mentions['mention_count'].sum()
-        # Фільтруємо наш бренд
+        
+        # Фільтруємо наш бренд за новою розумною логікою
         my_mentions = current_mentions[current_mentions['is_target'] == True]
         my_count = my_mentions['mention_count'].sum()
         
@@ -2851,7 +2877,7 @@ def show_dashboard():
                 c2.metric("Rank", f"#{rank:.1f}" if rank > 0 else "-")
                 
                 # --- SENTIMENT BLOCK ---
-                has_data = (pos + neu + neg) > 0
+                has_data = (pos + neu + neg) > 0.1 # Перевірка на > 0
                 
                 pie_values = [pos, neu, neg] if has_data else [1]
                 pie_colors = ['#00C896', '#B0BEC5', '#FF4B4B'] if has_data else ['#E0E0E0']
@@ -2883,7 +2909,7 @@ def show_dashboard():
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
-                # 🔥 KEY ADDED HERE TO FIX DUPLICATE ID ERROR
+                # Key для уникнення Duplicate ID
                 st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False}, key=f"donut_{model}_{i}")
 
     # ==============================================================================
@@ -2988,7 +3014,7 @@ def show_dashboard():
         st.info("Немає даних для аналізу конкурентів.")
 
     # ==============================================================================
-    # 7. ДЕТАЛЬНА СТАТИСТИКА
+    # 7. ДЕТАЛЬНА СТАТИСТИКА ПО ЗАПИТАХ
     # ==============================================================================
     st.write("")
     st.markdown("### 📋 Детальна статистика по запитах")
@@ -3021,7 +3047,6 @@ def show_dashboard():
             if not kw_data.empty:
                 has_data = True
                 sorted_scans = kw_data.sort_values('created_at', ascending=False)
-                # Дані за останні 24 години
                 latest_date = sorted_scans['created_at'].max()
                 current_slice = sorted_scans[sorted_scans['created_at'] >= (latest_date - timedelta(hours=24))]
 
