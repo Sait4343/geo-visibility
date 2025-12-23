@@ -1803,9 +1803,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: SENTIMENT DONUT + RENAMING.
-    1. Виправлено назви (Настрій -> Тональність, тощо).
-    2. Додано графік-донат для тональності (3 кольори).
+    ВЕРСІЯ: FIX SENTIMENT & SORTING.
+    1. Сортування: Найновіші запити зверху.
+    2. Тональність: Рахується окремо для кожної LLM на основі реальних згадок.
+    3. Виправлено тексти (Настрій -> Тональність).
     """
     import pandas as pd
     from datetime import datetime
@@ -1881,7 +1882,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             
-            # Виправляємо назви тональностей на льоту
+            # Нормалізація тональності (для бази даних)
             raw_sent = str(m.get('sentiment_score', '')).capitalize()
             if 'Поз' in raw_sent: m['sentiment_score'] = 'Позитивна'
             elif 'Нег' in raw_sent: m['sentiment_score'] = 'Негативна'
@@ -1967,9 +1968,8 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* Sentiment Legend */
-    .sent-legend { display: flex; justify-content: center; gap: 10px; margin-top: 5px; font-size: 10px; font-weight: bold; }
-    .sent-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 3px; }
+    /* Sentiment Legend in KPI Box */
+    .sent-legend { display: flex; justify-content: center; gap: 8px; margin-top: 10px; font-size: 10px; font-weight: bold; }
     
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
@@ -1991,16 +1991,26 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
+    // --- NEW: 3-Color Sentiment Doughnut ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
+        
+        // Якщо даних немає, показуємо порожнє сіре коло
+        let dataValues = [pos, neu, neg];
+        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Зелений, Сірий, Червоний
+        if (pos + neu + neg === 0) {
+             dataValues = [1];
+             bgColors = ['#F0F2F6']; // Empty
+        }
+
         new Chart(ctx, {
             type: 'doughnut',
             data: { 
                 labels: ['Позитивна', 'Нейтральна', 'Негативна'],
                 datasets: [{ 
-                    data: [pos, neu, neg], 
-                    backgroundColor: ['#00C896', '#E0E0E0', '#FF4B4B'], 
+                    data: dataValues, 
+                    backgroundColor: bgColors, 
                     borderWidth: 0, 
                     hoverOffset: 4 
                 }] 
@@ -2012,7 +2022,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
                 cutout: '60%', 
                 plugins: { 
                     legend: { display: false }, 
-                    tooltip: { enabled: true } 
+                    tooltip: { enabled: (pos + neu + neg > 0) } 
                 } 
             }
         });
@@ -2075,40 +2085,45 @@ __JS_BLOCK__
     tt_brand_cov = "Відсоток запитів, де бренд був згаданий."
     tt_domain_cov = "Відсоток запитів з клікабельним посиланням на ваш домен."
 
-    # --- MAIN LOOP ---
+    # --- MAIN LOOP (Generating Tabs) ---
     for i, prov_ui in enumerate(providers_ui):
         active_cls = "style='display:block;'" if i == 0 else "style='display:none;'"
         prov_id = str(prov_ui).replace(" ", "_").replace(".", "")
         
         provider_scans = data_by_provider[prov_ui]
         
-        # --- GLOBAL CALCS ---
+        # 🔥 FIX 1: SORTING (Newest First)
+        # Сортуємо скани цієї моделі за датою створення (спадання)
+        provider_scans.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        # --- LOCAL CALCS (Specific to this Provider) ---
+        # Збираємо всі згадки та джерела ТІЛЬКИ для цієї моделі
         all_mentions = []
         all_sources = []
         for s in provider_scans:
             all_mentions.extend(s['brand_mentions'])
             all_sources.extend(s['extracted_sources'])
             
-        df_m_all = pd.DataFrame(all_mentions)
-        df_s_all = pd.DataFrame(all_sources)
+        df_m_local = pd.DataFrame(all_mentions)
+        df_s_local = pd.DataFrame(all_sources)
         
         total_queries = len(provider_scans)
         
-        # 1. SOV
+        # 1. SOV (Local)
         sov_pct = 0
-        if not df_m_all.empty:
-            total_market = df_m_all['mention_count'].sum()
-            my_total = df_m_all[df_m_all['is_real_target'] == True]['mention_count'].sum()
+        if not df_m_local.empty:
+            total_market = df_m_local['mention_count'].sum()
+            my_total = df_m_local[df_m_local['is_real_target'] == True]['mention_count'].sum()
             if total_market > 0: sov_pct = (my_total / total_market * 100)
             
-        # 2. Official %
+        # 2. Official % (Local)
         off_pct = 0
-        if not df_s_all.empty:
-            total_lnk = len(df_s_all)
-            off_lnk = len(df_s_all[df_s_all['is_official_calc'] == True])
+        if not df_s_local.empty:
+            total_lnk = len(df_s_local)
+            off_lnk = len(df_s_local[df_s_local['is_official_calc'] == True])
             if total_lnk > 0: off_pct = (off_lnk / total_lnk * 100)
             
-        # 3. Brand Coverage
+        # 3. Brand Coverage (Local)
         brand_cov = 0
         scans_present_count = 0
         for s in provider_scans:
@@ -2116,7 +2131,7 @@ __JS_BLOCK__
             if found: scans_present_count += 1
         if total_queries > 0: brand_cov = (scans_present_count / total_queries * 100)
 
-        # 4. Domain Coverage
+        # 4. Domain Coverage (Local)
         domain_cov = 0
         scans_link_count = 0
         for s in provider_scans:
@@ -2124,18 +2139,20 @@ __JS_BLOCK__
              if found_link: scans_link_count += 1
         if total_queries > 0: domain_cov = (scans_link_count / total_queries * 100)
 
-        # 5. Avg Position
+        # 5. Avg Position (Local)
         avg_pos = 0
-        if not df_m_all.empty:
-            my_ranks = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['rank_position'] > 0)]['rank_position']
+        if not df_m_local.empty:
+            my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 6. Sentiment Breakdown
+        # 🔥 FIX 2: SENTIMENT (Local & Correct Data Source)
+        # Рахуємо тональність тільки для ЦІЄЇ моделі і ТІЛЬКИ для нашого бренду
         pos_v, neu_v, neg_v = 0, 0, 0
-        if not df_m_all.empty:
-            valid_sent = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['sentiment_score'] != 'Не визначено')]
-            if not valid_sent.empty:
-                counts = valid_sent['sentiment_score'].value_counts()
+        if not df_m_local.empty:
+            # Беремо тільки наш бренд
+            my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
+            if not my_mentions_df.empty:
+                counts = my_mentions_df['sentiment_score'].value_counts()
                 total_s = counts.sum()
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
@@ -2144,24 +2161,18 @@ __JS_BLOCK__
         
         # --- SUMMARY TABLES ---
         summary_competitors_html = ""
-        if not df_m_all.empty:
-            comp_grp = df_m_all.groupby('brand_name').agg(
+        if not df_m_local.empty:
+            comp_grp = df_m_local.groupby('brand_name').agg(
                 total_mentions=('mention_count', 'sum'),
                 avg_pos=('rank_position', lambda x: x[x>0].mean() if not x[x>0].empty else 0),
                 sentiment=('sentiment_score', lambda x: x.mode()[0] if not x.empty else 'Не згадано')
             ).reset_index()
-            # Sort by count desc
             comp_grp = comp_grp[comp_grp['total_mentions'] > 0].sort_values('total_mentions', ascending=False)
             
             rows = ""
             for _, r in comp_grp.iterrows():
                 pos_val = f"{r['avg_pos']:.1f}" if r['avg_pos'] > 0 else "-"
-                # Fix naming in table
-                s_txt = r['sentiment']
-                if 'Поз' in s_txt: s_txt = 'Позитивна'
-                elif 'Нег' in s_txt: s_txt = 'Негативна'
-                elif 'Ней' in s_txt: s_txt = 'Нейтральна'
-                
+                s_txt = r['sentiment'] # Вже нормалізовано вище
                 rows += f"<tr><td>{r['brand_name']}</td><td>{int(r['total_mentions'])}</td><td>{s_txt}</td><td>{pos_val}</td></tr>"
             
             if rows:
@@ -2172,8 +2183,8 @@ __JS_BLOCK__
                 </div>'''
             
         summary_links_html = ""
-        if not df_s_all.empty:
-            off_links = df_s_all[df_s_all['is_official_calc'] == True]
+        if not df_s_local.empty:
+            off_links = df_s_local[df_s_local['is_official_calc'] == True]
             if not off_links.empty:
                 links_grp = off_links.groupby('url').size().reset_index(name='count').sort_values('count', ascending=False)
                 rows = ""
@@ -2187,8 +2198,8 @@ __JS_BLOCK__
                 </div>'''
 
         summary_domains_html = ""
-        if not df_s_all.empty:
-            dom_grp = df_s_all.groupby('domain_clean').size().reset_index(name='count').sort_values('count', ascending=False)
+        if not df_s_local.empty:
+            dom_grp = df_s_local.groupby('domain_clean').size().reset_index(name='count').sort_values('count', ascending=False)
             rows = ""
             for _, r in dom_grp.iterrows():
                 if r['domain_clean']:
@@ -2201,22 +2212,24 @@ __JS_BLOCK__
                     <div class="table-responsive"><table class="summary-table"><thead><tr><th>Домен</th><th>Згадок</th></tr></thead><tbody>{rows}</tbody></table></div>
                 </div>'''
 
-        # Tab Content
+        # Tab Content Construction
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_sov}</div><div class="kpi-title">Частка голосу (SOV)</div><div class="kpi-big-num">{sov_pct:.2f}%</div><div class="chart-container"><canvas id="chartSOV_{prov_id}"></canvas></div></div>
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_off}</div><div class="kpi-title">% Офіційних джерел</div><div class="kpi-big-num">{off_pct:.2f}%</div><div class="chart-container"><canvas id="chartOfficial_{prov_id}"></canvas></div></div>
+                
                 <div class="kpi-box">
                     <div class="kpi-tooltip">{tt_sent}</div>
                     <div class="kpi-title">Тональність</div>
                     <div class="chart-container"><canvas id="chartSent_{prov_id}"></canvas></div>
                     <div class="sent-legend">
                         <span style="color:#00C896;">● {pos_v:.0f}%</span>
-                        <span style="color:#999;">● {neu_v:.0f}%</span>
+                        <span style="color:#B0BEC5;">● {neu_v:.0f}%</span>
                         <span style="color:#FF4B4B;">● {neg_v:.0f}%</span>
                     </div>
                 </div>
+
             </div>
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_pos}</div><div class="kpi-title">Позиція бренду</div><div class="kpi-big-num">{avg_pos:.1f}</div><div class="chart-container"><canvas id="chartPos_{prov_id}"></canvas></div></div>
@@ -2233,13 +2246,13 @@ __JS_BLOCK__
         '''
 
         # --- LOOPS (Accordion) ---
+        # Тут ми вже проходимо по відсортованому списку provider_scans (крок FIX 1)
         for idx, scan_row in enumerate(provider_scans):
             q_text = scan_row.get('keyword_text', 'Запит')
             
             loc_mentions = pd.DataFrame(scan_row['brand_mentions'])
             loc_sources = pd.DataFrame(scan_row['extracted_sources'])
             
-            # --- Local Metrics ---
             l_tot = loc_mentions['mention_count'].sum() if not loc_mentions.empty else 0
             my_row = loc_mentions[loc_mentions['is_real_target'] == True] if not loc_mentions.empty else pd.DataFrame()
             l_my = my_row['mention_count'].sum() if not my_row.empty else 0
@@ -2251,11 +2264,6 @@ __JS_BLOCK__
             if not my_row.empty and l_my > 0:
                 best = my_row.sort_values('mention_count', ascending=False).iloc[0]
                 l_sent = best.get('sentiment_score', 'Не знайдено')
-                # Fix local name
-                if 'Поз' in l_sent: l_sent = 'Позитивна'
-                elif 'Нег' in l_sent: l_sent = 'Негативна'
-                elif 'Ней' in l_sent: l_sent = 'Нейтральна'
-
                 vr = my_row[my_row['rank_position'] > 0]['rank_position']
                 val = vr.min() if not vr.empty else None
                 if pd.notnull(val): l_pos = f"#{safe_int(val)}"
@@ -2268,30 +2276,18 @@ __JS_BLOCK__
             if not loc_mentions.empty or not loc_sources.empty:
                 details_html += '<div class="detail-charts-wrapper">'
                 
-                # Brands Table with Correct Sorting
+                # Brands Table
                 if not loc_mentions.empty:
                     rows_b = ""
-                    # 1. Замінюємо 0 на велике число для сортування (9999), щоб 0 були в кінці
                     loc_mentions['sort_rank'] = loc_mentions['rank_position'].replace(0, 9999)
-                    
-                    # 2. Сортуємо: Спочатку по рангу (1, 2, 3...), потім по кількості (більше -> краще)
-                    sort_b = loc_mentions.sort_values(
-                        ['sort_rank', 'mention_count'], 
-                        ascending=[True, False]
-                    )
+                    sort_b = loc_mentions.sort_values(['sort_rank', 'mention_count'], ascending=[True, False])
                     
                     has_b = False
                     for _, b in sort_b.iterrows():
                         if b['mention_count'] > 0:
                             has_b = True
                             bg = "style='background:#e6fffa; font-weight:bold;'" if b['is_real_target'] else ""
-                            # Fix local table sentiment
-                            s_loc = b['sentiment_score']
-                            if 'Поз' in s_loc: s_loc = 'Позитивна'
-                            elif 'Нег' in s_loc: s_loc = 'Негативна'
-                            elif 'Ней' in s_loc: s_loc = 'Нейтральна'
-                            
-                            rows_b += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{s_loc}</td><td>{safe_int(b['rank_position'])}</td></tr>"
+                            rows_b += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{b['sentiment_score']}</td><td>{safe_int(b['rank_position'])}</td></tr>"
                     
                     if has_b:
                         details_html += f'<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Тональність</th><th>Поз.</th></tr></thead><tbody>{rows_b}</tbody></table></div></div>'
@@ -2338,6 +2334,7 @@ __JS_BLOCK__
         # JS Charts
         js_charts_code += f"createDoughnut('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
+        # 🔥 NEW: Sentiment Donut Call
         js_charts_code += f"createSentimentDoughnut('chartSent_{prov_id}', {pos_v}, {neu_v}, {neg_v});\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov}, '#4DD0E1');\n"
