@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: UI UPDATE (LEGEND LIST + SEGMENTED CHART).
-    1. Легенда списком над графіком (Позитивна... X%).
-    2. Відсотки базуються на згадках цільового бренду (сума 100%).
-    3. Сортування: Найновіші зверху.
+    ВЕРСІЯ: FINAL UI & MATH FIX (100% TOTAL).
+    1. Математика: Відсотки рахуються від суми згадок (Pos+Neu+Neg = 100%).
+    2. UI: Легенда списком зверху, графік знизу (як на скріншоті).
+    3. Tooltip: Графік показує значення саме у відсотках.
     """
     import pandas as pd
     from datetime import datetime
@@ -1969,10 +1969,10 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* 🔥 UI UPDATE FOR SENTIMENT */
-    .sent-kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 200px; }
-    .sent-list-container { width: 100%; margin-bottom: 10px; margin-top: 10px; }
-    .sent-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    /* 🔥 SPECIFIC UI FOR SENTIMENT BOX */
+    .sent-kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 220px; }
+    .sent-list { width: 100%; margin-bottom: 15px; margin-top: 5px; }
+    .sent-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
     
     .text-pos { color: #00C896; }
     .text-neu { color: #B0BEC5; }
@@ -1998,24 +1998,26 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Segmented Sentiment Donut ---
+    // --- 3-Color Sentiment Donut (Corrected) ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
         
         let dataValues = [pos, neu, neg];
         let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Grey, Red
+        let labels = ['Позитивна', 'Нейтральна', 'Негативна'];
         
-        // If no data - grey circle
+        // Якщо немає даних взагалі - показуємо сіре коло
         if (pos + neu + neg === 0) {
              dataValues = [1];
-             bgColors = ['#B0BEC5']; // Solid Grey
+             bgColors = ['#E0E0E0']; // Solid Light Grey
+             labels = ['Немає даних'];
         }
 
         new Chart(ctx, {
             type: 'doughnut',
             data: { 
-                labels: ['Позитивна', 'Нейтральна', 'Негативна'],
+                labels: labels,
                 datasets: [{ 
                     data: dataValues, 
                     backgroundColor: bgColors, 
@@ -2024,13 +2026,25 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
                 }] 
             },
             options: { 
-                layout: { padding: 10 }, 
+                layout: { padding: 5 }, 
                 responsive: true, 
                 maintainAspectRatio: false, 
                 cutout: '60%', 
                 plugins: { 
                     legend: { display: false }, 
-                    tooltip: { enabled: (pos + neu + neg > 0) } 
+                    tooltip: { 
+                        enabled: (pos + neu + neg > 0),
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.label || '';
+                                if (label) { label += ': '; }
+                                if (context.parsed !== null) {
+                                    label += Math.round(context.parsed) + '%';
+                                }
+                                return label;
+                            }
+                        }
+                    } 
                 } 
             }
         });
@@ -2151,14 +2165,16 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND)
+        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND ONLY)
         pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_local.empty:
             # Тільки наш бренд
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
-                total_s = counts.sum() # Сума тільки по нашому бренду
+                
+                # ТУТ ГОЛОВНЕ: Сума по ЗГАДКАХ бренду (а не по всіх запитах)
+                total_s = counts.sum() 
                 
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
@@ -2231,7 +2247,7 @@ __JS_BLOCK__
                 
                 <div class="sent-kpi-box">
                     <div class="kpi-title">ЗАГАЛЬНА ТОНАЛЬНІСТЬ</div>
-                    <div class="sent-list-container">
+                    <div class="sent-list">
                         <div class="sent-row text-pos"><span>Позитивна</span><span>{pos_v:.0f}%</span></div>
                         <div class="sent-row text-neu"><span>Нейтральна</span><span>{neu_v:.0f}%</span></div>
                         <div class="sent-row text-neg"><span>Негативна</span><span>{neg_v:.0f}%</span></div>
