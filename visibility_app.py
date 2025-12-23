@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FINAL FIX - 100% SENTIMENT DISTRIBUTION.
-    1. Відсотки тональності рахуються виключно від суми згадок бренду (total_s).
-    2. Сума секторів на графіку завжди дорівнює 100%.
-    3. Сортування запитів: від найновіших.
+    ВЕРСІЯ: UI UPDATE (LEGEND LIST + SEGMENTED CHART).
+    1. Легенда списком над графіком (Позитивна... X%).
+    2. Відсотки базуються на згадках цільового бренду (сума 100%).
+    3. Сортування: Найновіші зверху.
     """
     import pandas as pd
     from datetime import datetime
@@ -1883,7 +1883,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             
-            # Нормалізація тональності
+            # Normalization
             raw_sent = str(m.get('sentiment_score', '')).lower()
             if 'поз' in raw_sent or 'pos' in raw_sent: m['sentiment_score'] = 'Позитивна'
             elif 'нег' in raw_sent or 'neg' in raw_sent: m['sentiment_score'] = 'Негативна'
@@ -1969,8 +1969,14 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* Sentiment Legend */
-    .sent-legend { display: flex; justify-content: center; gap: 8px; margin-top: 10px; font-size: 10px; font-weight: bold; }
+    /* 🔥 UI UPDATE FOR SENTIMENT */
+    .sent-kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 200px; }
+    .sent-list-container { width: 100%; margin-bottom: 10px; margin-top: 10px; }
+    .sent-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    
+    .text-pos { color: #00C896; }
+    .text-neu { color: #B0BEC5; }
+    .text-neg { color: #FF4B4B; }
     
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
@@ -1992,18 +1998,18 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Sentiment Donut (100% Total) ---
+    // --- 3-Color Segmented Sentiment Donut ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
         
         let dataValues = [pos, neu, neg];
-        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Gray, Red
+        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Grey, Red
         
-        // Якщо немає даних - сіре коло
+        // If no data - grey circle
         if (pos + neu + neg === 0) {
              dataValues = [1];
-             bgColors = ['#F0F2F6'];
+             bgColors = ['#B0BEC5']; // Solid Grey
         }
 
         new Chart(ctx, {
@@ -2145,26 +2151,23 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: SENTIMENT 100% CALCULATION
+        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND)
         pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_local.empty:
-            # Фільтруємо лише наш бренд
+            # Тільки наш бренд
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
-                
-                # ТУТ ГОЛОВНЕ ВИПРАВЛЕННЯ: Сума тільки по згадках бренду
-                total_s = counts.sum() 
+                total_s = counts.sum() # Сума тільки по нашому бренду
                 
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
                     neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
                     neg_v = (counts.get('Негативна', 0) / total_s * 100)
         
-        # --- SUMMARY TABLES (COMPETITORS) ---
+        # --- SUMMARY TABLES ---
         summary_competitors_html = ""
         if not df_m_local.empty:
-            # Групуємо і знаходимо домінуючу тональність (mode)
             comp_grp = df_m_local.groupby('brand_name').agg(
                 total_mentions=('mention_count', 'sum'),
                 avg_pos=('rank_position', lambda x: x[x>0].mean() if not x[x>0].empty else 0),
@@ -2175,8 +2178,6 @@ __JS_BLOCK__
             rows = ""
             for _, r in comp_grp.iterrows():
                 pos_val = f"{r['avg_pos']:.1f}" if r['avg_pos'] > 0 else "-"
-                
-                # Корекція назви тональності
                 s_txt = str(r['sentiment'])
                 if 'Поз' in s_txt: s_txt = 'Позитивна'
                 elif 'Нег' in s_txt: s_txt = 'Негативна'
@@ -2228,15 +2229,14 @@ __JS_BLOCK__
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_sov}</div><div class="kpi-title">Частка голосу (SOV)</div><div class="kpi-big-num">{sov_pct:.2f}%</div><div class="chart-container"><canvas id="chartSOV_{prov_id}"></canvas></div></div>
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_off}</div><div class="kpi-title">% Офіційних джерел</div><div class="kpi-big-num">{off_pct:.2f}%</div><div class="chart-container"><canvas id="chartOfficial_{prov_id}"></canvas></div></div>
                 
-                <div class="kpi-box">
-                    <div class="kpi-tooltip">{tt_sent}</div>
-                    <div class="kpi-title">Тональність</div>
-                    <div class="chart-container"><canvas id="chartSent_{prov_id}"></canvas></div>
-                    <div class="sent-legend">
-                        <span style="color:#00C896;">● {pos_v:.0f}%</span>
-                        <span style="color:#B0BEC5;">● {neu_v:.0f}%</span>
-                        <span style="color:#FF4B4B;">● {neg_v:.0f}%</span>
+                <div class="sent-kpi-box">
+                    <div class="kpi-title">ЗАГАЛЬНА ТОНАЛЬНІСТЬ</div>
+                    <div class="sent-list-container">
+                        <div class="sent-row text-pos"><span>Позитивна</span><span>{pos_v:.0f}%</span></div>
+                        <div class="sent-row text-neu"><span>Нейтральна</span><span>{neu_v:.0f}%</span></div>
+                        <div class="sent-row text-neg"><span>Негативна</span><span>{neg_v:.0f}%</span></div>
                     </div>
+                    <div class="chart-container"><canvas id="chartSent_{prov_id}"></canvas></div>
                 </div>
 
             </div>
