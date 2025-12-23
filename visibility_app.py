@@ -2639,10 +2639,9 @@ def show_reports_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: FINAL SYNC WITH REPORT.
-    1. Послідовність LLM: OpenAI -> Gemini -> Perplexity.
-    2. Тональність: Графік-донат + Легенда списком (сума 100%).
-    3. Метрики: Виправлено відображення та розрахунки.
+    ВЕРСІЯ: FIX DUPLICATE ID ERROR.
+    1. Додано unique keys до графіків у циклах.
+    2. Збережено логіку 100% тональності та дизайн.
     """
     import pandas as pd
     import plotly.express as px
@@ -2671,7 +2670,7 @@ def show_dashboard():
         .green-number { background-color: #00C896; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }
         .comp-tag { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 11px; color: #555; }
         
-        /* Стиль для блоку тональності (як у звіті) */
+        /* Стиль для блоку тональності */
         .sent-container {
             background-color: #f8f9fa;
             border-radius: 8px;
@@ -2761,7 +2760,7 @@ def show_dashboard():
         mentions_df['mention_count'] = pd.to_numeric(mentions_df['mention_count'], errors='coerce').fillna(0)
         mentions_df['rank_position'] = pd.to_numeric(mentions_df['rank_position'], errors='coerce').fillna(0)
         
-        # Нормалізація тональності (як у звіті)
+        # Нормалізація тональності
         mentions_df['sentiment_score'] = mentions_df['sentiment_score'].apply(
             lambda x: 'Позитивна' if 'поз' in str(x).lower() or 'pos' in str(x).lower()
             else ('Негативна' if 'нег' in str(x).lower() or 'neg' in str(x).lower()
@@ -2786,7 +2785,7 @@ def show_dashboard():
         model_scans = scans_df[scans_df['provider_ui'] == model_name]
         if model_scans.empty: return 0, 0, (0,0,0)
         
-        # Беремо останній скан для кожного кейворда (snapshot стану)
+        # Беремо останній скан для кожного кейворда
         latest_scans = model_scans.sort_values('created_at', ascending=False).drop_duplicates('keyword_id')
         target_scan_ids = latest_scans['id'].tolist()
         
@@ -2808,7 +2807,7 @@ def show_dashboard():
         pos_p, neu_p, neg_p = 0, 0, 0
         if not my_mentions.empty:
             counts = my_mentions['sentiment_score'].value_counts()
-            total_brand_mentions = counts.sum() # База для розрахунку
+            total_brand_mentions = counts.sum() # База для розрахунку 100%
             
             if total_brand_mentions > 0:
                 pos_p = (counts.get('Позитивна', 0) / total_brand_mentions * 100)
@@ -2818,7 +2817,6 @@ def show_dashboard():
         return sov, rank, (pos_p, neu_p, neg_p)
 
     cols = st.columns(3)
-    # Змінено послідовність
     models_order = ['OpenAI GPT', 'Google Gemini', 'Perplexity']
     
     for i, model in enumerate(models_order):
@@ -2831,14 +2829,12 @@ def show_dashboard():
                 c1.metric("SOV", f"{sov:.1f}%")
                 c2.metric("Rank", f"#{rank:.1f}" if rank > 0 else "-")
                 
-                # --- SENTIMENT BLOCK (UI як у звіті) ---
+                # --- SENTIMENT BLOCK ---
                 has_data = (pos + neu + neg) > 0
                 
-                # Дані для графіка
-                pie_values = [pos, neu, neg] if has_data else [1] # 1 для сірого кола
+                pie_values = [pos, neu, neg] if has_data else [1]
                 pie_colors = ['#00C896', '#B0BEC5', '#FF4B4B'] if has_data else ['#E0E0E0']
                 
-                # Легенда HTML
                 st.markdown(f"""
                 <div class="sent-container">
                     <div class="sent-title">Загальна тональність</div>
@@ -2848,7 +2844,6 @@ def show_dashboard():
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Графік Plotly Donut
                 fig_donut = go.Figure(data=[go.Pie(
                     labels=['Pos', 'Neu', 'Neg'],
                     values=pie_values,
@@ -2864,7 +2859,8 @@ def show_dashboard():
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
-                st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False})
+                # 🔥 FIX: Додано унікальний ключ для кожного графіка в циклі
+                st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False}, key=f"donut_{model}")
 
     # ==============================================================================
     # 5. ГРАФІК ДИНАМІКИ
@@ -2885,7 +2881,7 @@ def show_dashboard():
         fig = px.line(daily, x='date_day', y='sov', color='provider_ui', markers=True, 
                       color_discrete_map={'Perplexity':'#00C896', 'OpenAI GPT':'#FF4B4B', 'Google Gemini':'#3B82F6'})
         fig.update_layout(height=300, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="sov_chart")
     else:
         st.info("Немає даних.")
 
@@ -2907,7 +2903,6 @@ def show_dashboard():
             mode = series.mode()
             return mode[0] if not mode.empty else "Нейтральна"
 
-        # Наш бренд
         if not df_target_raw.empty:
             merged_target = pd.Series({
                 'brand_name': f"🟢 {target_brand_raw} (Ви)",
@@ -2922,7 +2917,6 @@ def show_dashboard():
                 'brand_name': f"🟢 {target_brand_raw} (Ви)", 'mentions': 0, 'unique_kws': 0, 'sentiment': '-', 'first_seen': None
             }])
 
-        # Конкуренти
         def agg_competitors(x):
             return pd.Series({
                 'mentions': x['mention_count'].sum(),
@@ -3003,7 +2997,6 @@ def show_dashboard():
             if not kw_data.empty:
                 has_data = True
                 sorted_scans = kw_data.sort_values('created_at', ascending=False)
-                # Беремо дані за останні 24 години або останній скан
                 latest_date = sorted_scans['created_at'].max()
                 current_slice = sorted_scans[sorted_scans['created_at'] >= (latest_date - timedelta(hours=24))]
 
@@ -3047,7 +3040,6 @@ def show_dashboard():
                 
                 c[5].markdown(f"<span style='color:{st_col}; font-weight:bold'>{cur_sent}</span>", unsafe_allow_html=True)
                 
-                # Червоний і великий конкурент
                 c[6].markdown(f"""
                 <span class='competitor-highlight'>VS {top_comp_name} ({top_comp_val})</span><br>
                 <span style='font-size:11px; color:#555;'>🔗 Офіц: {off_sources_count}</span>
