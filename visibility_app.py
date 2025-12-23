@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FINAL DONUT 100% (TARGET BRAND ONLY).
-    1. Донат тональності будується тільки по target brand (сума 100%).
-    2. У таблиці конкурентів показується реальна тональність.
-    3. Сортування запитів: від найновіших.
+    ВЕРСІЯ: FIXED PERCENTAGE CALCULATION.
+    1. Відсотки тональності рахуються від суми згадок бренду (сума = 100%).
+    2. Сортування від нових до старих.
+    3. Конкуренти з реальною тональністю.
     """
     import pandas as pd
     from datetime import datetime
@@ -2145,15 +2145,16 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: LOCAL SENTIMENT METRICS (TARGET BRAND ONLY, SUM = 100%)
+        # 🔥 FIX 2: LOCAL SENTIMENT METRICS (FIXED PERCENTAGE)
         pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_local.empty:
             # Беремо ТІЛЬКИ НАШ БРЕНД (target brand)
-            # Вважаємо кожну згадку (запис в brand_mentions) як один голос за тональність
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
-                total_s = counts.sum() # Сума тільки по нашому бренду = 100%
+                
+                # ❗❗❗ ТУТ БУЛА ПОМИЛКА: ділили на total_queries, а треба на суму згадок бренду
+                total_s = counts.sum() 
                 
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
