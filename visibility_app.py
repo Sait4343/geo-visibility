@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: GLOBAL SORTING + FIXED SENTIMENT 100%.
-    1. Сортування: Використовує глобальний час запиту, щоб порядок був однаковим на всіх вкладках.
-    2. Тональність: Рахується від суми згадок бренду (100%).
-    3. UI: Легенда списком, графік знизу.
+    ВЕРСІЯ: PERFECT 100% SENTIMENT + SORTING.
+    1. Тональність: Гарантована сума 100% (відносно знайдених згадок).
+    2. Сортування: Однакова послідовність (від найновіших) на всіх вкладках.
+    3. UI: Легенда списком + Сегментний графік.
     """
     import pandas as pd
     from datetime import datetime
@@ -1847,8 +1847,8 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         txt = txt.replace('\n', '<br>')
         return txt
 
-    # --- 0. PRE-CALCULATE GLOBAL SORT ORDER (Fix jumping queries) ---
-    # Знаходимо найсвіжіший час для кожного тексту запиту серед усіх моделей
+    # --- 0. PRE-CALCULATE GLOBAL SORT ORDER ---
+    # Щоб порядок запитів не скакав між вкладками, фіксуємо час
     query_time_map = {}
     for s in scans_data:
         kw = s.get('keyword_text', '')
@@ -1892,7 +1892,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             
-            # Нормалізація тональності
+            # Нормалізація
             raw_sent = str(m.get('sentiment_score', '')).lower()
             if 'поз' in raw_sent or 'pos' in raw_sent: m['sentiment_score'] = 'Позитивна'
             elif 'нег' in raw_sent or 'neg' in raw_sent: m['sentiment_score'] = 'Негативна'
@@ -1978,7 +1978,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* 🔥 SPECIFIC UI FOR SENTIMENT BOX */
+    /* 🔥 UI FOR SENTIMENT BOX */
     .sent-kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 220px; }
     .sent-list { width: 100%; margin-bottom: 15px; margin-top: 5px; }
     .sent-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
@@ -2007,7 +2007,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Sentiment Donut (100% Total) ---
+    // --- 3-Color Sentiment Donut ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
@@ -2016,10 +2016,10 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Grey, Red
         let labels = ['Позитивна', 'Нейтральна', 'Негативна'];
         
-        // Якщо немає даних - сіре коло
+        // Empty state
         if (pos + neu + neg === 0) {
              dataValues = [1];
-             bgColors = ['#E0E0E0']; // Solid Grey
+             bgColors = ['#E0E0E0']; 
              labels = ['Немає даних'];
         }
 
@@ -2123,8 +2123,8 @@ __JS_BLOCK__
         
         provider_scans = data_by_provider[prov_ui]
         
-        # 🔥 FIX 1: CONSISTENT SORTING (By Global Max Time + Keyword)
-        # Сортуємо спочатку за глобальним часом (щоб всі вкладки були однакові), потім за текстом
+        # 🔥 FIX 1: CONSISTENT SORTING (Sync with Project Page)
+        # Сортування: Глобальний час (щоб порядок був однаковий) -> Локальний текст
         provider_scans.sort(key=lambda x: (query_time_map.get(x.get('keyword_text', ''), ''), x.get('keyword_text', '')), reverse=True)
         
         # --- LOCAL CALCS ---
@@ -2175,21 +2175,28 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND ONLY)
+        # 🔥 FIX 2: SENTIMENT 100% (GUARANTEED)
         pos_v, neu_v, neg_v = 0, 0, 0
+        
         if not df_m_local.empty:
-            # Тільки наш бренд
+            # Фільтруємо лише наш бренд
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
+            
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
                 
-                # ТУТ ГОЛОВНЕ ВИПРАВЛЕННЯ: Сума по ЗГАДКАХ бренду (а не по всіх запитах)
-                total_s = counts.sum() 
+                # Кількість згадок (raw counts)
+                raw_pos = counts.get('Позитивна', 0)
+                raw_neu = counts.get('Нейтральна', 0)
+                raw_neg = counts.get('Негативна', 0)
                 
-                if total_s > 0:
-                    pos_v = (counts.get('Позитивна', 0) / total_s * 100)
-                    neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
-                    neg_v = (counts.get('Негативна', 0) / total_s * 100)
+                # Загальна сума згадок бренду (база для 100%)
+                total_brand_mentions = raw_pos + raw_neu + raw_neg
+                
+                if total_brand_mentions > 0:
+                    pos_v = (raw_pos / total_brand_mentions) * 100
+                    neu_v = (raw_neu / total_brand_mentions) * 100
+                    neg_v = (raw_neg / total_brand_mentions) * 100
         
         # --- SUMMARY TABLES ---
         summary_competitors_html = ""
