@@ -2639,10 +2639,9 @@ def show_reports_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: TARGET BRAND FIX + MODEL ORDER.
-    1. Визначення бренду: Беремо з проекту + is_my_brand з бази.
-    2. Послідовність: OpenAI GPT -> Google Gemini -> Perplexity.
-    3. Відображення: Всі графіки та метрики працюють коректно.
+    ВЕРСІЯ: FIX PROVIDER NAMES & BRAND MATCHING.
+    1. norm_provider: Додано перевірку на 'openai', 'google', 'vertex'.
+    2. check_is_target: Повернуто перевірку на входження підрядка (in), а не суворе рівність (==).
     """
     import pandas as pd
     import plotly.express as px
@@ -2752,19 +2751,19 @@ def show_dashboard():
         return
 
     # ==============================================================================
-    # 3. ОБРОБКА ДАНИХ
+    # 3. ОБРОБКА ДАНИХ (ВИПРАВЛЕНО)
     # ==============================================================================
     def norm_provider(p):
         p = str(p).lower()
-        if 'gpt' in p: return 'OpenAI GPT'
-        if 'gemini' in p: return 'Google Gemini'
+        # 🔥 РОЗШИРЕНИЙ ПОШУК ДЛЯ ВСІХ ВАРІАНТІВ ЗАПИСУ
+        if 'gpt' in p or 'openai' in p: return 'OpenAI GPT'
+        if 'gemini' in p or 'google' in p or 'vertex' in p: return 'Google Gemini'
         if 'perplexity' in p: return 'Perplexity'
         return 'Other'
 
     scans_df['provider_ui'] = scans_df['provider'].apply(norm_provider)
     scans_df['created_at'] = pd.to_datetime(scans_df['created_at'])
 
-    # 🔥 БРЕНД З ПРОЕКТУ (Джерело правди)
     target_brand_raw = proj.get('brand_name', '').strip()
     target_brand_lower = target_brand_raw.lower()
     
@@ -2784,19 +2783,18 @@ def show_dashboard():
 
         df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
         
-        # 🔥 ВИЗНАЧЕННЯ ЦІЛЬОВОГО БРЕНДУ (БЕЗ НОРМАЛІЗАЦІЇ, ПРЯМЕ ПОРІВНЯННЯ)
+        # 🔥 ПОВЕРНУТО М'ЯКЕ ПОРІВНЯННЯ НАЗВ (IN замість ==)
         def check_is_target(row):
-            # 1. Якщо база каже, що це наш бренд - віримо базі (ви виправили n8n)
+            # 1. Пріоритет: прапорець з бази
             flag_val = str(row.get('is_my_brand', '')).lower()
             if flag_val in ['true', '1', 't', 'yes', 'on']:
                 return True
             
-            # 2. Якщо в базі false (старі дані), робимо просте текстове порівняння
-            # Беремо назву згадки з таблиці
+            # 2. Якщо прапорець False/None -> текстовий пошук
             mention_name = str(row.get('brand_name', '')).strip().lower()
             
-            # Якщо назва проекту є частиною згадки АБО навпаки (наприклад "Be-it" в "Be-it Agency")
             if target_brand_lower and mention_name:
+                # Перевіряємо взаємне входження (напр. "Be-it" в "Be-it Agency" і навпаки)
                 if target_brand_lower in mention_name: return True
                 if mention_name in target_brand_lower: return True
             
@@ -2807,7 +2805,7 @@ def show_dashboard():
         df_full = pd.DataFrame()
 
     # ==============================================================================
-    # 4. МЕТРИКИ ПО МОДЕЛЯХ (ПРАВИЛЬНИЙ ПОРЯДОК)
+    # 4. МЕТРИКИ ПО МОДЕЛЯХ
     # ==============================================================================
     st.markdown("### 🌐 Огляд по моделях")
     
@@ -2815,7 +2813,7 @@ def show_dashboard():
         model_scans = scans_df[scans_df['provider_ui'] == model_name]
         if model_scans.empty: return 0, 0, (0,0,0)
         
-        # Останні скани
+        # Беремо останній скан для кожного кейворда
         latest_scans = model_scans.sort_values('created_at', ascending=False).drop_duplicates('keyword_id')
         target_scan_ids = latest_scans['id'].tolist()
         
@@ -2854,7 +2852,6 @@ def show_dashboard():
         return sov, rank, (pos_p, neu_p, neg_p)
 
     cols = st.columns(3)
-    # Послідовність: GPT -> Gemini -> Perplexity
     models_order = ['OpenAI GPT', 'Google Gemini', 'Perplexity']
     
     for i, model in enumerate(models_order):
