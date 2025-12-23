@@ -1113,8 +1113,8 @@ def show_competitors_page():
         df_filtered.loc[mask_target, 'brand_name'] = OFFICIAL_BRAND_NAME
 
     def sentiment_to_score(s):
-        if s == 'Позитивний': return 100
-        if s == 'Негативний': return 0
+        if s == 'Позитивна': return 100
+        if s == 'Негативна': return 0
         return 50
     
     df_filtered['sent_score_num'] = df_filtered['sentiment_score'].apply(sentiment_to_score)
@@ -1128,15 +1128,15 @@ def show_competitors_page():
 
     # Детальна тональність
     sent_counts = df_filtered.groupby(['brand_name', 'sentiment_score']).size().unstack(fill_value=0)
-    for col in ['Негативний', 'Нейтральний', 'Позитивний']:
+    for col in ['Негативна', 'Нейтральна', 'Позитивна']:
         if col not in sent_counts.columns: sent_counts[col] = 0
             
     sent_counts['Total'] = sent_counts.sum(axis=1)
     
     # Відсотки
-    sent_counts['Neg_Pct'] = (sent_counts['Негативний'] / sent_counts['Total'] * 100).fillna(0).astype(int)
-    sent_counts['Neu_Pct'] = (sent_counts['Нейтральний'] / sent_counts['Total'] * 100).fillna(0).astype(int)
-    sent_counts['Pos_Pct'] = (sent_counts['Позитивний'] / sent_counts['Total'] * 100).fillna(0).astype(int)
+    sent_counts['Neg_Pct'] = (sent_counts['Негативна'] / sent_counts['Total'] * 100).fillna(0).astype(int)
+    sent_counts['Neu_Pct'] = (sent_counts['Нейтральна'] / sent_counts['Total'] * 100).fillna(0).astype(int)
+    sent_counts['Pos_Pct'] = (sent_counts['Позитивна'] / sent_counts['Total'] * 100).fillna(0).astype(int)
 
     # Строка для таблиці
     sent_counts['Тональність_Str'] = sent_counts.apply(
@@ -2099,9 +2099,9 @@ __JS_BLOCK__
             valid_sent = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['sentiment_score'] != 'Не згадано')]
             if not valid_sent.empty:
                 counts = valid_sent['sentiment_score'].value_counts(normalize=True) * 100
-                pos = counts.get('Позитивний', 0)
-                neu = counts.get('Нейтральний', 0)
-                neg = counts.get('Негативний', 0)
+                pos = counts.get('Позитивна', 0)
+                neu = counts.get('Нейтральна', 0)
+                neg = counts.get('Негативна', 0)
                 sent_html = f"""
                 <span style='color:#00C896'>😊 {pos:.0f}%</span> &nbsp;
                 <span style='color:#FFCE56'>😐 {neu:.0f}%</span> &nbsp;
@@ -2206,8 +2206,8 @@ __JS_BLOCK__
                 val = vr.min() if not vr.empty else None
                 if pd.notnull(val): l_pos = f"#{safe_int(val)}"
             
-            if l_sent == "Позитивний": l_sent_color = "#00C896"
-            elif l_sent == "Негативний": l_sent_color = "#FF4B4B"
+            if l_sent == "Позитивна": l_sent_color = "#00C896"
+            elif l_sent == "Негативна": l_sent_color = "#FF4B4B"
 
             # Detail Tables
             details_html = ""
@@ -2695,9 +2695,9 @@ def show_dashboard():
         pos, neu, neg = 0, 0, 0
         if not my_mentions.empty:
             total_sent = len(my_mentions)
-            pos_c = len(my_mentions[my_mentions['sentiment_score'] == 'Позитивний'])
-            neu_c = len(my_mentions[my_mentions['sentiment_score'] == 'Нейтральний'])
-            neg_c = len(my_mentions[my_mentions['sentiment_score'] == 'Негативний'])
+            pos_c = len(my_mentions[my_mentions['sentiment_score'] == 'Позитивна'])
+            neu_c = len(my_mentions[my_mentions['sentiment_score'] == 'Нейтральна'])
+            neg_c = len(my_mentions[my_mentions['sentiment_score'] == 'Негативна'])
             
             if total_sent > 0:
                 pos = int(pos_c / total_sent * 100)
@@ -3201,9 +3201,9 @@ def show_keyword_details(kw_id):
                 if not active_mentions.empty:
                     s_counts = active_mentions['sentiment_score'].value_counts()
                     total_s = s_counts.sum()
-                    pos_pct = (s_counts.get("Позитивний", 0) / total_s) * 100
-                    neg_pct = (s_counts.get("Негативний", 0) / total_s) * 100
-                    neu_pct = (s_counts.get("Нейтральний", 0) / total_s) * 100
+                    pos_pct = (s_counts.get("Позитивна", 0) / total_s) * 100
+                    neg_pct = (s_counts.get("Негативна", 0) / total_s) * 100
+                    neu_pct = (s_counts.get("Нейтральна", 0) / total_s) * 100
                 else:
                     pos_pct, neg_pct, neu_pct = 0, 0, 0
             else:
@@ -3434,8 +3434,8 @@ def show_keyword_details(kw_id):
                         loc_rank_str = f"#{val_rank:.0f}" if pd.notna(val_rank) else "-"
                 
                 sent_color = "#333"
-                if loc_sent == "Позитивний": sent_color = "#00C896"
-                elif loc_sent == "Негативний": sent_color = "#FF4B4B"
+                if loc_sent == "Позитивна": sent_color = "#00C896"
+                elif loc_sent == "Негативна": sent_color = "#FF4B4B"
                 elif loc_sent == "Не знайдено": sent_color = "#999"
 
                 st.markdown(f"""
