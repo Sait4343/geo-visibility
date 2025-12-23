@@ -1803,10 +1803,9 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВИПРАВЛЕНО:
-    1. Таблиця брендів сортується строго за Позицією (1 -> 2 -> ...).
-    2. Цільовий бренд НЕ піднімається штучно вгору, а залишається на своєму місці в ренкінгу.
-    3. Рядок цільового бренду підсвічується кольором для зручності.
+    ВЕРСІЯ: SENTIMENT DONUT + RENAMING.
+    1. Виправлено назви (Настрій -> Тональність, тощо).
+    2. Додано графік-донат для тональності (3 кольори).
     """
     import pandas as pd
     from datetime import datetime
@@ -1841,11 +1840,9 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     def format_llm_text(text):
         if not text: return "Текст відповіді відсутній."
         txt = str(text)
-        # Форматуємо жирний шрифт та списки
         txt = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', txt)
         txt = txt.replace('* ', '<br>• ')
         txt = txt.replace('\n', '<br>')
-        # Підсвітка бренду у тексті - за вашим бажанням (залишив мінімальну, можна прибрати)
         return txt
 
     # --- UI Mapping ---
@@ -1876,7 +1873,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         mentions = scan.get('brand_mentions', [])
         processed_mentions = []
         for m in mentions:
-            # Визначаємо is_real_target (для підсвітки та SOV, але не для сортування!)
             b_name = str(m.get('brand_name', '')).lower().strip()
             is_db_flag = str(m.get('is_my_brand', '')).lower() in ['true', '1', 't', 'yes', 'on']
             is_text_match = (target_norm in b_name) if target_norm else False
@@ -1884,6 +1880,14 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['is_real_target'] = is_db_flag or is_text_match
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
+            
+            # Виправляємо назви тональностей на льоту
+            raw_sent = str(m.get('sentiment_score', '')).capitalize()
+            if 'Поз' in raw_sent: m['sentiment_score'] = 'Позитивна'
+            elif 'Нег' in raw_sent: m['sentiment_score'] = 'Негативна'
+            elif 'Ней' in raw_sent: m['sentiment_score'] = 'Нейтральна'
+            else: m['sentiment_score'] = 'Не визначено'
+
             processed_mentions.append(m)
         scan['brand_mentions'] = processed_mentions
 
@@ -1962,10 +1966,15 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     table.inner-table td { padding: 8px; border-bottom: 1px solid #eee; color: #333; }
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
+    
+    /* Sentiment Legend */
+    .sent-legend { display: flex; justify-content: center; gap: 10px; margin-top: 5px; font-size: 10px; font-weight: bold; }
+    .sent-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 3px; }
+    
     @media (min-width: 768px) { .content-card { padding: 50px; } }
     '''
 
-    # JS
+    # JS Code
     js_block = '''
     <script>
     Chart.defaults.font.family = "'Golca', 'Montserrat', sans-serif";
@@ -1981,6 +1990,34 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             options: { layout: { padding: 10 }, responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }
         });
     }
+
+    function createSentimentDoughnut(id, pos, neu, neg) {
+        var ctx = document.getElementById(id);
+        if(!ctx) return;
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: { 
+                labels: ['Позитивна', 'Нейтральна', 'Негативна'],
+                datasets: [{ 
+                    data: [pos, neu, neg], 
+                    backgroundColor: ['#00C896', '#E0E0E0', '#FF4B4B'], 
+                    borderWidth: 0, 
+                    hoverOffset: 4 
+                }] 
+            },
+            options: { 
+                layout: { padding: 10 }, 
+                responsive: true, 
+                maintainAspectRatio: false, 
+                cutout: '60%', 
+                plugins: { 
+                    legend: { display: false }, 
+                    tooltip: { enabled: true } 
+                } 
+            }
+        });
+    }
+
     function openTab(evt, tabName) {
         var i, tabcontent, tablinks;
         tabcontent = document.getElementsByClassName("tab-content");
@@ -2034,9 +2071,9 @@ __JS_BLOCK__
     tt_sov = "Частка видимості вашого бренду у відповідях ШІ порівняно з конкурентами."
     tt_off = "Частка посилань, які ведуть на ваші офіційні ресурси."
     tt_sent = "Тональність, у якій ШІ описує бренд."
-    tt_pos = "Середня позиція вашого бренду у відповідях ШІ"
-    tt_brand_cov = "Відсоток запитів, у яких бренд був згаданий хоча б один раз."
-    tt_domain_cov = "Відсоток запитів, у яких ШІ надав клікабельне посилання на ваш домен."
+    tt_pos = "Середня позиція вашого бренду у списках рекомендацій."
+    tt_brand_cov = "Відсоток запитів, де бренд був згаданий."
+    tt_domain_cov = "Відсоток запитів з клікабельним посиланням на ваш домен."
 
     # --- MAIN LOOP ---
     for i, prov_ui in enumerate(providers_ui):
@@ -2093,21 +2130,18 @@ __JS_BLOCK__
             my_ranks = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 6. Sentiment %
-        sent_html = "<span style='font-size:16px; color:#999'>Немає даних</span>"
+        # 6. Sentiment Breakdown
+        pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_all.empty:
-            valid_sent = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['sentiment_score'] != 'Не згадано')]
+            valid_sent = df_m_all[(df_m_all['is_real_target'] == True) & (df_m_all['sentiment_score'] != 'Не визначено')]
             if not valid_sent.empty:
-                counts = valid_sent['sentiment_score'].value_counts(normalize=True) * 100
-                pos = counts.get('Позитивна', 0)
-                neu = counts.get('Нейтральна', 0)
-                neg = counts.get('Негативна', 0)
-                sent_html = f"""
-                <span style='color:#00C896'>😊 {pos:.0f}%</span> &nbsp;
-                <span style='color:#FFCE56'>😐 {neu:.0f}%</span> &nbsp;
-                <span style='color:#FF4B4B'>😡 {neg:.0f}%</span>
-                """
-
+                counts = valid_sent['sentiment_score'].value_counts()
+                total_s = counts.sum()
+                if total_s > 0:
+                    pos_v = (counts.get('Позитивна', 0) / total_s * 100)
+                    neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
+                    neg_v = (counts.get('Негативна', 0) / total_s * 100)
+        
         # --- SUMMARY TABLES ---
         summary_competitors_html = ""
         if not df_m_all.empty:
@@ -2122,13 +2156,19 @@ __JS_BLOCK__
             rows = ""
             for _, r in comp_grp.iterrows():
                 pos_val = f"{r['avg_pos']:.1f}" if r['avg_pos'] > 0 else "-"
-                rows += f"<tr><td>{r['brand_name']}</td><td>{int(r['total_mentions'])}</td><td>{r['sentiment']}</td><td>{pos_val}</td></tr>"
+                # Fix naming in table
+                s_txt = r['sentiment']
+                if 'Поз' in s_txt: s_txt = 'Позитивна'
+                elif 'Нег' in s_txt: s_txt = 'Негативна'
+                elif 'Ней' in s_txt: s_txt = 'Нейтральна'
+                
+                rows += f"<tr><td>{r['brand_name']}</td><td>{int(r['total_mentions'])}</td><td>{s_txt}</td><td>{pos_val}</td></tr>"
             
             if rows:
                 summary_competitors_html = f'''
                 <div class="summary-section">
                     <div class="summary-header">🏆 Конкурентний аналіз</div>
-                    <div class="table-responsive"><table class="summary-table"><thead><tr><th>Бренд</th><th>Згадок</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{rows}</tbody></table></div>
+                    <div class="table-responsive"><table class="summary-table"><thead><tr><th>Бренд</th><th>Згадок</th><th>Тональність</th><th>Поз.</th></tr></thead><tbody>{rows}</tbody></table></div>
                 </div>'''
             
         summary_links_html = ""
@@ -2167,7 +2207,16 @@ __JS_BLOCK__
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_sov}</div><div class="kpi-title">Частка голосу (SOV)</div><div class="kpi-big-num">{sov_pct:.2f}%</div><div class="chart-container"><canvas id="chartSOV_{prov_id}"></canvas></div></div>
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_off}</div><div class="kpi-title">% Офіційних джерел</div><div class="kpi-big-num">{off_pct:.2f}%</div><div class="chart-container"><canvas id="chartOfficial_{prov_id}"></canvas></div></div>
-                <div class="kpi-box"><div class="kpi-tooltip">{tt_sent}</div><div class="kpi-title">Загальна тональність</div><div style="margin-top:15px; font-weight:bold;">{sent_html}</div></div>
+                <div class="kpi-box">
+                    <div class="kpi-tooltip">{tt_sent}</div>
+                    <div class="kpi-title">Тональність</div>
+                    <div class="chart-container"><canvas id="chartSent_{prov_id}"></canvas></div>
+                    <div class="sent-legend">
+                        <span style="color:#00C896;">● {pos_v:.0f}%</span>
+                        <span style="color:#999;">● {neu_v:.0f}%</span>
+                        <span style="color:#FF4B4B;">● {neg_v:.0f}%</span>
+                    </div>
+                </div>
             </div>
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_pos}</div><div class="kpi-title">Позиція бренду</div><div class="kpi-big-num">{avg_pos:.1f}</div><div class="chart-container"><canvas id="chartPos_{prov_id}"></canvas></div></div>
@@ -2202,6 +2251,11 @@ __JS_BLOCK__
             if not my_row.empty and l_my > 0:
                 best = my_row.sort_values('mention_count', ascending=False).iloc[0]
                 l_sent = best.get('sentiment_score', 'Не знайдено')
+                # Fix local name
+                if 'Поз' in l_sent: l_sent = 'Позитивна'
+                elif 'Нег' in l_sent: l_sent = 'Негативна'
+                elif 'Ней' in l_sent: l_sent = 'Нейтральна'
+
                 vr = my_row[my_row['rank_position'] > 0]['rank_position']
                 val = vr.min() if not vr.empty else None
                 if pd.notnull(val): l_pos = f"#{safe_int(val)}"
@@ -2217,7 +2271,6 @@ __JS_BLOCK__
                 # Brands Table with Correct Sorting
                 if not loc_mentions.empty:
                     rows_b = ""
-                    
                     # 1. Замінюємо 0 на велике число для сортування (9999), щоб 0 були в кінці
                     loc_mentions['sort_rank'] = loc_mentions['rank_position'].replace(0, 9999)
                     
@@ -2232,10 +2285,16 @@ __JS_BLOCK__
                         if b['mention_count'] > 0:
                             has_b = True
                             bg = "style='background:#e6fffa; font-weight:bold;'" if b['is_real_target'] else ""
-                            rows_b += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{b['sentiment_score']}</td><td>{safe_int(b['rank_position'])}</td></tr>"
+                            # Fix local table sentiment
+                            s_loc = b['sentiment_score']
+                            if 'Поз' in s_loc: s_loc = 'Позитивна'
+                            elif 'Нег' in s_loc: s_loc = 'Негативна'
+                            elif 'Ней' in s_loc: s_loc = 'Нейтральна'
+                            
+                            rows_b += f"<tr {bg}><td>{b['brand_name']}</td><td>{safe_int(b['mention_count'])}</td><td>{s_loc}</td><td>{safe_int(b['rank_position'])}</td></tr>"
                     
                     if has_b:
-                        details_html += f'<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Настрій</th><th>Поз.</th></tr></thead><tbody>{rows_b}</tbody></table></div></div>'
+                        details_html += f'<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div class="table-responsive"><table class="inner-table"><thead><tr><th>Бренд</th><th>Кіл.</th><th>Тональність</th><th>Поз.</th></tr></thead><tbody>{rows_b}</tbody></table></div></div>'
                     else:
                         details_html += '<div class="detail-chart-block"><div class="detail-title">Знайдені бренди</div><div style="font-size:12px; color:#999; padding:5px;">Брендів не знайдено</div></div>'
 
@@ -2279,6 +2338,7 @@ __JS_BLOCK__
         # JS Charts
         js_charts_code += f"createDoughnut('chartSOV_{prov_id}', {sov_pct}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartOfficial_{prov_id}', {off_pct}, '#4DD0E1');\n"
+        js_charts_code += f"createSentimentDoughnut('chartSent_{prov_id}', {pos_v}, {neu_v}, {neg_v});\n"
         js_charts_code += f"createDoughnut('chartBrandCov_{prov_id}', {brand_cov}, '#00d18f');\n"
         js_charts_code += f"createDoughnut('chartDomainCov_{prov_id}', {domain_cov}, '#4DD0E1');\n"
         score_pos = max(0, 11 - avg_pos) if avg_pos > 0 else 0
