@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FIXED SENTIMENT 100% CALCULATION.
-    1. Відсотки тональності рахуються від суми згадок цільового бренду (total_s).
-    2. Сума тональностей на графіку завжди 100%.
-    3. Сортування: Найновіші запити зверху.
+    ВЕРСІЯ: FINAL FIX - 100% SENTIMENT DISTRIBUTION.
+    1. Відсотки тональності рахуються виключно від суми згадок бренду (total_s).
+    2. Сума секторів на графіку завжди дорівнює 100%.
+    3. Сортування запитів: від найновіших.
     """
     import pandas as pd
     from datetime import datetime
@@ -2145,15 +2145,15 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: LOCAL SENTIMENT METRICS (TARGET BRAND ONLY, SUM = 100%)
+        # 🔥 FIX 2: SENTIMENT 100% CALCULATION
         pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_local.empty:
-            # Беремо ТІЛЬКИ НАШ БРЕНД (target brand)
+            # Фільтруємо лише наш бренд
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
                 
-                # Рахуємо суму ТІЛЬКИ по знайдених згадках нашого бренду
+                # ТУТ ГОЛОВНЕ ВИПРАВЛЕННЯ: Сума тільки по згадках бренду
                 total_s = counts.sum() 
                 
                 if total_s > 0:
