@@ -2639,10 +2639,10 @@ def show_reports_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: DIRECT DATA MATCHING (NO NORMALIZATION).
-    1. Визначення бренду: Беремо brand_name з проекту і порівнюємо напряму.
-    2. Також враховуємо прапорець is_my_brand з бази.
-    3. Всі дані виводяться коректно по кожній моделі.
+    ВЕРСІЯ: TARGET BRAND FIX + MODEL ORDER.
+    1. Визначення бренду: Беремо з проекту + is_my_brand з бази.
+    2. Послідовність: OpenAI GPT -> Google Gemini -> Perplexity.
+    3. Відображення: Всі графіки та метрики працюють коректно.
     """
     import pandas as pd
     import plotly.express as px
@@ -2727,7 +2727,7 @@ def show_dashboard():
             if not scans_df.empty:
                 scan_ids = scans_df['id'].tolist()
                 
-                # Batch requests (chunked)
+                # Batch requests
                 chunk_size = 200
                 all_mentions = []
                 all_sources = []
@@ -2752,7 +2752,7 @@ def show_dashboard():
         return
 
     # ==============================================================================
-    # 3. ОБРОБКА ДАНИХ (СПРОЩЕНА ЛОГІКА)
+    # 3. ОБРОБКА ДАНИХ
     # ==============================================================================
     def norm_provider(p):
         p = str(p).lower()
@@ -2784,21 +2784,22 @@ def show_dashboard():
 
         df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
         
-        # 🔥 ПРОСТА ЛОГІКА ВИЗНАЧЕННЯ ЦІЛЬОВОГО БРЕНДУ
+        # 🔥 ВИЗНАЧЕННЯ ЦІЛЬОВОГО БРЕНДУ (БЕЗ НОРМАЛІЗАЦІЇ, ПРЯМЕ ПОРІВНЯННЯ)
         def check_is_target(row):
-            # 1. Якщо n8n проставив is_my_brand = true
+            # 1. Якщо база каже, що це наш бренд - віримо базі (ви виправили n8n)
             flag_val = str(row.get('is_my_brand', '')).lower()
             if flag_val in ['true', '1', 't', 'yes', 'on']:
                 return True
             
-            # 2. Пряме порівняння назв (case-insensitive)
-            # Беремо назву згадки з таблиці brand_mentions
+            # 2. Якщо в базі false (старі дані), робимо просте текстове порівняння
+            # Беремо назву згадки з таблиці
             mention_name = str(row.get('brand_name', '')).strip().lower()
             
-            # Порівнюємо з назвою проекту
-            if mention_name == target_brand_lower:
-                return True
-                
+            # Якщо назва проекту є частиною згадки АБО навпаки (наприклад "Be-it" в "Be-it Agency")
+            if target_brand_lower and mention_name:
+                if target_brand_lower in mention_name: return True
+                if mention_name in target_brand_lower: return True
+            
             return False
 
         df_full['is_target'] = df_full.apply(check_is_target, axis=1)
@@ -2806,41 +2807,35 @@ def show_dashboard():
         df_full = pd.DataFrame()
 
     # ==============================================================================
-    # 4. МЕТРИКИ ПО МОДЕЛЯХ
+    # 4. МЕТРИКИ ПО МОДЕЛЯХ (ПРАВИЛЬНИЙ ПОРЯДОК)
     # ==============================================================================
     st.markdown("### 🌐 Огляд по моделях")
     
     def get_llm_stats(model_name):
-        # Фільтруємо скани конкретної моделі
         model_scans = scans_df[scans_df['provider_ui'] == model_name]
         if model_scans.empty: return 0, 0, (0,0,0)
         
-        # Беремо ID останніх сканів для кожного ключового слова
-        # Це гарантує, що ми дивимось на актуальний стан
+        # Останні скани
         latest_scans = model_scans.sort_values('created_at', ascending=False).drop_duplicates('keyword_id')
         target_scan_ids = latest_scans['id'].tolist()
         
         if not target_scan_ids or df_full.empty: return 0, 0, (0,0,0)
 
-        # Відфільтровуємо згадки, що належать цим сканам
         current_mentions = df_full[df_full['scan_result_id'].isin(target_scan_ids)]
         if current_mentions.empty: return 0, 0, (0,0,0)
 
-        # Загальна кількість згадок (всі бренди)
         total_mentions = current_mentions['mention_count'].sum()
         
-        # Згадки НАШОГО бренду
+        # Наш бренд
         my_mentions = current_mentions[current_mentions['is_target'] == True]
         my_count = my_mentions['mention_count'].sum()
         
-        # SOV calculation
         sov = (my_count / total_mentions * 100) if total_mentions > 0 else 0
         
-        # Rank calculation
         valid_ranks = my_mentions[my_mentions['rank_position'] > 0]
         rank = valid_ranks['rank_position'].mean() if not valid_ranks.empty else 0
         
-        # Sentiment calculation (100% distribution)
+        # Тональність (100% distribution)
         pos_p, neu_p, neg_p = 0, 0, 0
         if not my_mentions.empty:
             counts = my_mentions['sentiment_score'].value_counts()
@@ -2859,6 +2854,7 @@ def show_dashboard():
         return sov, rank, (pos_p, neu_p, neg_p)
 
     cols = st.columns(3)
+    # Послідовність: GPT -> Gemini -> Perplexity
     models_order = ['OpenAI GPT', 'Google Gemini', 'Perplexity']
     
     for i, model in enumerate(models_order):
@@ -3092,7 +3088,6 @@ def show_dashboard():
                 for i in range(2, 7): c[i].caption("—")
         
         st.markdown("<hr style='margin: 5px 0; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
-
 
         
 # =========================
