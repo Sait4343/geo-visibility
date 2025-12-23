@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FINAL UI & MATH FIX (100% TOTAL).
-    1. Математика: Відсотки рахуються від суми згадок (Pos+Neu+Neg = 100%).
-    2. UI: Легенда списком зверху, графік знизу (як на скріншоті).
-    3. Tooltip: Графік показує значення саме у відсотках.
+    ВЕРСІЯ: FINAL FIX - 100% SENTIMENT + UI MATCH + SORTING.
+    1. Відсотки тональності = (Кількість конкретної / Сума ЗНАЙДЕНИХ) * 100.
+    2. Дизайн блоку тональності ідентичний до скріншоту.
+    3. Сортування запитів ідентичне до головної сторінки (від найновіших).
     """
     import pandas as pd
     from datetime import datetime
@@ -1883,7 +1883,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             
-            # Normalization
+            # Нормалізація тональності
             raw_sent = str(m.get('sentiment_score', '')).lower()
             if 'поз' in raw_sent or 'pos' in raw_sent: m['sentiment_score'] = 'Позитивна'
             elif 'нег' in raw_sent or 'neg' in raw_sent: m['sentiment_score'] = 'Негативна'
@@ -1969,7 +1969,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* 🔥 SPECIFIC UI FOR SENTIMENT BOX */
+    /* 🔥 SPECIFIC UI FOR SENTIMENT BOX (FIXED) */
     .sent-kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 220px; }
     .sent-list { width: 100%; margin-bottom: 15px; margin-top: 5px; }
     .sent-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
@@ -1998,7 +1998,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Sentiment Donut (Corrected) ---
+    // --- 3-Color Sentiment Donut (100% Total) ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
@@ -2007,10 +2007,10 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Grey, Red
         let labels = ['Позитивна', 'Нейтральна', 'Негативна'];
         
-        // Якщо немає даних взагалі - показуємо сіре коло
+        // Якщо немає даних - сіре коло
         if (pos + neu + neg === 0) {
              dataValues = [1];
-             bgColors = ['#E0E0E0']; // Solid Light Grey
+             bgColors = ['#E0E0E0']; // Solid Grey
              labels = ['Немає даних'];
         }
 
@@ -2114,7 +2114,8 @@ __JS_BLOCK__
         
         provider_scans = data_by_provider[prov_ui]
         
-        # 🔥 FIX 1: SORTING (Newest First)
+        # 🔥 FIX 1: SORTING (NEWEST FIRST)
+        # Сортуємо скани цієї моделі за датою створення (спадання)
         provider_scans.sort(key=lambda x: x.get('created_at', ''), reverse=True)
         
         # --- LOCAL CALCS ---
@@ -2173,7 +2174,7 @@ __JS_BLOCK__
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
                 
-                # ТУТ ГОЛОВНЕ: Сума по ЗГАДКАХ бренду (а не по всіх запитах)
+                # ТУТ ГОЛОВНЕ ВИПРАВЛЕННЯ: Сума по ЗГАДКАХ бренду (а не по всіх запитах)
                 total_s = counts.sum() 
                 
                 if total_s > 0:
