@@ -2639,9 +2639,10 @@ def show_reports_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: FIX DUPLICATE ID ERROR.
-    1. Додано unique keys до графіків у циклах.
-    2. Збережено логіку 100% тональності та дизайн.
+    ВЕРСІЯ: FIX DATA VISIBILITY & DUPLICATE ID.
+    1. Виправлено логіку визначення "свого бренду" (is_target), щоб дані не були 0.
+    2. Додано unique keys для графіків (виправляє помилку Streamlit).
+    3. Порядок моделей: OpenAI -> Gemini -> Perplexity.
     """
     import pandas as pd
     import plotly.express as px
@@ -2668,7 +2669,6 @@ def show_dashboard():
     <style>
         h3 { font-size: 1.15rem !important; font-weight: 600 !important; padding-top: 20px !important; }
         .green-number { background-color: #00C896; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }
-        .comp-tag { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 11px; color: #555; }
         
         /* Стиль для блоку тональності */
         .sent-container {
@@ -2741,7 +2741,7 @@ def show_dashboard():
         return
 
     # ==============================================================================
-    # 3. ОБРОБКА ДАНИХ
+    # 3. ОБРОБКА ДАНИХ (FIXED)
     # ==============================================================================
     def norm_provider(p):
         p = str(p).lower()
@@ -2761,23 +2761,38 @@ def show_dashboard():
         mentions_df['rank_position'] = pd.to_numeric(mentions_df['rank_position'], errors='coerce').fillna(0)
         
         # Нормалізація тональності
-        mentions_df['sentiment_score'] = mentions_df['sentiment_score'].apply(
-            lambda x: 'Позитивна' if 'поз' in str(x).lower() or 'pos' in str(x).lower()
-            else ('Негативна' if 'нег' in str(x).lower() or 'neg' in str(x).lower()
-            else ('Нейтральна' if 'ней' in str(x).lower() or 'neu' in str(x).lower()
-            else 'Нейтральна'))
-        )
+        def normalize_sentiment(s):
+            s_lower = str(s).lower()
+            if 'поз' in s_lower or 'pos' in s_lower: return 'Позитивна'
+            if 'нег' in s_lower or 'neg' in s_lower: return 'Негативна'
+            if 'ней' in s_lower or 'neu' in s_lower: return 'Нейтральна'
+            return 'Нейтральна'
+            
+        mentions_df['sentiment_score'] = mentions_df['sentiment_score'].apply(normalize_sentiment)
 
         df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
         
-        df_full['is_target'] = df_full.apply(
-            lambda x: x.get('is_my_brand', False) or (target_brand_lower in str(x.get('brand_name', '')).lower()), axis=1
-        )
+        # 🔥 РОЗШИРЕНА ЛОГІКА ВИЗНАЧЕННЯ ЦІЛЬОВОГО БРЕНДУ
+        def check_is_target(row):
+            # 1. Перевірка прапорця з БД (обробка рядків 'true', '1' тощо)
+            flag_val = str(row.get('is_my_brand', '')).lower()
+            if flag_val in ['true', '1', 't', 'yes', 'on']:
+                return True
+            
+            # 2. Перевірка по назві (Target IN Brand OR Brand IN Target)
+            brand_in_row = str(row.get('brand_name', '')).lower().strip()
+            if target_brand_lower and brand_in_row:
+                if target_brand_lower in brand_in_row: return True
+                if brand_in_row in target_brand_lower: return True
+            
+            return False
+
+        df_full['is_target'] = df_full.apply(check_is_target, axis=1)
     else:
         df_full = pd.DataFrame()
 
     # ==============================================================================
-    # 4. МЕТРИКИ ПО МОДЕЛЯХ (OpenAI -> Gemini -> Perplexity)
+    # 4. МЕТРИКИ ПО МОДЕЛЯХ
     # ==============================================================================
     st.markdown("### 🌐 Огляд по моделях")
     
@@ -2795,6 +2810,7 @@ def show_dashboard():
         if current_mentions.empty: return 0, 0, (0,0,0)
 
         total_mentions = current_mentions['mention_count'].sum()
+        # Фільтруємо наш бренд
         my_mentions = current_mentions[current_mentions['is_target'] == True]
         my_count = my_mentions['mention_count'].sum()
         
@@ -2803,16 +2819,21 @@ def show_dashboard():
         valid_ranks = my_mentions[my_mentions['rank_position'] > 0]
         rank = valid_ranks['rank_position'].mean() if not valid_ranks.empty else 0
         
-        # Тональність % (Тільки по нашому бренду, сума 100%)
+        # Тональність (100% distribution)
         pos_p, neu_p, neg_p = 0, 0, 0
         if not my_mentions.empty:
             counts = my_mentions['sentiment_score'].value_counts()
-            total_brand_mentions = counts.sum() # База для розрахунку 100%
             
-            if total_brand_mentions > 0:
-                pos_p = (counts.get('Позитивна', 0) / total_brand_mentions * 100)
-                neu_p = (counts.get('Нейтральна', 0) / total_brand_mentions * 100)
-                neg_p = (counts.get('Негативна', 0) / total_brand_mentions * 100)
+            raw_pos = counts.get('Позитивна', 0)
+            raw_neu = counts.get('Нейтральна', 0)
+            raw_neg = counts.get('Негативна', 0)
+            
+            total_brand = raw_pos + raw_neu + raw_neg
+            
+            if total_brand > 0:
+                pos_p = (raw_pos / total_brand * 100)
+                neu_p = (raw_neu / total_brand * 100)
+                neg_p = (raw_neg / total_brand * 100)
             
         return sov, rank, (pos_p, neu_p, neg_p)
 
@@ -2834,7 +2855,9 @@ def show_dashboard():
                 
                 pie_values = [pos, neu, neg] if has_data else [1]
                 pie_colors = ['#00C896', '#B0BEC5', '#FF4B4B'] if has_data else ['#E0E0E0']
-                
+                labels = ['Pos', 'Neu', 'Neg'] if has_data else ['No Data']
+
+                # Легенда
                 st.markdown(f"""
                 <div class="sent-container">
                     <div class="sent-title">Загальна тональність</div>
@@ -2844,8 +2867,9 @@ def show_dashboard():
                 </div>
                 """, unsafe_allow_html=True)
                 
+                # Графік
                 fig_donut = go.Figure(data=[go.Pie(
-                    labels=['Pos', 'Neu', 'Neg'],
+                    labels=labels,
                     values=pie_values,
                     hole=.6,
                     marker=dict(colors=pie_colors),
@@ -2859,8 +2883,8 @@ def show_dashboard():
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
-                # 🔥 FIX: Додано унікальний ключ для кожного графіка в циклі
-                st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False}, key=f"donut_{model}")
+                # 🔥 KEY ADDED HERE TO FIX DUPLICATE ID ERROR
+                st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False}, key=f"donut_{model}_{i}")
 
     # ==============================================================================
     # 5. ГРАФІК ДИНАМІКИ
@@ -2881,7 +2905,7 @@ def show_dashboard():
         fig = px.line(daily, x='date_day', y='sov', color='provider_ui', markers=True, 
                       color_discrete_map={'Perplexity':'#00C896', 'OpenAI GPT':'#FF4B4B', 'Google Gemini':'#3B82F6'})
         fig.update_layout(height=300, margin=dict(l=0,r=0,t=10,b=0), hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True, key="sov_chart")
+        st.plotly_chart(fig, use_container_width=True, key="sov_main_chart")
     else:
         st.info("Немає даних.")
 
@@ -2964,7 +2988,7 @@ def show_dashboard():
         st.info("Немає даних для аналізу конкурентів.")
 
     # ==============================================================================
-    # 7. ДЕТАЛЬНА СТАТИСТИКА ПО ЗАПИТАХ
+    # 7. ДЕТАЛЬНА СТАТИСТИКА
     # ==============================================================================
     st.write("")
     st.markdown("### 📋 Детальна статистика по запитах")
@@ -2997,6 +3021,7 @@ def show_dashboard():
             if not kw_data.empty:
                 has_data = True
                 sorted_scans = kw_data.sort_values('created_at', ascending=False)
+                # Дані за останні 24 години
                 latest_date = sorted_scans['created_at'].max()
                 current_slice = sorted_scans[sorted_scans['created_at'] >= (latest_date - timedelta(hours=24))]
 
