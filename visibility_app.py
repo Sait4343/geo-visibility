@@ -2639,9 +2639,10 @@ def show_reports_page():
 def show_dashboard():
     """
     Сторінка Дашборд.
-    ВЕРСІЯ: FIX PROVIDER NAMES & BRAND MATCHING.
-    1. norm_provider: Додано перевірку на 'openai', 'google', 'vertex'.
-    2. check_is_target: Повернуто перевірку на входження підрядка (in), а не суворе рівність (==).
+    ВЕРСІЯ: FIX FOR GPT/GEMINI 0%.
+    1. Проблема: GPT/Gemini скорочують назву ("Be-it"), а проект названо повністю ("Be-it Agency").
+    2. Виправлення: Додано перевірку "brand in mention OR mention in brand".
+    3. Це дозволяє підхопити дані, навіть якщо n8n записав їх як is_my_brand=false.
     """
     import pandas as pd
     import plotly.express as px
@@ -2669,7 +2670,6 @@ def show_dashboard():
         h3 { font-size: 1.15rem !important; font-weight: 600 !important; padding-top: 20px !important; }
         .green-number { background-color: #00C896; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }
         
-        /* Стиль для блоку тональності */
         .sent-container {
             background-color: #f8f9fa;
             border-radius: 8px;
@@ -2710,9 +2710,11 @@ def show_dashboard():
     # ==============================================================================
     with st.spinner("Аналіз даних..."):
         try:
+            # Запити
             kw_resp = supabase.table("keywords").select("id, keyword_text").eq("project_id", proj["id"]).execute()
             keywords_df = pd.DataFrame(kw_resp.data) if kw_resp.data else pd.DataFrame()
             
+            # Скани (тільки потрібні поля)
             scan_resp = supabase.table("scan_results")\
                 .select("id, provider, created_at, keyword_id")\
                 .eq("project_id", proj["id"])\
@@ -2726,7 +2728,7 @@ def show_dashboard():
             if not scans_df.empty:
                 scan_ids = scans_df['id'].tolist()
                 
-                # Batch requests
+                # Завантаження згадок (Batch)
                 chunk_size = 200
                 all_mentions = []
                 all_sources = []
@@ -2751,19 +2753,19 @@ def show_dashboard():
         return
 
     # ==============================================================================
-    # 3. ОБРОБКА ДАНИХ (ВИПРАВЛЕНО)
+    # 3. ОБРОБКА ДАНИХ
     # ==============================================================================
     def norm_provider(p):
         p = str(p).lower()
-        # 🔥 РОЗШИРЕНИЙ ПОШУК ДЛЯ ВСІХ ВАРІАНТІВ ЗАПИСУ
         if 'gpt' in p or 'openai' in p: return 'OpenAI GPT'
-        if 'gemini' in p or 'google' in p or 'vertex' in p: return 'Google Gemini'
+        if 'gemini' in p or 'google' in p: return 'Google Gemini'
         if 'perplexity' in p: return 'Perplexity'
         return 'Other'
 
     scans_df['provider_ui'] = scans_df['provider'].apply(norm_provider)
     scans_df['created_at'] = pd.to_datetime(scans_df['created_at'])
 
+    # Назва бренду з проекту (еталон)
     target_brand_raw = proj.get('brand_name', '').strip()
     target_brand_lower = target_brand_raw.lower()
     
@@ -2783,20 +2785,22 @@ def show_dashboard():
 
         df_full = pd.merge(mentions_df, scans_df, left_on='scan_result_id', right_on='id', suffixes=('_m', '_s'))
         
-        # 🔥 ПОВЕРНУТО М'ЯКЕ ПОРІВНЯННЯ НАЗВ (IN замість ==)
+        # 🔥 ВИЗНАЧЕННЯ ЦІЛЬОВОГО БРЕНДУ (ВИПРАВЛЕНО ДЛЯ GPT/GEMINI)
         def check_is_target(row):
-            # 1. Пріоритет: прапорець з бази
+            # 1. Довіряємо базі, якщо там True
             flag_val = str(row.get('is_my_brand', '')).lower()
             if flag_val in ['true', '1', 't', 'yes', 'on']:
                 return True
             
-            # 2. Якщо прапорець False/None -> текстовий пошук
+            # 2. Якщо в базі False (через помилку n8n), перевіряємо самі
             mention_name = str(row.get('brand_name', '')).strip().lower()
             
             if target_brand_lower and mention_name:
-                # Перевіряємо взаємне входження (напр. "Be-it" в "Be-it Agency" і навпаки)
-                if target_brand_lower in mention_name: return True
+                # Перевіряємо в обидві сторони!
+                # "Be-it" в "Be-it Agency" -> True (для GPT)
                 if mention_name in target_brand_lower: return True
+                # "Be-it Agency" в "Be-it" -> True (для Perplexity)
+                if target_brand_lower in mention_name: return True
             
             return False
 
@@ -2813,7 +2817,7 @@ def show_dashboard():
         model_scans = scans_df[scans_df['provider_ui'] == model_name]
         if model_scans.empty: return 0, 0, (0,0,0)
         
-        # Беремо останній скан для кожного кейворда
+        # Беремо останній скан для кожного кейворда (snapshot)
         latest_scans = model_scans.sort_values('created_at', ascending=False).drop_duplicates('keyword_id')
         target_scan_ids = latest_scans['id'].tolist()
         
@@ -2822,9 +2826,10 @@ def show_dashboard():
         current_mentions = df_full[df_full['scan_result_id'].isin(target_scan_ids)]
         if current_mentions.empty: return 0, 0, (0,0,0)
 
+        # Рахуємо метрики
         total_mentions = current_mentions['mention_count'].sum()
         
-        # Наш бренд
+        # Фільтр по нашому бренду (вже виправлений check_is_target)
         my_mentions = current_mentions[current_mentions['is_target'] == True]
         my_count = my_mentions['mention_count'].sum()
         
@@ -2833,7 +2838,7 @@ def show_dashboard():
         valid_ranks = my_mentions[my_mentions['rank_position'] > 0]
         rank = valid_ranks['rank_position'].mean() if not valid_ranks.empty else 0
         
-        # Тональність (100% distribution)
+        # Тональність (100% сума)
         pos_p, neu_p, neg_p = 0, 0, 0
         if not my_mentions.empty:
             counts = my_mentions['sentiment_score'].value_counts()
@@ -2897,6 +2902,7 @@ def show_dashboard():
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
+                # Унікальний ключ для графіка
                 st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False}, key=f"donut_{model}_{i}")
 
     # ==============================================================================
@@ -3001,7 +3007,7 @@ def show_dashboard():
         st.info("Немає даних для аналізу конкурентів.")
 
     # ==============================================================================
-    # 7. ДЕТАЛЬНА СТАТИСТИКА ПО ЗАПИТАХ
+    # 7. ДЕТАЛЬНА СТАТИСТИКА
     # ==============================================================================
     st.write("")
     st.markdown("### 📋 Детальна статистика по запитах")
