@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: PERFECT 100% SENTIMENT + SORTING.
-    1. Тональність: Гарантована сума 100% (відносно знайдених згадок).
-    2. Сортування: Однакова послідовність (від найновіших) на всіх вкладках.
-    3. UI: Легенда списком + Сегментний графік.
+    ВЕРСІЯ: NAVIGATION UPDATE.
+    1. Додано бічні кнопки навігації між моделями (Left/Right).
+    2. Додано кнопку "Go to Top".
+    3. Збережено логіку 100% тональності та сортування.
     """
     import pandas as pd
     from datetime import datetime
@@ -1848,7 +1848,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         return txt
 
     # --- 0. PRE-CALCULATE GLOBAL SORT ORDER ---
-    # Щоб порядок запитів не скакав між вкладками, фіксуємо час
     query_time_map = {}
     for s in scans_data:
         kw = s.get('keyword_text', '')
@@ -1880,7 +1879,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         if prov_ui not in data_by_provider:
             data_by_provider[prov_ui] = []
         
-        # 1. Mentions Processing
+        # Mentions Processing
         mentions = scan.get('brand_mentions', [])
         processed_mentions = []
         for m in mentions:
@@ -1892,7 +1891,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             
-            # Нормалізація
             raw_sent = str(m.get('sentiment_score', '')).lower()
             if 'поз' in raw_sent or 'pos' in raw_sent: m['sentiment_score'] = 'Позитивна'
             elif 'нег' in raw_sent or 'neg' in raw_sent: m['sentiment_score'] = 'Негативна'
@@ -1902,7 +1900,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             processed_mentions.append(m)
         scan['brand_mentions'] = processed_mentions
 
-        # 2. Sources Processing
+        # Sources Processing
         sources = scan.get('extracted_sources', [])
         processed_sources = []
         for s in sources:
@@ -1920,8 +1918,8 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     css_styles = '''
     @font-face { font-family: 'Golca'; src: url('') format('woff2'); font-weight: normal; font-style: normal; }
     * { box-sizing: border-box; }
-    body { margin: 0; padding: 20px; background-color: #00d18f; font-family: 'Golca', 'Montserrat', sans-serif; color: #333; line-height: 1.6; }
-    .content-card { background: #ffffff; border-radius: 20px; padding: 40px; max-width: 1000px; margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.15); }
+    body { margin: 0; padding: 20px; background-color: #00d18f; font-family: 'Golca', 'Montserrat', sans-serif; color: #333; line-height: 1.6; position: relative; }
+    .content-card { background: #ffffff; border-radius: 20px; padding: 40px; max-width: 1000px; margin: 0 auto; box-shadow: 0 10px 40px rgba(0,0,0,0.15); position: relative; z-index: 10; }
     .virshi-logo-container { text-align: center; margin: 0 auto 20px auto; }
     .logo-img-real { max-width: 150px; height: auto; }
     .report-header { text-align: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 30px; }
@@ -1935,6 +1933,58 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
+    /* --- SIDE NAVIGATION BUTTONS --- */
+    .nav-side-btn {
+        position: fixed;
+        top: 50%;
+        transform: translateY(-50%);
+        background-color: #FBC02D; /* Жовтий як на скріншоті (схожий) */
+        border: 2px solid #D32F2F; /* Червона рамка */
+        color: #333;
+        padding: 15px 20px;
+        cursor: pointer;
+        z-index: 9999;
+        font-weight: 800;
+        font-size: 14px;
+        border-radius: 8px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        transition: all 0.3s ease;
+        max-width: 180px;
+        text-align: center;
+        text-transform: uppercase;
+    }
+    .nav-side-btn:hover { background-color: #FFEB3B; transform: translateY(-50%) scale(1.05); }
+    .nav-left { left: 20px; }
+    .nav-right { right: 20px; }
+    
+    /* --- GO TO TOP BUTTON --- */
+    .go-top-btn {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        width: 50px;
+        height: 50px;
+        background-color: #2c3e50;
+        color: #fff;
+        border-radius: 50%;
+        border: none;
+        cursor: pointer;
+        z-index: 10000;
+        font-size: 24px;
+        display: none; /* JS will show it on scroll */
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        transition: 0.3s;
+    }
+    .go-top-btn:hover { background-color: #00d18f; transform: translateY(-3px); }
+
+    @media (max-width: 1300px) {
+        .nav-side-btn { display: none; } /* Ховати на малих екранах */
+        .content-card { padding: 20px; }
+    }
+
+    /* KPI STYLES */
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
     .kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; position: relative; min-height: 200px; }
     .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; justify-content: center; width: 100%; }
@@ -1978,11 +2028,10 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     
     .cta-block { margin-top: 40px; padding: 20px; background-color: #e0f2f1; border: 2px solid #00d18f; border-radius: 15px; text-align: center; font-size: 12px; }
     
-    /* 🔥 UI FOR SENTIMENT BOX */
+    /* UI FOR SENTIMENT BOX */
     .sent-kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 220px; }
     .sent-list { width: 100%; margin-bottom: 15px; margin-top: 5px; }
     .sent-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
-    
     .text-pos { color: #00C896; }
     .text-neu { color: #B0BEC5; }
     .text-neg { color: #FF4B4B; }
@@ -2007,16 +2056,15 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Sentiment Donut ---
+    // --- 3-Color Sentiment Donut (100% Total) ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
         
         let dataValues = [pos, neu, neg];
-        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Grey, Red
+        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; 
         let labels = ['Позитивна', 'Нейтральна', 'Негативна'];
         
-        // Empty state
         if (pos + neu + neg === 0) {
              dataValues = [1];
              bgColors = ['#E0E0E0']; 
@@ -2059,20 +2107,49 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    function openTab(evt, tabName) {
-        var i, tabcontent, tablinks;
-        tabcontent = document.getElementsByClassName("tab-content");
-        for (i = 0; i < tabcontent.length; i++) { tabcontent[i].style.display = "none"; }
-        tablinks = document.getElementsByClassName("tab-btn");
-        for (i = 0; i < tablinks.length; i++) { tablinks[i].className = tablinks[i].className.replace(" active", ""); }
-        document.getElementById(tabName).style.display = "block";
-        evt.currentTarget.className += " active";
+    function openTab(evt, tabId) {
+        // 1. Hide Content
+        var tabcontent = document.getElementsByClassName("tab-content");
+        for (var i = 0; i < tabcontent.length; i++) {
+            tabcontent[i].style.display = "none";
+        }
+        // 2. Deactivate Buttons
+        var tablinks = document.getElementsByClassName("tab-btn");
+        for (var i = 0; i < tablinks.length; i++) {
+            tablinks[i].className = tablinks[i].className.replace(" active", "");
+        }
+        // 3. Show Content
+        document.getElementById(tabId).style.display = "block";
+        
+        // 4. Activate Button
+        var btn = document.getElementById("btn_" + tabId);
+        if(btn) {
+            btn.className += " active";
+        }
     }
+    
     function toggleAcc(el) {
         el.classList.toggle("active");
         var panel = el.nextElementSibling;
         if (panel.style.display === "block") { panel.style.display = "none"; } else { panel.style.display = "block"; }
     }
+    
+    // Go to Top Function
+    function topFunction() {
+        window.scrollTo({top: 0, behavior: 'smooth'});
+    }
+    
+    // Scroll Event to show/hide "Go Top" button
+    window.onscroll = function() {scrollFunction()};
+    function scrollFunction() {
+        var mybutton = document.getElementById("myBtn");
+        if (document.body.scrollTop > 300 || document.documentElement.scrollTop > 300) {
+            mybutton.style.display = "flex";
+        } else {
+            mybutton.style.display = "none";
+        }
+    }
+    
     window.addEventListener('load', function() { __JS_CHARTS_PLACEHOLDER__ });
     </script>
     '''
@@ -2089,6 +2166,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
 <style>__CSS_PLACEHOLDER__</style>
 </head>
 <body>
+<button onclick="topFunction()" id="myBtn" class="go-top-btn" title="Наверх">⬆</button>
 <div class="content-card">
     <div class="virshi-logo-container"><img src="https://raw.githubusercontent.com/virshi-ai/image/39ba460ec649893b9495427aa102420beb1fa48d/virshi-op_logo-main.png" class="logo-img-real" alt="VIRSHI Logo"></div>
     <div class="report-header"><h1>Звіт AI Visibility: __PROJECT_NAME__</h1><div class="subtitle">Дата формування: __DATE__</div></div>
@@ -2100,11 +2178,13 @@ __JS_BLOCK__
 </body>
 </html>'''
 
+    # --- GENERATE TAB BUTTONS WITH IDs ---
     tabs_buttons_html = ""
     for i, prov in enumerate(providers_ui):
         active_cls = "active" if i == 0 else ""
         prov_id = str(prov).replace(" ", "_").replace(".", "")
-        tabs_buttons_html += f'<button class="tab-btn {active_cls}" onclick="openTab(event, \'{prov_id}\')">{prov}</button>\n'
+        # Додаємо ID до кнопки, щоб JS міг її знайти
+        tabs_buttons_html += f'<button id="btn_{prov_id}" class="tab-btn {active_cls}" onclick="openTab(event, \'{prov_id}\')">{prov}</button>\n'
 
     tabs_content_html = ""
     js_charts_code = ""
@@ -2123,10 +2203,28 @@ __JS_BLOCK__
         
         provider_scans = data_by_provider[prov_ui]
         
-        # 🔥 FIX 1: CONSISTENT SORTING (Sync with Project Page)
-        # Сортування: Глобальний час (щоб порядок був однаковий) -> Локальний текст
+        # 🔥 FIX 1: SORTING (Newest First)
         provider_scans.sort(key=lambda x: (query_time_map.get(x.get('keyword_text', ''), ''), x.get('keyword_text', '')), reverse=True)
         
+        # --- CALC PREV/NEXT FOR SIDE NAV ---
+        total_providers = len(providers_ui)
+        if total_providers > 1:
+            idx_prev = (i - 1) % total_providers
+            idx_next = (i + 1) % total_providers
+            
+            prev_name = providers_ui[idx_prev]
+            next_name = providers_ui[idx_next]
+            
+            prev_id = str(prev_name).replace(" ", "_").replace(".", "")
+            next_id = str(next_name).replace(" ", "_").replace(".", "")
+            
+            side_nav_html = f'''
+            <button class="nav-side-btn nav-left" onclick="openTab(event, '{prev_id}')">&#10094; {prev_name}</button>
+            <button class="nav-side-btn nav-right" onclick="openTab(event, '{next_id}')">{next_name} &#10095;</button>
+            '''
+        else:
+            side_nav_html = ""
+
         # --- LOCAL CALCS ---
         all_mentions = []
         all_sources = []
@@ -2175,28 +2273,18 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: SENTIMENT 100% (GUARANTEED)
+        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND ONLY)
         pos_v, neu_v, neg_v = 0, 0, 0
-        
         if not df_m_local.empty:
-            # Фільтруємо лише наш бренд
+            # Тільки наш бренд
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
-            
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
-                
-                # Кількість згадок (raw counts)
-                raw_pos = counts.get('Позитивна', 0)
-                raw_neu = counts.get('Нейтральна', 0)
-                raw_neg = counts.get('Негативна', 0)
-                
-                # Загальна сума згадок бренду (база для 100%)
-                total_brand_mentions = raw_pos + raw_neu + raw_neg
-                
-                if total_brand_mentions > 0:
-                    pos_v = (raw_pos / total_brand_mentions) * 100
-                    neu_v = (raw_neu / total_brand_mentions) * 100
-                    neg_v = (raw_neg / total_brand_mentions) * 100
+                total_s = counts.sum() 
+                if total_s > 0:
+                    pos_v = (counts.get('Позитивна', 0) / total_s * 100)
+                    neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
+                    neg_v = (counts.get('Негативна', 0) / total_s * 100)
         
         # --- SUMMARY TABLES ---
         summary_competitors_html = ""
@@ -2258,6 +2346,9 @@ __JS_BLOCK__
         # Tab Content
         tabs_content_html += f'''
         <div id="{prov_id}" class="tab-content" {active_cls}>
+            
+            {side_nav_html}
+
             <div class="kpi-row">
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_sov}</div><div class="kpi-title">Частка голосу (SOV)</div><div class="kpi-big-num">{sov_pct:.2f}%</div><div class="chart-container"><canvas id="chartSOV_{prov_id}"></canvas></div></div>
                 <div class="kpi-box"><div class="kpi-tooltip">{tt_off}</div><div class="kpi-title">% Офіційних джерел</div><div class="kpi-big-num">{off_pct:.2f}%</div><div class="chart-container"><canvas id="chartOfficial_{prov_id}"></canvas></div></div>
