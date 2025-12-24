@@ -1804,10 +1804,11 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FIXED BUTTON STYLE + RENAMING + 100% SENTIMENT LOGIC.
-    1. Кнопки навігації: Білий фон, бірюзова рамка/текст (стиль Perplexity).
+    ВЕРСІЯ: FINAL FIXED (Buttons, Names, Sentiment 100%).
+    1. Кнопки навігації: Стиль як на скріншоті (White/Cyan).
     2. Назви: "Chat GPT", "Gemini".
-    3. Тональність: Розрахунок відсотків від суми згадок бренду (total_s).
+    3. Тональність: 100% (від суми знайдених згадок).
+    4. Кнопка "Наверх" присутня.
     """
     import pandas as pd
     from datetime import datetime
@@ -1858,10 +1859,10 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     # --- UI Mapping (RENAMED) ---
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
-        "gpt-4o": "Chat GPT",         # Renamed
-        "gpt-4": "Chat GPT",          # Renamed
-        "gemini-1.5-pro": "Gemini",   # Renamed
-        "gemini": "Gemini"            # Renamed
+        "gpt-4o": "Chat GPT",         # Fix Name
+        "gpt-4": "Chat GPT",          # Fix Name
+        "gemini-1.5-pro": "Gemini",   # Fix Name
+        "gemini": "Gemini"            # Fix Name
     }
     
     def get_ui_provider(p):
@@ -1933,20 +1934,20 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* --- SIDE NAVIGATION BUTTONS (Updated Style) --- */
+    /* --- SIDE NAVIGATION BUTTONS (Updated Style: White BG, Cyan Border) --- */
     .nav-side-btn {
         position: fixed;
         top: 50%;
         transform: translateY(-50%);
-        background-color: #ffffff; /* White Background */
-        border: 2px solid #00d18f; /* Cyan Border */
-        color: #00d18f;            /* Cyan Text */
+        background-color: #ffffff; 
+        border: 2px solid #00d18f; 
+        color: #00d18f; 
         padding: 12px 30px;
         cursor: pointer;
         z-index: 9999;
         font-weight: 800;
         font-size: 14px;
-        border-radius: 50px;       /* Pill Shape */
+        border-radius: 50px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         transition: all 0.3s ease;
         max-width: 180px;
@@ -2062,13 +2063,13 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Sentiment Donut ---
+    // --- 3-Color Sentiment Donut (100% Total) ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
         
         let dataValues = [pos, neu, neg];
-        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Grey, Red
+        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; 
         let labels = ['Позитивна', 'Нейтральна', 'Негативна'];
         
         // Empty state
@@ -2282,7 +2283,10 @@ __JS_BLOCK__
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
+                
+                # ТУТ ГОЛОВНЕ: Сума по ЗГАДКАХ бренду (а не по всіх запитах)
                 total_s = counts.sum() 
+                
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
                     neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
