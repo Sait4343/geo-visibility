@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: NEW BUTTON STYLES + RENAMING + SCROLL TO TOP.
-    1. Назви: "Chat GPT", "Gemini".
-    2. Кнопки навігації: Бірюзовий фон, без рамки, стиль як на скріншоті.
-    3. Кнопка "Наверх" (Scroll to Top).
+    ВЕРСІЯ: BUTTON STYLE FIX (WHITE/CYAN) + RENAMING.
+    1. Кнопки навігації: Білий фон, бірюзова рамка/текст (як Perplexity на скріншоті).
+    2. Назви: "Chat GPT", "Gemini".
+    3. Кнопка "Наверх" (Go to Top).
     """
     import pandas as pd
     from datetime import datetime
@@ -1855,13 +1855,13 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         if kw and (kw not in query_time_map or t > query_time_map[kw]):
             query_time_map[kw] = t
 
-    # --- UI Mapping (RENAMED AS REQUESTED) ---
+    # --- UI Mapping (RENAMED) ---
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
-        "gpt-4o": "Chat GPT",         # Changed from OpenAI GPT
-        "gpt-4": "Chat GPT",          # Changed from OpenAI GPT
-        "gemini-1.5-pro": "Gemini",   # Changed from Google Gemini
-        "gemini": "Gemini"            # Changed from Google Gemini
+        "gpt-4o": "Chat GPT",         # Changed to Chat GPT
+        "gpt-4": "Chat GPT",          # Changed to Chat GPT
+        "gemini-1.5-pro": "Gemini",   # Changed to Gemini
+        "gemini": "Gemini"            # Changed to Gemini
     }
     
     def get_ui_provider(p):
@@ -1933,21 +1933,22 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* --- SIDE NAVIGATION BUTTONS (Updated Style) --- */
+    /* --- SIDE NAVIGATION BUTTONS (FIXED STYLE) --- */
+    /* Style based on the Perplexity button screenshot: White BG, Cyan Border/Text */
     .nav-side-btn {
         position: fixed;
         top: 50%;
         transform: translateY(-50%);
-        background-color: #26C6DA; /* Cyan color matching screenshot */
-        color: #000000; /* Black text */
-        border: none;
-        padding: 15px 25px;
+        background-color: #ffffff; 
+        border: 2px solid #00d18f; 
+        color: #00d18f; 
+        padding: 12px 30px;
         cursor: pointer;
         z-index: 9999;
-        font-weight: 700;
+        font-weight: 800;
         font-size: 14px;
-        border-radius: 12px; /* Rounded corners */
-        box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        border-radius: 50px; /* Pill shape */
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         transition: all 0.3s ease;
         max-width: 180px;
         text-align: center;
@@ -1955,8 +1956,10 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         font-family: 'Montserrat', sans-serif;
     }
     .nav-side-btn:hover { 
-        background-color: #00BCD4; /* Slightly darker cyan on hover */
+        background-color: #00d18f; 
+        color: #ffffff;
         transform: translateY(-50%) scale(1.05); 
+        box-shadow: 0 6px 20px rgba(0, 209, 143, 0.3);
     }
     .nav-left { left: 20px; }
     .nav-right { right: 20px; }
@@ -1975,7 +1978,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         cursor: pointer;
         z-index: 10000;
         font-size: 24px;
-        display: none; /* Hidden by default */
+        display: none;
         align-items: center;
         justify-content: center;
         box-shadow: 0 4px 10px rgba(0,0,0,0.3);
@@ -1984,7 +1987,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .go-top-btn:hover { background-color: #00d18f; transform: translateY(-3px); }
 
     @media (max-width: 1300px) {
-        .nav-side-btn { display: none; } /* Hide side buttons on small screens */
+        .nav-side-btn { display: none; } 
         .content-card { padding: 20px; }
     }
 
