@@ -2068,7 +2068,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         if(!ctx) return;
         
         let dataValues = [pos, neu, neg];
-        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; 
+        let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; // Green, Grey, Red
         let labels = ['Позитивна', 'Нейтральна', 'Негативна'];
         
         // Empty state
@@ -2282,10 +2282,7 @@ __JS_BLOCK__
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
-                
-                # ТУТ ГОЛОВНЕ ВИПРАВЛЕННЯ: Сума по ЗГАДКАХ бренду
                 total_s = counts.sum() 
-                
                 if total_s > 0:
                     pos_v = (counts.get('Позитивна', 0) / total_s * 100)
                     neu_v = (counts.get('Нейтральна', 0) / total_s * 100)
