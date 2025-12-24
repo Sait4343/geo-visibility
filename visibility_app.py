@@ -1804,14 +1804,11 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: FINAL APPROVED LOGIC.
-    1. Тональність: 100% від суми згадок бренду (total_s).
-       Формула: (Кількість конкретної тональності / Загальна к-сть згадок бренду) * 100.
-    2. UI:
-       - Кнопки навігації зліва/справа (Білий фон, бірюзова рамка).
-       - Кнопка "Наверх" (Go to Top).
-       - Назви моделей: Chat GPT, Gemini, Perplexity.
-    3. Сортування: Від найновіших до найстаріших.
+    ВЕРСІЯ: SENTIMENT MATH FIX + FINAL UI.
+    1. Тональність: Фільтруємо (mention_count > 0) перед розрахунком %.
+       Це гарантує, що 3 з 4 згадок дадуть 75%, а не 15% (від усіх запитів).
+    2. UI: Кнопки навігації (White/Cyan), Go to Top.
+    3. Назви: Chat GPT, Gemini.
     """
     import pandas as pd
     from datetime import datetime
@@ -1852,7 +1849,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         return txt
 
     # --- 0. PRE-CALCULATE GLOBAL SORT ORDER ---
-    # Фіксуємо час створення кожного запиту, щоб сортування було однаковим усюди
     query_time_map = {}
     for s in scans_data:
         kw = s.get('keyword_text', '')
@@ -1863,10 +1859,10 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     # --- UI Mapping (RENAMED) ---
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
-        "gpt-4o": "Chat GPT",         # Fix Name
-        "gpt-4": "Chat GPT",          # Fix Name
-        "gemini-1.5-pro": "Gemini",   # Fix Name
-        "gemini": "Gemini"            # Fix Name
+        "gpt-4o": "Chat GPT",         
+        "gpt-4": "Chat GPT",          
+        "gemini-1.5-pro": "Gemini",   
+        "gemini": "Gemini"            
     }
     
     def get_ui_provider(p):
@@ -1896,7 +1892,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
             m['mention_count'] = safe_int(m.get('mention_count', 0))
             m['rank_position'] = safe_int(m.get('rank_position', 0))
             
-            # Нормалізація назв тональності
             raw_sent = str(m.get('sentiment_score', '')).lower()
             if 'поз' in raw_sent or 'pos' in raw_sent: m['sentiment_score'] = 'Позитивна'
             elif 'нег' in raw_sent or 'neg' in raw_sent: m['sentiment_score'] = 'Негативна'
@@ -1939,7 +1934,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* --- SIDE NAVIGATION BUTTONS (Style: White BG, Cyan Border/Text) --- */
+    /* --- SIDE NAVIGATION BUTTONS --- */
     .nav-side-btn {
         position: fixed;
         top: 50%;
@@ -1952,7 +1947,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         z-index: 9999;
         font-weight: 800;
         font-size: 14px;
-        border-radius: 50px; /* Pill Shape */
+        border-radius: 50px;
         box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         transition: all 0.3s ease;
         max-width: 180px;
@@ -1996,7 +1991,6 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         .content-card { padding: 20px; }
     }
 
-    /* KPI STYLES */
     .kpi-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
     .kpi-box { flex: 1 1 220px; border: 2px solid #00d18f; border-radius: 15px; padding: 20px; text-align: center; background: #e0f2f1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; position: relative; min-height: 200px; }
     .kpi-title { font-size: 13px; text-transform: uppercase; font-weight: bold; color: #555; margin-bottom: 10px; height: 30px; display: flex; align-items: center; justify-content: center; width: 100%; }
@@ -2068,7 +2062,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Sentiment Donut (100% Total) ---
+    // --- 3-Color Sentiment Donut ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
@@ -2281,15 +2275,21 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND ONLY)
+        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND ONLY & MENTION_COUNT > 0)
         pos_v, neu_v, neg_v = 0, 0, 0
+        
         if not df_m_local.empty:
-            # Тільки наш бренд
-            my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
+            # 1. Фільтр на "Наш Бренд"
+            # 2. Фільтр на "Згадок > 0" (ОСНОВНЕ ВИПРАВЛЕННЯ!)
+            my_mentions_df = df_m_local[
+                (df_m_local['is_real_target'] == True) & 
+                (df_m_local['mention_count'] > 0)
+            ]
+            
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
                 
-                # ТУТ ГОЛОВНЕ ВИПРАВЛЕННЯ: Сума по ЗГАДКАХ бренду (а не по всіх запитах)
+                # ТУТ ГОЛОВНЕ: Сума по ЗГАДКАХ, що ІСНУЮТЬ (а не по всіх перевірках)
                 total_s = counts.sum() 
                 
                 if total_s > 0:
