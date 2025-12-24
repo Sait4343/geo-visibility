@@ -1804,10 +1804,10 @@ def show_faq_page():
 def generate_html_report_content(project_name, scans_data, whitelist_domains):
     """
     Генерує HTML-звіт.
-    ВЕРСІЯ: NAVIGATION UPDATE.
-    1. Додано бічні кнопки навігації між моделями (Left/Right).
-    2. Додано кнопку "Go to Top".
-    3. Збережено логіку 100% тональності та сортування.
+    ВЕРСІЯ: NEW BUTTON STYLES + RENAMING + SCROLL TO TOP.
+    1. Назви: "Chat GPT", "Gemini".
+    2. Кнопки навігації: Бірюзовий фон, без рамки, стиль як на скріншоті.
+    3. Кнопка "Наверх" (Scroll to Top).
     """
     import pandas as pd
     from datetime import datetime
@@ -1855,13 +1855,13 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         if kw and (kw not in query_time_map or t > query_time_map[kw]):
             query_time_map[kw] = t
 
-    # --- UI Mapping ---
+    # --- UI Mapping (RENAMED AS REQUESTED) ---
     PROVIDER_MAPPING = {
         "perplexity": "Perplexity",
-        "gpt-4o": "OpenAI GPT",
-        "gpt-4": "OpenAI GPT",
-        "gemini-1.5-pro": "Google Gemini",
-        "gemini": "Google Gemini"
+        "gpt-4o": "Chat GPT",         # Changed from OpenAI GPT
+        "gpt-4": "Chat GPT",          # Changed from OpenAI GPT
+        "gemini-1.5-pro": "Gemini",   # Changed from Google Gemini
+        "gemini": "Gemini"            # Changed from Google Gemini
     }
     
     def get_ui_provider(p):
@@ -1933,27 +1933,31 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .tab-content.active { display: block; }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-    /* --- SIDE NAVIGATION BUTTONS --- */
+    /* --- SIDE NAVIGATION BUTTONS (Updated Style) --- */
     .nav-side-btn {
         position: fixed;
         top: 50%;
         transform: translateY(-50%);
-        background-color: #FBC02D; /* Жовтий як на скріншоті (схожий) */
-        border: 2px solid #D32F2F; /* Червона рамка */
-        color: #333;
-        padding: 15px 20px;
+        background-color: #26C6DA; /* Cyan color matching screenshot */
+        color: #000000; /* Black text */
+        border: none;
+        padding: 15px 25px;
         cursor: pointer;
         z-index: 9999;
-        font-weight: 800;
+        font-weight: 700;
         font-size: 14px;
-        border-radius: 8px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        border-radius: 12px; /* Rounded corners */
+        box-shadow: 0 4px 10px rgba(0,0,0,0.15);
         transition: all 0.3s ease;
         max-width: 180px;
         text-align: center;
         text-transform: uppercase;
+        font-family: 'Montserrat', sans-serif;
     }
-    .nav-side-btn:hover { background-color: #FFEB3B; transform: translateY(-50%) scale(1.05); }
+    .nav-side-btn:hover { 
+        background-color: #00BCD4; /* Slightly darker cyan on hover */
+        transform: translateY(-50%) scale(1.05); 
+    }
     .nav-left { left: 20px; }
     .nav-right { right: 20px; }
     
@@ -1971,7 +1975,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         cursor: pointer;
         z-index: 10000;
         font-size: 24px;
-        display: none; /* JS will show it on scroll */
+        display: none; /* Hidden by default */
         align-items: center;
         justify-content: center;
         box-shadow: 0 4px 10px rgba(0,0,0,0.3);
@@ -1980,7 +1984,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     .go-top-btn:hover { background-color: #00d18f; transform: translateY(-3px); }
 
     @media (max-width: 1300px) {
-        .nav-side-btn { display: none; } /* Ховати на малих екранах */
+        .nav-side-btn { display: none; } /* Hide side buttons on small screens */
         .content-card { padding: 20px; }
     }
 
@@ -2056,7 +2060,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         });
     }
 
-    // --- 3-Color Sentiment Donut (100% Total) ---
+    // --- 3-Color Sentiment Donut ---
     function createSentimentDoughnut(id, pos, neu, neg) {
         var ctx = document.getElementById(id);
         if(!ctx) return;
@@ -2065,6 +2069,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         let bgColors = ['#00C896', '#B0BEC5', '#FF4B4B']; 
         let labels = ['Позитивна', 'Нейтральна', 'Негативна'];
         
+        // Empty state
         if (pos + neu + neg === 0) {
              dataValues = [1];
              bgColors = ['#E0E0E0']; 
@@ -2108,20 +2113,16 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
     }
 
     function openTab(evt, tabId) {
-        // 1. Hide Content
         var tabcontent = document.getElementsByClassName("tab-content");
         for (var i = 0; i < tabcontent.length; i++) {
             tabcontent[i].style.display = "none";
         }
-        // 2. Deactivate Buttons
         var tablinks = document.getElementsByClassName("tab-btn");
         for (var i = 0; i < tablinks.length; i++) {
             tablinks[i].className = tablinks[i].className.replace(" active", "");
         }
-        // 3. Show Content
         document.getElementById(tabId).style.display = "block";
         
-        // 4. Activate Button
         var btn = document.getElementById("btn_" + tabId);
         if(btn) {
             btn.className += " active";
@@ -2134,12 +2135,11 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
         if (panel.style.display === "block") { panel.style.display = "none"; } else { panel.style.display = "block"; }
     }
     
-    // Go to Top Function
+    // --- SCROLL TO TOP ---
     function topFunction() {
         window.scrollTo({top: 0, behavior: 'smooth'});
     }
     
-    // Scroll Event to show/hide "Go Top" button
     window.onscroll = function() {scrollFunction()};
     function scrollFunction() {
         var mybutton = document.getElementById("myBtn");
@@ -2167,6 +2167,7 @@ def generate_html_report_content(project_name, scans_data, whitelist_domains):
 </head>
 <body>
 <button onclick="topFunction()" id="myBtn" class="go-top-btn" title="Наверх">⬆</button>
+
 <div class="content-card">
     <div class="virshi-logo-container"><img src="https://raw.githubusercontent.com/virshi-ai/image/39ba460ec649893b9495427aa102420beb1fa48d/virshi-op_logo-main.png" class="logo-img-real" alt="VIRSHI Logo"></div>
     <div class="report-header"><h1>Звіт AI Visibility: __PROJECT_NAME__</h1><div class="subtitle">Дата формування: __DATE__</div></div>
@@ -2178,12 +2179,11 @@ __JS_BLOCK__
 </body>
 </html>'''
 
-    # --- GENERATE TAB BUTTONS WITH IDs ---
+    # Generate buttons with IDs
     tabs_buttons_html = ""
     for i, prov in enumerate(providers_ui):
         active_cls = "active" if i == 0 else ""
         prov_id = str(prov).replace(" ", "_").replace(".", "")
-        # Додаємо ID до кнопки, щоб JS міг її знайти
         tabs_buttons_html += f'<button id="btn_{prov_id}" class="tab-btn {active_cls}" onclick="openTab(event, \'{prov_id}\')">{prov}</button>\n'
 
     tabs_content_html = ""
@@ -2203,10 +2203,10 @@ __JS_BLOCK__
         
         provider_scans = data_by_provider[prov_ui]
         
-        # 🔥 FIX 1: SORTING (Newest First)
+        # Sort newest first
         provider_scans.sort(key=lambda x: (query_time_map.get(x.get('keyword_text', ''), ''), x.get('keyword_text', '')), reverse=True)
         
-        # --- CALC PREV/NEXT FOR SIDE NAV ---
+        # --- SIDE NAVIGATION LOGIC ---
         total_providers = len(providers_ui)
         if total_providers > 1:
             idx_prev = (i - 1) % total_providers
@@ -2273,10 +2273,9 @@ __JS_BLOCK__
             my_ranks = df_m_local[(df_m_local['is_real_target'] == True) & (df_m_local['rank_position'] > 0)]['rank_position']
             if not my_ranks.empty: avg_pos = my_ranks.mean()
         
-        # 🔥 FIX 2: SENTIMENT 100% (TARGET BRAND ONLY)
+        # Sentiment
         pos_v, neu_v, neg_v = 0, 0, 0
         if not df_m_local.empty:
-            # Тільки наш бренд
             my_mentions_df = df_m_local[df_m_local['is_real_target'] == True]
             if not my_mentions_df.empty:
                 counts = my_mentions_df['sentiment_score'].value_counts()
